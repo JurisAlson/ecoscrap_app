@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dashboard.dart';
 import 'geomapping.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
 
 class ImageDetectionPage extends StatefulWidget {
   const ImageDetectionPage({super.key});
@@ -11,6 +13,19 @@ class ImageDetectionPage extends StatefulWidget {
 
 class _ImageDetectionPageState extends State<ImageDetectionPage> {
   final int _selectedIndex = 0; // LENS selected
+  File? _image; // To store captured image
+  final ImagePicker _picker = ImagePicker();
+
+  // Capture image from camera
+  Future<void> _captureImageWithCamera() async {
+    final XFile? capturedFile =
+        await _picker.pickImage(source: ImageSource.camera);
+    if (capturedFile != null) {
+      setState(() {
+        _image = File(capturedFile.path);
+      });
+    }
+  }
 
   void _onItemTapped(int index) {
     if (index == _selectedIndex) return;
@@ -31,10 +46,25 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: const Center(
-        child: Text(
-          "Image Detection Page",
-          style: TextStyle(fontSize: 24),
+      appBar: AppBar(title: const Text("Image Detection")),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _image != null
+                ? Image.file(
+                    _image!,
+                    width: 200,
+                    height: 200,
+                    fit: BoxFit.cover,
+                  )
+                : const Text("No image captured yet"),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _captureImageWithCamera,
+              child: const Text("Open Camera"),
+            ),
+          ],
         ),
       ),
       bottomNavigationBar: _buildFooter(),
