@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "315109985206",
+    "project_id": "ecoscrap-capstone",
+    "storage_bucket": "ecoscrap-capstone.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:315109985206:android:d70dc2c752679592708f17",
+        "android_client_info": {
+          "package_name": "com.example.ecoscrap_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDbdR0EJiT9uxQw0A24LFohzp9otl-UB9A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
