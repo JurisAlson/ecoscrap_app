@@ -1,11 +1,44 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import 'dashboard.dart';
 import 'forgot_password.dart';
 import 'create_account.dart';
 
+
+
+// Controllers
+final TextEditingController _emailController = TextEditingController();
+final TextEditingController _passwordController = TextEditingController();
+
 class LoginPage extends StatelessWidget {
   const LoginPage({super.key});
+  Future<void> _login(BuildContext context) async {
+    try {
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
 
+      // Login success → go to dashboard
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DashboardPage()),
+      );
+    } on FirebaseAuthException catch (e) {
+      String message = "Login failed";
+
+      if (e.code == 'user-not-found') {
+        message = "No user found for that email.";
+      } else if (e.code == 'wrong-password') {
+        message = "Wrong password.";
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -26,39 +59,39 @@ class LoginPage extends StatelessWidget {
 
             // Username field
             TextField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
               decoration: InputDecoration(
-                hintText: "username",
+                hintText: "email",
                 filled: true,
                 fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20, vertical: 15),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide: const BorderSide(color: Colors.grey),
                 ),
               ),
             ),
+
 
             const SizedBox(height: 15),
 
             // Password field
             TextField(
+              controller: _passwordController,
               obscureText: true,
               decoration: InputDecoration(
                 hintText: "password",
                 filled: true,
                 fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20, vertical: 15),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide: const BorderSide(color: Colors.grey),
                 ),
               ),
             ),
-
             const SizedBox(height: 20),
-
             // Login button
             SizedBox(
               width: 120,
@@ -72,12 +105,7 @@ class LoginPage extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
                 onPressed: () {
-                  Navigator.push(
-                    context,
-                  MaterialPageRoute(
-                    builder: (context) => const DashboardPage(),
-                    ),
-                  );
+                  _login(context);
                 },
                 child: const Text(
                   "Log in",
