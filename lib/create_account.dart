@@ -97,71 +97,63 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
               const SizedBox(height: 25),
 
               // Full Name
-              TextField(
-                decoration: InputDecoration(
-                  labelText: "Full Name",
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+            TextField(
+              controller: _nameController,
+              decoration: InputDecoration(
+                labelText: "Full Name",
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
                 ),
               ),
+            ),
 
-              const SizedBox(height: 15),
-
-              // Email
-              TextField(
-                decoration: InputDecoration(
-                  labelText: "Email",
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+            // Email
+            TextField(
+              controller: _emailController,
+              decoration: InputDecoration(
+                labelText: "Email",
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
                 ),
               ),
+            ),
 
-              const SizedBox(height: 15),
-
-              // Password
-              TextField(
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: "Password",
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+            // Password
+            TextField(
+              controller: _passwordController,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: "Password",
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
                 ),
               ),
+            ),
 
-              const SizedBox(height: 15),
-
-              // Confirm Password
-              TextField(
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: "Confirm Password",
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+            // Confirm Password
+            TextField(
+              controller: _confirmPasswordController,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: "Confirm Password",
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
                 ),
               ),
+            ),
 
-              const SizedBox(height: 25),
-
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Color(0xFF1FA9A7),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  onPressed: () {},
-                  child: const Text(
-                    "Create Account",
-                    style: TextStyle(fontSize: 16,
-                    color: Colors.white,
-                    ),
-                  ),
-                ),
+            // Button
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF1FA9A7),
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
+              onPressed: _createAccount,
+              child: const Text(
+                "Create Account",
+                style: TextStyle(fontSize: 16, color: Colors.white),
+              ),
+            ),              
             ],
           ),
         ),
