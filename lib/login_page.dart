@@ -1,26 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
 import 'dashboard.dart';
-import 'forgot_password.dart';
 import 'create_account.dart';
+import 'forgot_password.dart';
 
-
-
-// Controllers
-final TextEditingController _emailController = TextEditingController();
-final TextEditingController _passwordController = TextEditingController();
-
-class LoginPage extends StatelessWidget {
+class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
-  Future<void> _login(BuildContext context) async {
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
+  Future<void> _login() async {
     try {
       await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
-      // Login success → go to dashboard
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const DashboardPage()),
@@ -39,6 +40,7 @@ class LoginPage extends StatelessWidget {
       );
     }
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -49,88 +51,67 @@ class LoginPage extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
 
-            // Logo
-            Image.asset(
-              "assets/images/ecoscrap_logo.png",
-              width: 130,
-            ),
-
+            Image.asset("assets/images/ecoscrap_logo.png", width: 130),
             const SizedBox(height: 20),
 
-            // Username field
             TextField(
               controller: _emailController,
               keyboardType: TextInputType.emailAddress,
               decoration: InputDecoration(
-                hintText: "email",
+                hintText: "Email",
                 filled: true,
                 fillColor: Colors.white,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: Colors.grey),
                 ),
               ),
             ),
 
-
             const SizedBox(height: 15),
 
-            // Password field
             TextField(
               controller: _passwordController,
               obscureText: true,
               decoration: InputDecoration(
-                hintText: "password",
+                hintText: "Password",
                 filled: true,
                 fillColor: Colors.white,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: Colors.grey),
+                  
                 ),
               ),
             ),
+
             const SizedBox(height: 20),
-            // Login button
+
             SizedBox(
               width: 120,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1FA9A7), // teal color
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
+                  backgroundColor: const Color(0xFF1FA9A7),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
-                onPressed: () {
-                  _login(context);
-                },
-                child: const Text(
-                  "Log in",
-                  style: TextStyle(fontSize: 16),
-                ),
+                onPressed: _login,
+                child: const Text("Log in", style: TextStyle(fontSize: 16)),
               ),
             ),
 
             const SizedBox(height: 20),
 
-            // Forgot Password (TAPABLE)
             GestureDetector(
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => const ForgotPasswordPage(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
                 );
               },
               child: const Text(
                 "Forgot Password?",
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.black87,
                   decoration: TextDecoration.underline,
                 ),
               ),
@@ -138,21 +119,15 @@ class LoginPage extends StatelessWidget {
 
             const SizedBox(height: 5),
 
-            // Create Account
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Text(
-                  "No account? ",
-                  style: TextStyle(fontSize: 14),
-                ),
+                const Text("No account? "),
                 GestureDetector(
                   onTap: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (context) => const CreateAccountPage(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const CreateAccountPage()),
                     );
                   },
                   child: const Text(
