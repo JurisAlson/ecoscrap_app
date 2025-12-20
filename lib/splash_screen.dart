@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:ui';
 import 'login_page.dart';
 import 'dashboard.dart';
 
@@ -12,6 +13,7 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
+
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
 
@@ -19,7 +21,7 @@ class _SplashScreenState extends State<SplashScreen>
   void initState() {
     super.initState();
 
-    // Fade animation controller
+    // Fade animation (kept same)
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -27,10 +29,8 @@ class _SplashScreenState extends State<SplashScreen>
 
     _fadeAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(_controller);
 
-    // Start fade animation
     _controller.forward();
 
-    // After fade → check login state
     Future.delayed(const Duration(seconds: 2), () {
       _checkLogin();
     });
@@ -39,14 +39,14 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _checkLogin() async {
     final user = FirebaseAuth.instance.currentUser;
 
+    if (!mounted) return; // prevents errors
+
     if (user != null) {
-      // Already logged in → Dashboard
       Navigator.pushReplacement(
         context,
         _createRoute(const DashboardPage()),
       );
     } else {
-      // Not logged in → Login page
       Navigator.pushReplacement(
         context,
         _createRoute(const LoginPage()),
@@ -54,7 +54,7 @@ class _SplashScreenState extends State<SplashScreen>
     }
   }
 
-  // Custom slide-up transition
+  // Slide-up transition — unchanged
   Route _createRoute(Widget page) {
     return PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 700),
@@ -62,6 +62,7 @@ class _SplashScreenState extends State<SplashScreen>
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
         const begin = Offset(0.0, 1.0);
         const end = Offset.zero;
+
         final tween = Tween(begin: begin, end: end)
             .chain(CurveTween(curve: Curves.easeOutCubic));
 
@@ -82,15 +83,101 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: FadeTransition(
-        opacity: _fadeAnimation,
-        child: Center(
-          child: Image.asset(
-            "assets/images/ecoscrap_logo.png",
-            width: 200,
+      backgroundColor: const Color(0xFF0F172A),
+
+      body: Stack(
+        children: [
+          // Faint Glow Background
+          Positioned(
+            top: -50,
+            right: -50,
+            child: Container(
+              width: 300,
+              height: 300,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(0xFF1FA9A7),
+              ),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
           ),
-        ),
+
+          Center(
+            child: FadeTransition(
+              opacity: _fadeAnimation,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Logo Box
+                  Transform.rotate(
+                    angle: -0.1,
+                    child: Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF1FA9A7), Color(0xFF10B981)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(32),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF1FA9A7).withValues(alpha: 0.3),
+                            blurRadius: 40,
+                          ),
+                        ],
+                      ),
+                      child: Image.asset(
+                        "assets/images/ecoscrap_logo.png",
+                        width: 80,
+                        height: 80,
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                  ),
+
+
+                  const SizedBox(height: 32),
+
+                  const Text(
+                    "EcoScrap",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 40,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Text(
+                    "JOIN THE REVOLUTION",
+                    style: TextStyle(
+                      color: const Color(0xFF1FA9A7).withOpacity(0.7),
+                      fontSize: 12,
+                      letterSpacing: 4,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+
+                  const SizedBox(height: 50),
+
+                  const SizedBox(
+                    width: 40,
+                    child: LinearProgressIndicator(
+                      backgroundColor: Color(0xFF1E293B),
+                      color: Color(0xFF1FA9A7),
+                      minHeight: 2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
