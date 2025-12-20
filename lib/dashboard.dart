@@ -1,27 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'image_detection.dart'; // ✅ Import your image detection screen
+import 'dart:ui';
+import 'image_detection.dart';
 
-class DashboardPage extends StatelessWidget {
+class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
 
-  // Function to log out the current user
+  @override
+  State<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends State<DashboardPage> {
+  int _activeTabIndex = 0;
+
+  // Logout function
   Future<void> _logout(BuildContext context) async {
     await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
     Navigator.pushReplacementNamed(context, '/login');
   }
 
-  // Function to request camera permission and navigate to ImageDetectionPage
+  // Camera function
   Future<void> _openLens(BuildContext context) async {
     var status = await Permission.camera.status;
-
     if (status.isDenied) {
       status = await Permission.camera.request();
     }
 
     if (status.isGranted) {
-      // ✅ Navigate to your image detection screen
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const ImageDetectionPage()),
@@ -29,8 +37,7 @@ class DashboardPage extends StatelessWidget {
     } else if (status.isPermanentlyDenied) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-              "Camera permission permanently denied. Please enable it in settings."),
+          content: Text("Camera permission permanently denied. Please enable it in settings."),
         ),
       );
       openAppSettings();
@@ -44,103 +51,297 @@ class DashboardPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
+    final primaryColor = const Color(0xFF1FA9A7);
+    final bgColor = const Color(0xFF0F172A);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("EcoScrap"),
-        backgroundColor: const Color(0xFF1FA9A7),
-        leading: Builder(
-          builder: (context) => IconButton(
-            icon: const Icon(Icons.menu),
-            onPressed: () => Scaffold.of(context).openDrawer(),
+      backgroundColor: bgColor,
+      extendBody: true,
+      body: Stack(
+        children: [
+          // Background Blurs
+          Positioned(
+            top: -100,
+            right: -100,
+            child: Container(
+              width: 300,
+              height: 300,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: primaryColor.withValues(alpha: 0.15),
+              ),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
           ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => _logout(context),
+          Positioned(
+            bottom: 100,
+            left: -100,
+            child: Container(
+              width: 350,
+              height: 350,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.green.withValues(alpha: 0.1),
+              ),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+          ),
+
+          // Main Content
+          SafeArea(
+            child: CustomScrollView(
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                // Top Navbar Replacement
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  sliver: SliverToBoxAdapter(
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 45,
+                          height: 45,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [primaryColor, Colors.green.shade500],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: primaryColor.withValues(alpha: 0.3),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              )
+                            ],
+                          ),
+                          child: const Icon(Icons.eco, color: Colors.white, size: 24),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "Welcome back,",
+                                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                              ),
+                              Text(
+                                user?.displayName ?? "Alex Rivera",
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        _iconButton(Icons.notifications_outlined, badge: true, onTap: () {}),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Search Bar
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                  sliver: SliverToBoxAdapter(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                      ),
+                      child: TextField(
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: "Find nearest recycling bin...",
+                          hintStyle: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+                          icon: Icon(Icons.search, color: Colors.grey.shade500, size: 20),
+                          border: InputBorder.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Monthly Progress Card
+                // SliverPadding(
+                //   padding: const EdgeInsets.all(24),
+                //   sliver: SliverToBoxAdapter(
+                //     child: Container(
+                //       padding: const EdgeInsets.all(24),
+                //       decoration: BoxDecoration(
+                //         gradient: LinearGradient(
+                //           colors: [primaryColor, Colors.green.shade600],
+                //           begin: Alignment.topLeft,
+                //           end: Alignment.bottomRight,
+                //         ),
+                //         borderRadius: BorderRadius.circular(32),
+                //         boxShadow: [
+                //           BoxShadow(
+                //             color: Colors.green.shade900.withOpacity(0.2),
+                //             blurRadius: 20,
+                //             offset: const Offset(0, 10),
+                //           )
+                //         ],
+                //       ),
+                //       child: Column(
+                //         crossAxisAlignment: CrossAxisAlignment.start,
+                //         children: [
+                //           Row(
+                //             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                //             children: [
+                //               Column(
+                //                 crossAxisAlignment: CrossAxisAlignment.start,
+                //                 children: [
+                //                   Text("Monthly Progress",
+                //                       style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13)),
+                //                   const SizedBox(height: 4),
+                //                   const Text("42.8 kg",
+                //                       style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
+                //                   Row(
+                //                     children: const [
+                //                       Icon(Icons.call_made, color: Colors.white70, size: 14),
+                //                       SizedBox(width: 4),
+                //                       Text("12% more than last month",
+                //                           style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                //                     ],
+                //                   ),
+                //                 ],
+                //               ),
+                //               Container(
+                //                 padding: const EdgeInsets.all(8),
+                //                 decoration: BoxDecoration(
+                //                   color: Colors.white.withOpacity(0.2),
+                //                   borderRadius: BorderRadius.circular(12),
+                //                 ),
+                //                 child: const Icon(Icons.trending_up, color: Colors.white),
+                //               )
+                //             ],
+                //           ),
+                //           const SizedBox(height: 24),
+                //           ClipRRect(
+                //             borderRadius: BorderRadius.circular(10),
+                //             child: LinearProgressIndicator(
+                //               value: 0.85,
+                //               minHeight: 10,
+                //               backgroundColor: Colors.black.withOpacity(0.2),
+                //               color: Colors.white,
+                //             ),
+                //           )
+                //         ],
+                //       ),
+                //     ),
+                //   ),
+                // ),
+              ],
+            ),
           ),
         ],
       ),
 
-      drawer: Drawer(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            const DrawerHeader(
-              decoration: BoxDecoration(color: Color(0xFF1FA9A7)),
-              child: Text("EcoScrap Menu",
-                  style: TextStyle(color: Colors.white, fontSize: 20)),
-            ),
-            ListTile(
-              leading: const Icon(Icons.home),
-              title: const Text("Home"),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (_) => const DashboardPage()),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings),
-              title: const Text("Settings"),
-              onTap: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Settings tapped")),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.help_outline),
-              title: const Text("Help / About"),
-              onTap: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text("EcoScrap v1.0 — Contact support at support@ecoscrap.com")),
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.logout),
-              title: const Text("Logout"),
-              onTap: () => _logout(context),
-            ),
-          ],
-        ),
-      ),
-
-      body: Center(
-        child: Text(
-          "Welcome, ${user?.displayName ?? user?.email ?? 'User'}",
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-        ),
-      ),
-
-      // ✅ Lens button now opens camera/image detection
-      floatingActionButton: GestureDetector(
-        onTap: () => _openLens(context),
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black26,
-                blurRadius: 6,
-                offset: const Offset(0, 3),
-              ),
-            ],
+      // Center FAB
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(top: 40),
+        child: SizedBox(
+          width: 68,
+          height: 68,
+          child: FloatingActionButton(
+            onPressed: () => _openLens(context),
+            backgroundColor: primaryColor,
+            elevation: 10,
+            shape: CircleBorder(side: BorderSide(color: bgColor, width: 4)),
+            child: const Icon(Icons.camera_alt, color: Color(0xFF0F172A), size: 30),
           ),
-          padding: const EdgeInsets.all(12),
-          child: const Icon(Icons.camera_alt_outlined,
-              size: 32, color: Color(0xFF1FA9A7)),
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+
+      bottomNavigationBar: Container(
+        height: 90,
+        decoration: BoxDecoration(
+          color: bgColor.withValues(alpha: 0.8),
+          border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
+        ),
+        child: ClipRRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _navItem(0, Icons.navigation_outlined, "Home", primaryColor),
+                _navItem(1, Icons.location_on_outlined, "Map", primaryColor),
+                const SizedBox(width: 48),
+                _navItem(2, Icons.message_outlined, "Chat", primaryColor),
+                _navItem(3, Icons.person_outline, "Profile", primaryColor),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _navItem(int index, IconData icon, String label, Color activeColor) {
+    bool isActive = _activeTabIndex == index;
+    return GestureDetector(
+      onTap: () => setState(() => _activeTabIndex = index),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: isActive ? activeColor : Colors.grey.shade500, size: 24),
+          const SizedBox(height: 4),
+          Text(label.toUpperCase(),
+              style: TextStyle(
+                color: isActive ? activeColor : Colors.grey.shade500,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+              )),
+        ],
+      ),
+    );
+  }
+
+  Widget _iconButton(IconData icon, {bool badge = false, required VoidCallback onTap}) {
+    return Stack(
+      children: [
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            ),
+            child: Icon(icon, color: Colors.grey.shade300, size: 20),
+          ),
+        ),
+        if (badge)
+          Positioned(
+            right: 10,
+            top: 10,
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF0F172A), width: 1.5),
+              ),
+            ),
+          )
+      ],
     );
   }
 }
