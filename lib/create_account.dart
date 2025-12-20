@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 
 class CreateAccountPage extends StatefulWidget {
   const CreateAccountPage({super.key});
@@ -9,12 +7,13 @@ class CreateAccountPage extends StatefulWidget {
   @override
   State<CreateAccountPage> createState() => _CreateAccountPageState();
 }
+
 class _CreateAccountPageState extends State<CreateAccountPage> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController =
-      TextEditingController();
+  final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -26,136 +25,96 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
   }
 
   Future<void> _createAccount() async {
-    if (_passwordController.text != _confirmPasswordController.text) {
+    if (_isLoading) return;
+
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    final confirmPassword = _confirmPasswordController.text.trim();
+
+    if (name.isEmpty || email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("All fields are required")),
+      );
+      return;
+    }
+    if (password != confirmPassword) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Passwords do not match")),
       );
       return;
     }
 
+    setState(() => _isLoading = true);
+
     try {
-      UserCredential userCredential =
-          await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
+      // Create account
+      final userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(email: email, password: password);
 
-      final uid = userCredential.user!.uid;
+      // Update display name
+      await userCredential.user?.updateDisplayName(name);
 
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .set({
-        'fullName': _nameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'createdAt': Timestamp.now(),
-      });
+      // Send verification email
+      await userCredential.user?.sendEmailVerification();
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Account created successfully")),
+        const SnackBar(
+          content: Text(
+              "Account created! Please check your email to verify before logging in."),
+        ),
       );
 
-      Navigator.pop(context); // back to login
-    } catch (e) {
+      // After sending verification, sign out so they can't log in until verified
+      await FirebaseAuth.instance.signOut();
+
+      Navigator.pop(context); // Go back to login page
+    } on FirebaseAuthException catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
+        SnackBar(content: Text(e.message ?? "Account creation failed")),
       );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
-
+      appBar: AppBar(title: const Text("Create Account")),
       body: Padding(
         padding: const EdgeInsets.all(20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-
-              const SizedBox(height: 40),
-
-              const Text(
-                "Create Account",
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1FA9A7),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              const Text(
-                "Fill in your details to sign up.",
-                style: TextStyle(fontSize: 16),
-              ),
-
-              const SizedBox(height: 25),
-
-              // Full Name
+        child: Column(
+          children: [
             TextField(
               controller: _nameController,
-              decoration: InputDecoration(
-                labelText: "Full Name",
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
+              decoration: const InputDecoration(labelText: "Full Name"),
             ),
-
-            // Email
+            const SizedBox(height: 15),
             TextField(
               controller: _emailController,
-              decoration: InputDecoration(
-                labelText: "Email",
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
+              decoration: const InputDecoration(labelText: "Email"),
             ),
-
-            // Password
+            const SizedBox(height: 15),
             TextField(
               controller: _passwordController,
               obscureText: true,
-              decoration: InputDecoration(
-                labelText: "Password",
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
+              decoration: const InputDecoration(labelText: "Password"),
             ),
-
-            // Confirm Password
+            const SizedBox(height: 15),
             TextField(
               controller: _confirmPasswordController,
               obscureText: true,
-              decoration: InputDecoration(
-                labelText: "Confirm Password",
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
+              decoration: const InputDecoration(labelText: "Confirm Password"),
             ),
-
-            // Button
+            const SizedBox(height: 25),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF1FA9A7),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              onPressed: _createAccount,
-              child: const Text(
-                "Create Account",
-                style: TextStyle(fontSize: 16, color: Colors.white),
-              ),
-            ),              
-            ],
-          ),
+              onPressed: _isLoading ? null : _createAccount,
+              child: _isLoading
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Text("Create Account"),
+            ),
+          ],
         ),
       ),
     );
