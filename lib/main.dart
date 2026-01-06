@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
-import 'splash_screen.dart';
-import 'login_page.dart';
-import 'dashboard.dart';
+import 'auth/splash_screen.dart';
+import 'auth/login_page.dart';
+import 'household/household_dashboard.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'dashboard.dart';
+import 'household/household_dashboard.dart';
 import 'image_detection.dart';
 
 class GeoMappingPage extends StatefulWidget {
