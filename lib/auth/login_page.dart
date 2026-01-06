@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui'; // needed for blur effects
-import 'dashboard.dart';
+import '../household/household_dashboard.dart';
 import 'create_account.dart';
 import 'forgot_password.dart';
+import '../junkshop/junkshop_dashboard.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -26,60 +27,82 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+
   // login logic preserved
   Future<void> _login() async {
-    if (_isLoading) return;
+  if (_isLoading) return;
 
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
+  final email = _emailController.text.trim();
+  final password = _passwordController.text.trim();
 
-    if (email.isEmpty || password.isEmpty) {
-      _showToast("Email and password are required.", isError: true);
-      return;
+  if (email.isEmpty || password.isEmpty) {
+    _showToast("Email and password are required.", isError: true);
+    return;
+  }
+
+  setState(() => _isLoading = true);
+
+  try {
+    // ✅ Special bypass for Junkshop account
+    if (email.toLowerCase() == "junkshop@gmail.com" && password == "capstone2026") {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const JunkshopDashboardPage()),
+      );
+      return; // Exit early, skip Firebase
     }
 
-    setState(() => _isLoading = true);
+    // 🔑 Normal Firebase login flow
+    UserCredential userCredential =
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
 
-    try {
-      UserCredential userCredential =
-          await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+    final user = userCredential.user;
 
-      final user = userCredential.user;
+    if (user != null) {
+      if (user.emailVerified) {
+        // TEMP ROLE LOGIC
+        final emailLower = user.email!.toLowerCase();
 
-      if (user != null) {
-        if (user.emailVerified) {
+        if (emailLower.contains("junk")) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const JunkshopDashboardPage()),
+          );
+        } else {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (_) => const DashboardPage()),
           );
-        } else {
-          _showToast("Please verify your email first.", isError: true);
-          await FirebaseAuth.instance.signOut();
         }
+      } else {
+        _showToast("Please verify your email first.", isError: true);
+        await FirebaseAuth.instance.signOut();
       }
-    } on FirebaseAuthException catch (e) {
-      String message = "Login failed";
-
-      if (e.code == 'user-not-found') {
-        message = "No user found with that email.";
-      } else if (e.code == 'wrong-password') {
-        message = "Incorrect password.";
-      } else if (e.code == 'invalid-email') {
-        message = "Invalid email format.";
-      } else if (e.code == 'user-disabled') {
-        message = "Account disabled.";
-      }
-
-      _showToast(message, isError: true);
-    } catch (_) {
-      _showToast("Something went wrong.", isError: true);
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
+  } on FirebaseAuthException catch (e) {
+    String message = "Login failed";
+
+    if (e.code == 'user-not-found') {
+      message = "No user found with that email.";
+    } else if (e.code == 'wrong-password') {
+      message = "Incorrect password.";
+    } else if (e.code == 'invalid-email') {
+      message = "Invalid email format.";
+    } else if (e.code == 'user-disabled') {
+      message = "Account disabled.";
+    }
+
+    _showToast(message, isError: true);
+  } catch (_) {
+    _showToast("Something went wrong.", isError: true);
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
+
 
   void _showToast(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
