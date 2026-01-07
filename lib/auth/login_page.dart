@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui'; // needed for blur effects
 import '../household/household_dashboard.dart';
-import 'create_account.dart';
 import 'forgot_password.dart';
 import '../junkshop/junkshop_dashboard.dart';
+import 'AccountCreation.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -319,7 +319,7 @@ class _LoginPageState extends State<LoginPage> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                                builder: (_) => const CreateAccountPage()),
+                                builder: (_) => const AccountCreationPage()),
                           );
                         },
                         child: const Text(
