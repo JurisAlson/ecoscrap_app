@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:ui'; // needed for blur effects
 import '../household/household_dashboard.dart';
 import 'forgot_password.dart';
@@ -28,8 +29,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
 
-  // login logic preserved
-  Future<void> _login() async {
+Future<void> _login() async {
   if (_isLoading) return;
 
   final email = _emailController.text.trim();
@@ -43,18 +43,8 @@ class _LoginPageState extends State<LoginPage> {
   setState(() => _isLoading = true);
 
   try {
-    // ✅ Special bypass for Junkshop account
-    if (email.toLowerCase() == "junkshop@gmail.com" && password == "capstone2026") {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const JunkshopDashboardPage()),
-      );
-      return; // Exit early, skip Firebase
-    }
-
-    // 🔑 Normal Firebase login flow
-    UserCredential userCredential =
-        await FirebaseAuth.instance.signInWithEmailAndPassword(
+    // 1. Firebase Login
+    UserCredential userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
       email: email,
       password: password,
     );
@@ -62,47 +52,48 @@ class _LoginPageState extends State<LoginPage> {
     final user = userCredential.user;
 
     if (user != null) {
-      if (user.emailVerified) {
-        // TEMP ROLE LOGIC
-        final emailLower = user.email!.toLowerCase();
+      // 2. CHECK IF THIS IS A JUNKSHOP
+      final junkshopDoc = await FirebaseFirestore.instance
+          .collection('junkshops')
+          .doc(user.uid)
+          .get();
 
-        if (emailLower.contains("junk")) {
+      if (junkshopDoc.exists) {
+        // --- JUNKSHOP LOGIC ---
+        bool isVerified = junkshopDoc.data()?['verified'] ?? false;
+
+        if (isVerified) {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (_) => const JunkshopDashboardPage()),
           );
         } else {
+          // NOT VERIFIED: Kick them out
+          await FirebaseAuth.instance.signOut();
+          _showToast("Admin is still reviewing your business permit.", isError: true);
+        }
+      } else {
+        // --- STANDARD USER LOGIC ---
+        if (user.emailVerified) {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (_) => const DashboardPage()),
           );
+        } else {
+          _showToast("Please verify your email via Gmail first.", isError: true);
+          await FirebaseAuth.instance.signOut();
         }
-      } else {
-        _showToast("Please verify your email first.", isError: true);
-        await FirebaseAuth.instance.signOut();
       }
     }
   } on FirebaseAuthException catch (e) {
-    String message = "Login failed";
-
-    if (e.code == 'user-not-found') {
-      message = "No user found with that email.";
-    } else if (e.code == 'wrong-password') {
-      message = "Incorrect password.";
-    } else if (e.code == 'invalid-email') {
-      message = "Invalid email format.";
-    } else if (e.code == 'user-disabled') {
-      message = "Account disabled.";
-    }
-
-    _showToast(message, isError: true);
-  } catch (_) {
+    // ... your existing error handling ...
+    _showToast(e.message ?? "Login failed", isError: true);
+  } catch (e) {
     _showToast("Something went wrong.", isError: true);
   } finally {
     if (mounted) setState(() => _isLoading = false);
   }
 }
-
 
   void _showToast(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
