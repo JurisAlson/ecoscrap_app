@@ -1,4 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:file_picker/file_picker.dart';
 
 class JunkshopAccountCreationPage extends StatefulWidget {
   const JunkshopAccountCreationPage({super.key});
@@ -8,8 +13,85 @@ class JunkshopAccountCreationPage extends StatefulWidget {
 }
 
 class _JunkshopAccountCreationPageState extends State<JunkshopAccountCreationPage> {
-  final TextEditingController _usernameController = TextEditingController();
+  // Controllers
+  final TextEditingController _shopNameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  
+  PlatformFile? _pickedFile;
+  bool _isLoading = false;
+
+  // Function to pick the PDF
+  Future<void> _pickFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'jpg', 'png'],
+    );
+
+    if (result != null) {
+      setState(() {
+        _pickedFile = result.files.first;
+      });
+    }
+  }
+
+  // The main registration logic
+  Future<void> _registerJunkshop() async {
+    if (_pickedFile == null || _emailController.text.isEmpty || _shopNameController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please fill all fields and upload a permit")),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. Create the Auth Account
+      UserCredential userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+
+      String uid = userCredential.user!.uid;
+
+      // 2. Upload the Permit to Storage
+      File file = File(_pickedFile!.path!);
+      UploadTask uploadTask = FirebaseStorage.instance
+          .ref('permits/$uid.pdf')
+          .putFile(file);
+      
+      TaskSnapshot snapshot = await uploadTask;
+      String downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // 3. Save to Firestore (Your specific structure)
+      await FirebaseFirestore.instance.collection('junkshops').doc(uid).set({
+        'userid': uid,
+        'ShopName': _shopNameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'permit_url': downloadUrl,
+        'verified': false, // Requires manual admin approval
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      // 4. Success and Sign out (Wait for admin)
+      await FirebaseAuth.instance.signOut();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Submitted! Admin will verify your permit.")),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: ${e.toString()}")),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -18,59 +100,75 @@ class _JunkshopAccountCreationPageState extends State<JunkshopAccountCreationPag
       appBar: AppBar(
         title: const Text("Junkshop Registration"),
         backgroundColor: const Color(0xFF0F172A),
+        elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Text(
               "Business Account",
               style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 30),
-            TextField(
-              controller: _usernameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: "Username",
-                labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF1FA9A7))),
-              ),
-            ),
+            
+            // Shop Name
+            _buildTextField(_shopNameController, "Shop Name", Icons.store),
             const SizedBox(height: 16),
-            TextField(
-              controller: _passwordController,
-              obscureText: true,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                labelText: "Password",
-                labelStyle: TextStyle(color: Colors.white70),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF1FA9A7))),
-              ),
-            ),
+            
+            // Email
+            _buildTextField(_emailController, "Business Email", Icons.email),
+            const SizedBox(height: 16),
+            
+            // Password
+            _buildTextField(_passwordController, "Password", Icons.lock, isPass: true),
+            
             const SizedBox(height: 30),
+
+            // File Picker Button
             ElevatedButton.icon(
-              onPressed: () => print("PDF Picker logic goes here"),
-              icon: const Icon(Icons.upload_file),
-              label: const Text("Upload Business Permit (PDF)"),
+              onPressed: _pickFile,
+              icon: Icon(_pickedFile == null ? Icons.upload_file : Icons.check_circle),
+              label: Text(_pickedFile == null 
+                  ? "Upload Business Permit (PDF)" 
+                  : "Selected: ${_pickedFile!.name}"),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white10,
                 foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 50),
               ),
             ),
+
             const SizedBox(height: 40),
+
+            // Submit Button
             SizedBox(
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1FA9A7)),
-                onPressed: () => print("Registering Junkshop..."),
-                child: const Text("Register Business", style: TextStyle(color: Colors.white)),
+                onPressed: _isLoading ? null : _registerJunkshop,
+                child: _isLoading 
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text("Register Business", style: TextStyle(color: Colors.white)),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTextField(TextEditingController controller, String label, IconData icon, {bool isPass = false}) {
+    return TextField(
+      controller: controller,
+      obscureText: isPass,
+      style: const TextStyle(color: Colors.white),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white70),
+        prefixIcon: Icon(icon, color: const Color(0xFF1FA9A7)),
+        enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF1FA9A7))),
       ),
     );
   }

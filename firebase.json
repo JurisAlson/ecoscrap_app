@@ -1,1 +1,21 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"ecoscrap-capstone","appId":"1:315109985206:android:d70dc2c752679592708f17","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"ecoscrap-capstone","configurations":{"android":"1:315109985206:android:d70dc2c752679592708f17","ios":"1:315109985206:ios:4f5a66f8ee66d3f8708f17","macos":"1:315109985206:ios:4f5a66f8ee66d3f8708f17","web":"1:315109985206:web:2208067dcf651c7f708f17","windows":"1:315109985206:web:72bac22bc048fc96708f17"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "appAssociation": "AUTO",
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
