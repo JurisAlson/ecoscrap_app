@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
 
+
 class JunkshopAccountCreationPage extends StatefulWidget {
   const JunkshopAccountCreationPage({super.key});
 
@@ -35,63 +36,75 @@ class _JunkshopAccountCreationPageState extends State<JunkshopAccountCreationPag
     }
   }
 
+
+final FirebaseAuth _auth = FirebaseAuth.instance;
+final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   // The main registration logic
-  Future<void> _registerJunkshop() async {
-    if (_pickedFile == null || _emailController.text.isEmpty || _shopNameController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please fill all fields and upload a permit")),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      // 1. Create the Auth Account
-      UserCredential userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-
-      String uid = userCredential.user!.uid;
-
-      // 2. Upload the Permit to Storage
-      File file = File(_pickedFile!.path!);
-      UploadTask uploadTask = FirebaseStorage.instance
-          .ref('permits/$uid.pdf')
-          .putFile(file);
-      
-      TaskSnapshot snapshot = await uploadTask;
-      String downloadUrl = await snapshot.ref.getDownloadURL();
-
-      // 3. Save to Firestore (Your specific structure)
-      await FirebaseFirestore.instance.collection('junkshops').doc(uid).set({
-        'userid': uid,
-        'ShopName': _shopNameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'permit_url': downloadUrl,
-        'verified': false, // Requires manual admin approval
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // 4. Success and Sign out (Wait for admin)
-      await FirebaseAuth.instance.signOut();
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Submitted! Admin will verify your permit.")),
-        );
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: ${e.toString()}")),
-      );
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
+Future<void> _registerJunkshop() async {
+  // 1. Validation Check
+  if (_pickedFile == null || _emailController.text.isEmpty || _shopNameController.text.isEmpty || _passwordController.text.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Please fill all fields and upload a permit")),
+    );
+    return;
   }
+
+  setState(() => _isLoading = true);
+
+  try {
+    // 2. Create the Auth Account
+    UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
+      email: _emailController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
+
+    String uid = userCredential.user!.uid;
+
+    // 3. Upload the Permit to Firebase Storage
+    // Use the file path from the picker
+    File file = File(_pickedFile!.path!);
+    UploadTask uploadTask = FirebaseStorage.instance
+        .ref('permits/$uid.pdf')
+        .putFile(file);
+    
+    TaskSnapshot snapshot = await uploadTask;
+    String downloadUrl = await snapshot.ref.getDownloadURL();
+
+    // 4. Save to Firestore (Matching your 'userid' collection and 'Role' case)
+    await _firestore.collection('userid').doc(uid).set({
+      'userid': uid,
+      'ShopName': _shopNameController.text.trim(),
+      'email': _emailController.text.trim(),
+      'permit_url': downloadUrl,
+      'Role': 'Junkshop', 
+      'verified': false, 
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    // 5. Success UI
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Submitted! Admin will verify your permit.")),
+      );
+      
+      // 6. Final Step: Sign out and go back
+      //await _auth.signOut();
+      //Navigator.pop(context);
+    }
+
+  } on FirebaseAuthException catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.message ?? "Auth Error")),
+    );
+  } catch (e) {
+    // This catches Firestore or Storage errors
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Error: ${e.toString()}")),
+    );
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
+  }
+}
 
   @override
   Widget build(BuildContext context) {
