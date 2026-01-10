@@ -1,7 +1,7 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'dart:ui';
 import '../image_detection.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -17,67 +17,23 @@ class _DashboardPageState extends State<DashboardPage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
- // TAB CONTENT (visual confirmation)
-final List<Widget> _tabScreens = [
-  const Center(
-    child: Text("Household Home",
-        style: TextStyle(color: Colors.white, fontSize: 24)),
-  ),
-  const Center(
-    child: Text("Map Screen",
-        style: TextStyle(color: Colors.white, fontSize: 24)),
-  ),
-  const Center(
-    child: Text("Chat Screen",
-        style: TextStyle(color: Colors.white, fontSize: 24)),
-  ),
-  //  Profile Screen with Logout
-  Builder(
-    builder: (context) {
-      final user = FirebaseAuth.instance.currentUser;
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              user?.displayName ?? user?.email ?? "Household User",
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () async {
-                await FirebaseAuth.instance.signOut();
-                if (!context.mounted) return;
-                Navigator.pushReplacementNamed(context, '/login');
-              },
-              icon: const Icon(Icons.logout),
-              label: const Text("Logout"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1FA9A7),
-                foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              ),
-            ),
-          ],
+  // ================= TAB SCREENS =================
+
+  List<Widget> get _tabScreens => [
+        _householdHome(),
+        const Center(
+          child: Text("Map Screen",
+              style: TextStyle(color: Colors.white, fontSize: 22)),
         ),
-      );
-    },
-  ),
-];
+        const Center(
+          child: Text("Chat Screen",
+              style: TextStyle(color: Colors.white, fontSize: 22)),
+        ),
+        _profileTab(),
+      ];
 
+  // ================= CAMERA =================
 
-  // Logout
-  Future<void> _logout(BuildContext context) async {
-    await FirebaseAuth.instance.signOut();
-    if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/login');
-  }
-
-  // Camera / Lens
   Future<void> _openLens(BuildContext context) async {
     var status = await Permission.camera.status;
     if (status.isDenied) {
@@ -95,6 +51,8 @@ final List<Widget> _tabScreens = [
     }
   }
 
+  // ================= BUILD =================
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -103,25 +61,16 @@ final List<Widget> _tabScreens = [
       backgroundColor: bgColor,
       extendBody: true,
 
-      // ===== BODY (CONTENT ONLY CHANGES) =====
       body: Stack(
         children: [
-          // Background blur
-          Positioned(
-            top: -100,
-            right: -100,
-            child: _blurCircle(primaryColor.withOpacity(0.15), 300),
-          ),
-          Positioned(
-            bottom: 100,
-            left: -100,
-            child: _blurCircle(Colors.green.withOpacity(0.1), 350),
-          ),
+          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
+          _blurCircle(Colors.green.withOpacity(0.1), 350,
+              bottom: 100, left: -100),
 
           SafeArea(
             child: Column(
               children: [
-                // TOP HEADER
+                // ===== HEADER =====
                 Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
@@ -152,7 +101,7 @@ final List<Widget> _tabScreens = [
                   ),
                 ),
 
-                // TAB CONTENT
+                // ===== TAB CONTENT =====
                 Expanded(
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 300),
@@ -165,7 +114,7 @@ final List<Widget> _tabScreens = [
         ],
       ),
 
-      // ===== FLOATING CAMERA BUTTON =====
+      // ===== CAMERA FAB =====
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(top: 40),
         child: SizedBox(
@@ -185,7 +134,7 @@ final List<Widget> _tabScreens = [
       floatingActionButtonLocation:
           FloatingActionButtonLocation.centerDocked,
 
-      // ===== BOTTOM NAVIGATION =====
+      // ===== BOTTOM NAV =====
       bottomNavigationBar: Container(
         height: 90,
         decoration: BoxDecoration(
@@ -212,7 +161,118 @@ final List<Widget> _tabScreens = [
     );
   }
 
-  // ===== WIDGET HELPERS =====
+  // ================= HOME TAB =================
+
+  Widget _householdHome() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _statCard("Items", "24", Icons.recycling),
+              const SizedBox(width: 12),
+              _statCard("Weight", "8.5 kg", Icons.scale),
+              const SizedBox(width: 12),
+              _statCard("CO₂ Saved", "3.2 kg", Icons.eco),
+            ],
+          ),
+
+          const SizedBox(height: 30),
+
+          GestureDetector(
+            onTap: () => _openLens(context),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient:
+                    LinearGradient(colors: [primaryColor, Colors.green]),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Row(
+                children: const [
+                  Icon(Icons.camera_alt, color: Colors.white, size: 36),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      "Scan an item\nCheck if it’s recyclable",
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 30),
+
+          Text("What you can do",
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+
+          Row(
+            children: [
+              _actionCard(Icons.local_shipping, "Request Pickup"),
+              const SizedBox(width: 12),
+              _actionCard(Icons.location_on, "Find Junkshop"),
+            ],
+          ),
+
+          const SizedBox(height: 30),
+
+          _infoCard(
+            "Did you know?",
+            "Only 9% of plastic waste is recycled globally. "
+            "Proper segregation helps reduce landfill waste.",
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ================= PROFILE TAB =================
+
+  Widget _profileTab() {
+    final user = FirebaseAuth.instance.currentUser;
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            user?.email ?? "Household User",
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              if (!mounted) return;
+              Navigator.pushReplacementNamed(context, '/login');
+            },
+            icon: const Icon(Icons.logout),
+            label: const Text("Logout"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: primaryColor,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ================= HELPERS =================
 
   Widget _navItem(int index, IconData icon, String label) {
     final isActive = _activeTabIndex == index;
@@ -224,14 +284,78 @@ final List<Widget> _tabScreens = [
           Icon(icon,
               color: isActive ? primaryColor : Colors.grey.shade500),
           const SizedBox(height: 4),
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.bold,
-              color: isActive ? primaryColor : Colors.grey.shade500,
-            ),
-          ),
+          Text(label.toUpperCase(),
+              style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color:
+                      isActive ? primaryColor : Colors.grey.shade500)),
+        ],
+      ),
+    );
+  }
+
+  Widget _statCard(String label, String value, IconData icon) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: primaryColor),
+            const SizedBox(height: 8),
+            Text(value,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
+            Text(label,
+                style:
+                    TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _actionCard(IconData icon, String text) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: primaryColor, size: 28),
+            const SizedBox(height: 8),
+            Text(text,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _infoCard(String title, String content) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text(content,
+              style: TextStyle(color: Colors.grey.shade400)),
         ],
       ),
     );
@@ -242,9 +366,8 @@ final List<Widget> _tabScreens = [
       width: 45,
       height: 45,
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [primaryColor, Colors.green.shade500],
-        ),
+        gradient:
+            LinearGradient(colors: [primaryColor, Colors.green]),
         borderRadius: BorderRadius.circular(12),
       ),
       child: const Icon(Icons.eco, color: Colors.white),
@@ -278,19 +401,26 @@ final List<Widget> _tabScreens = [
                 shape: BoxShape.circle,
               ),
             ),
-          )
+          ),
       ],
     );
   }
 
-  Widget _blurCircle(Color color, double size) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: color),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
-        child: Container(color: Colors.transparent),
+  Widget _blurCircle(Color color, double size,
+      {double? top, double? bottom, double? left, double? right}) {
+    return Positioned(
+      top: top,
+      bottom: bottom,
+      left: left,
+      right: right,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+          child: Container(color: Colors.transparent),
+        ),
       ),
     );
   }
