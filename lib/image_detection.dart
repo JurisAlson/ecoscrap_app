@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'detection_result_page.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:tflite_flutter_helper/tflite_flutter_helper.dart';
 
 class ImageDetectionPage extends StatefulWidget {
   const ImageDetectionPage({super.key});
@@ -17,83 +16,36 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   final ImagePicker _picker = ImagePicker();
   File? _image;
 
-  late Interpreter _interpreter;
-  bool _modelLoaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadModel();  // This will load your TFLite model when the page opens
-  }
-
-  // ================= MODEL LOADING =================
-  Future<void> _loadModel() async {
-  _interpreter = await Interpreter.fromAsset('assets/models/plastic_model.tflite');
-  setState(() {
-    _modelLoaded = true;
-  });
-  debugPrint("TFLite model loaded successfully");
-}
-
-  Future<Map<String, dynamic>> _runInference(File imageFile) async {
-  // Load image
-  TensorImage inputImage = TensorImage.fromFile(imageFile);
-
-  // Preprocess (must match training)
-  final processor = ImageProcessorBuilder()
-      .add(ResizeOp(224, 224, ResizeMethod.BILINEAR))
-      .add(NormalizeOp(0, 255))
-      .build();
-
-  inputImage = processor.process(inputImage);
-
-  // Output buffer
-  var output = List.filled(1, 0.0).reshape([1, 1]);
-
-  // Run inference
-  _interpreter.run(inputImage.buffer, output);
-
-  double confidence = output[0][0];
-  bool isRecyclable = confidence >= 0.5;
-
-  return {
-    "isRecyclable": isRecyclable,
-    "confidence": confidence,
-  };
-}
-
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
   // ================= CAMERA =================
-Future<void> _captureImageWithCamera() async {
-  final XFile? capturedFile =
-      await _picker.pickImage(source: ImageSource.camera);
+  Future<void> _captureImageWithCamera() async {
+    final XFile? capturedFile =
+        await _picker.pickImage(source: ImageSource.camera);
 
-  if (capturedFile != null) {
-    setState(() {
-      _image = File(capturedFile.path);
-    });
+    if (capturedFile != null) {
+      setState(() {
+        _image = File(capturedFile.path);
+      });
 
-    if (!_modelLoaded) return;
+      // 🔹 TEMP: Simulate AI detection result
+      Future.delayed(const Duration(seconds: 1), () {
+        if (!mounted) return;
 
-    final result = await _runInference(_image!);
-
-    if (!mounted) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => DetectionResultPage(
-          isRecyclable: result["isRecyclable"],
-          itemName: "Plastic Item",
-          confidence: result["confidence"],
-        ),
-      ),
-    );
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const DetectionResultPage(
+              isRecyclable: true, // TensorFlow output later
+              itemName: "Plastic Bottle",
+              confidence: 0.92,
+            ),
+          ),
+        );
+      });
+    }
   }
-}
-
 
   @override
   Widget build(BuildContext context) {
