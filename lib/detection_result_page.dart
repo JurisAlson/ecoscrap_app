@@ -202,6 +202,7 @@ class DetectionResultPage extends StatelessWidget {
       right: right,
       child: Container(
         width: size,
+        
         height: size,
         decoration: BoxDecoration(shape: BoxShape.circle, color: color),
         child: BackdropFilter(

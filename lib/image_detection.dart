@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'detection_result_page.dart';
 import '../services/tflite_service.dart';
-import 'package:flutter/foundation.dart';
 
 
 
@@ -15,67 +14,72 @@ class ImageDetectionPage extends StatefulWidget {
   State<ImageDetectionPage> createState() => _ImageDetectionPageState();
 }
 
+
 class _ImageDetectionPageState extends State<ImageDetectionPage> {
   final ImagePicker _picker = ImagePicker();
   File? _image;
+
+  bool _isPickingImage = false;
 
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
   // ================= CAMERA =================
 Future<void> _captureImageWithCamera() async {
-  final XFile? capturedFile =
-      await _picker.pickImage(source: ImageSource.camera);
-
-  if (capturedFile == null) return;
-
-  setState(() {
-    _image = File(capturedFile.path);
-  });
-
-  if (!mounted) return;
-
-  // Show a loading dialog while processing
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => const Center(
-      child: CircularProgressIndicator(),
-    ),
-  );
+  if (_isPickingImage) return;
+  _isPickingImage = true;
 
   try {
-    // Run TFLite model in background
-    final results = await compute(runModelInBackground, _image!.path);
+    final XFile? capturedFile =
+        await _picker.pickImage(source: ImageSource.camera);
+
+    if (capturedFile == null) return;
+
+    setState(() {
+      _image = File(capturedFile.path);
+    });
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final results =
+        await TFLiteService.runModel(_image!.path);
+
+    Navigator.pop(context);
 
     final recyclableScore = results[0];
     final nonRecyclableScore = results[1];
 
     final isRecyclable = recyclableScore > nonRecyclableScore;
-    final confidence = isRecyclable ? recyclableScore : nonRecyclableScore;
+    final confidence =
+        isRecyclable ? recyclableScore : nonRecyclableScore;
 
-    // Close the loading dialog
-    Navigator.pop(context);
-
-    // Navigate to result page
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => DetectionResultPage(
           isRecyclable: isRecyclable,
-          itemName:
-              isRecyclable ? "Recyclable Plastic" : "Non-Recyclable Plastic",
+          itemName: isRecyclable
+              ? "Recyclable Plastic"
+              : "Non-Recyclable Plastic",
           confidence: confidence,
         ),
       ),
     );
   } catch (e) {
-    Navigator.pop(context); // close loading
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Error analyzing image: $e')),
-    );
+    Navigator.pop(context);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('$e')));
+  } finally {
+    _isPickingImage = false;
   }
 }
+
 
 
   @override
