@@ -12,7 +12,20 @@
           "package_name": "com.example.ecoscrap_app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "315109985206-5k9tgvuavefh42ofh1barqr0vbsc3bnt.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ecoscrap_app",
+            "certificate_hash": "75f09f217506314244112254b15d834d4392472c"
+          }
+        },
+        {
+          "client_id": "315109985206-0rcpqskgid0r423053il64r6elmlfpq9.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyDbdR0EJiT9uxQw0A24LFohzp9otl-UB9A"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "315109985206-0rcpqskgid0r423053il64r6elmlfpq9.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "315109985206-fodefvihoa2nque8rj7m7801i1a23ujn.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.ecoscrapApp"
+              }
+            }
+          ]
         }
       }
     }
