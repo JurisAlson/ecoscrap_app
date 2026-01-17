@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class UserAccountCreationPage extends StatefulWidget {
   const UserAccountCreationPage({super.key});
@@ -24,6 +25,14 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
     super.dispose();
   }
 
+  // Helper for snackbars
+  void _showSnackBar(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  // THE MAIN REGISTRATION LOGIC
   Future<void> _createAccount() async {
     if (_isLoading) return;
 
@@ -32,6 +41,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
     final password = _passwordController.text.trim();
     final confirmPassword = _confirmPasswordController.text.trim();
 
+    // Validation
     if (name.isEmpty || email.isEmpty || password.isEmpty) {
       _showSnackBar("All fields are required");
       return;
@@ -40,37 +50,53 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       _showSnackBar("Passwords do not match");
       return;
     }
+    if (password.length < 6) {
+      _showSnackBar("Password must be at least 6 characters");
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
+      // 1. Create the user in Auth
       final userCredential = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(email: email, password: password);
 
+      final String uid = userCredential.user!.uid;
+
+      // 2. Save to Firestore immediately
+      await FirebaseFirestore.instance.collection('Users').doc(uid).set({
+        'UserID': uid,
+        'Name': name,
+        'Email': email,
+        'Roles': 'Users', 
+        'CreatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // 3. Update Display Name & Send Verification
       await userCredential.user?.updateDisplayName(name);
       await userCredential.user?.sendEmailVerification();
 
-      _showSnackBar("Account created! Please verify your email before logging in.");
+      _showSnackBar("Verification email sent! Please check your inbox.");
 
+      // 4. Log out to prevent access until they verify through login
       await FirebaseAuth.instance.signOut();
       
-      // Returns to the selection page, then selection page can pop to login
       if (mounted) Navigator.pop(context); 
+
     } on FirebaseAuthException catch (e) {
-      _showSnackBar(e.message ?? "Account creation failed");
+      _showSnackBar(e.message ?? "Authentication failed");
+    } catch (e) {
+      _showSnackBar("An unexpected error occurred: ${e.toString()}");
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A), // Matches your theme
+      backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
         title: const Text("User Registration"),
         backgroundColor: const Color(0xFF0F172A),
@@ -99,7 +125,8 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
                 onPressed: _isLoading ? null : _createAccount,
                 child: _isLoading
                     ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text("Create User Account", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    : const Text("Create User Account", 
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
               ),
             ),
           ],

@@ -15,9 +15,9 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
+  // 1. PLACE YOUR CONTROLLERS AND VARIABLES HERE
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-
   bool _isLoading = false;
   bool _obscurePassword = true;
 
@@ -28,73 +28,58 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  // 2. PLACE YOUR LOGIN LOGIC HERE
+  Future<void> _login() async {
+    if (_isLoading) return;
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
 
-Future<void> _login() async {
-  if (_isLoading) return;
+    if (email.isEmpty || password.isEmpty) {
+      _showToast("Email and password are required.", isError: true);
+      return;
+    }
 
-  final email = _emailController.text.trim();
-  final password = _passwordController.text.trim();
+    setState(() => _isLoading = true);
 
-  if (email.isEmpty || password.isEmpty) {
-    _showToast("Email and password are required.", isError: true);
-    return;
-  }
+    try {
+      UserCredential userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
 
-  setState(() => _isLoading = true);
+      final user = userCredential.user;
+      if (user != null) {
+        // Checking 'Junkshop' collection (singular as per your Firebase)
+        final junkshopDoc = await FirebaseFirestore.instance
+            .collection('Junkshop') 
+            .doc(user.uid)
+            .get();
 
-  try {
-    // 1. Firebase Login
-    UserCredential userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-
-    final user = userCredential.user;
-
-    if (user != null) {
-      // 2. CHECK IF THIS IS A JUNKSHOP
-      final junkshopDoc = await FirebaseFirestore.instance
-          .collection('junkshops')
-          .doc(user.uid)
-          .get();
-
-      if (junkshopDoc.exists) {
-        // --- JUNKSHOP LOGIC ---
-        bool isVerified = junkshopDoc.data()?['verified'] ?? false;
-
-        if (isVerified) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const JunkshopDashboardPage()),
-          );
+        if (junkshopDoc.exists) {
+          bool isVerified = junkshopDoc.data()?['Verified'] ?? false;
+          if (isVerified) {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const JunkshopDashboardPage()));
+          } else {
+            await FirebaseAuth.instance.signOut();
+            _showToast("Admin is still reviewing your business permit.", isError: true);
+          }
         } else {
-          // NOT VERIFIED: Kick them out
-          await FirebaseAuth.instance.signOut();
-          _showToast("Admin is still reviewing your business permit.", isError: true);
-        }
-      } else {
-        // --- STANDARD USER LOGIC ---
-        if (user.emailVerified) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const DashboardPage()),
-          );
-        } else {
-          _showToast("Please verify your email via Gmail first.", isError: true);
-          await FirebaseAuth.instance.signOut();
+          if (user.emailVerified) {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardPage()));
+          } else {
+            _showToast("Please verify your email via Gmail first.", isError: true);
+            await FirebaseAuth.instance.signOut();
+          }
         }
       }
+    } on FirebaseAuthException catch (e) {
+      _showToast(e.message ?? "Login failed", isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
-  } on FirebaseAuthException catch (e) {
-    // ... your existing error handling ...
-    _showToast(e.message ?? "Login failed", isError: true);
-  } catch (e) {
-    _showToast("Something went wrong.", isError: true);
-  } finally {
-    if (mounted) setState(() => _isLoading = false);
   }
-}
 
+  // 3. PLACE YOUR UI HELPER METHODS HERE
   void _showToast(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -103,25 +88,55 @@ Future<void> _login() async {
         backgroundColor: Colors.transparent,
         content: Container(
           padding: const EdgeInsets.all(16),
-          
+          decoration: BoxDecoration(
+             color: Colors.black87,
+             borderRadius: BorderRadius.circular(10),
+          ),
           child: Row(
             children: [
-              Icon(
-                isError ? Icons.error_outline : Icons.check_circle_outline,
-                color: isError ? Colors.redAccent : const Color(0xFF1FA9A7),
-              ),
+              Icon(isError ? Icons.error_outline : Icons.check_circle_outline, 
+                   color: isError ? Colors.redAccent : const Color(0xFF1FA9A7)),
               const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  message,
-                  style: TextStyle(
-                    color: isError ? Colors.red : Colors.tealAccent,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
+              Expanded(child: Text(message, style: const TextStyle(color: Colors.white))),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String hint,
+    required IconData icon,
+    bool isPassword = false,
+    bool obscureText = false,
+    VoidCallback? onToggleVisibility,
+    TextInputType? keyboardType,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: TextField(
+        controller: controller,
+        obscureText: obscureText,
+        keyboardType: keyboardType,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: const TextStyle(color: Color(0xFF475569)),
+          prefixIcon: Icon(icon, color: const Color(0xFF475569)),
+          suffixIcon: isPassword
+              ? IconButton(
+                  onPressed: onToggleVisibility,
+                  icon: Icon(obscureText ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: const Color(0xFF475569)),
+                )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
         ),
       ),
     );
@@ -329,49 +344,6 @@ Future<void> _login() async {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String hint,
-    required IconData icon,
-    bool isPassword = false,
-    bool obscureText = false,
-    VoidCallback? onToggleVisibility,
-    TextInputType? keyboardType,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: TextField(
-        controller: controller,
-        obscureText: obscureText,
-        keyboardType: keyboardType,
-        style: const TextStyle(color: Colors.white),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: const TextStyle(color: Color(0xFF475569)),
-          prefixIcon: Icon(icon, color: const Color(0xFF475569)),
-          suffixIcon: isPassword
-              ? IconButton(
-                  onPressed: onToggleVisibility,
-                  icon: Icon(
-                    obscureText
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                    color: const Color(0xFF475569),
-                  ),
-                )
-              : null,
-          border: InputBorder.none,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
-        ),
       ),
     );
   }
