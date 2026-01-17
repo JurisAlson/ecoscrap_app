@@ -41,7 +41,6 @@ final FirebaseAuth _auth = FirebaseAuth.instance;
 final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   // The main registration logic
 Future<void> _registerJunkshop() async {
-  // 1. Validation Check
   if (_pickedFile == null || _emailController.text.isEmpty || _shopNameController.text.isEmpty || _passwordController.text.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("Please fill all fields and upload a permit")),
@@ -52,7 +51,6 @@ Future<void> _registerJunkshop() async {
   setState(() => _isLoading = true);
 
   try {
-    // 2. Create the Auth Account
     UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
       email: _emailController.text.trim(),
       password: _passwordController.text.trim(),
@@ -60,8 +58,6 @@ Future<void> _registerJunkshop() async {
 
     String uid = userCredential.user!.uid;
 
-    // 3. Upload the Permit to Firebase Storage
-    // Use the file path from the picker
     File file = File(_pickedFile!.path!);
     UploadTask uploadTask = FirebaseStorage.instance
         .ref('permits/$uid.pdf')
@@ -70,41 +66,41 @@ Future<void> _registerJunkshop() async {
     TaskSnapshot snapshot = await uploadTask;
     String downloadUrl = await snapshot.ref.getDownloadURL();
 
-    // 4. Save to Firestore (Matching your 'userid' collection and 'Role' case)
-    await _firestore.collection('userid').doc(uid).set({
-      'userid': uid,
+    // MATCHING THE LOGIN PAGE: Collection 'Junkshop' and Field 'Verified'
+    await _firestore.collection('Junkshop').doc(uid).set({
+      'UserID': uid,
       'ShopName': _shopNameController.text.trim(),
-      'email': _emailController.text.trim(),
-      'permit_url': downloadUrl,
-      'Role': 'Junkshop', 
-      'verified': false, 
-      'createdAt': FieldValue.serverTimestamp(),
+      'Email': _emailController.text.trim(),
+      'PermitUrl': downloadUrl,
+      'Roles': 'Junkshop', 
+      'Verified': false, // Admin must change this to true manually in Firebase
+      'CreatedAt': FieldValue.serverTimestamp(),
     });
 
-    // 5. Success UI
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Submitted! Admin will verify your permit.")),
-      );
-      
-      // 6. Final Step: Sign out and go back
-      //await _auth.signOut();
-      //Navigator.pop(context);
+      _showToast("Submitted! Admin will verify your permit.");
+      await _auth.signOut();
+      Navigator.pop(context); // Go back to selection
     }
+    
 
   } on FirebaseAuthException catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(e.message ?? "Auth Error")),
-    );
+    _showToast(e.message ?? "Auth Error", isError: true);
   } catch (e) {
-    // This catches Firestore or Storage errors
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Error: ${e.toString()}")),
-    );
+    _showToast("Error: ${e.toString()}", isError: true);
   } finally {
     if (mounted) setState(() => _isLoading = false);
   }
 }
+
+void _showToast(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.redAccent : Colors.green,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
