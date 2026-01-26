@@ -1,8 +1,10 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'inventory_form_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
-  const InventoryScreen({super.key});
+  final String shopID;
+
+  const InventoryScreen({super.key, required this.shopID});
 
   @override
   State<InventoryScreen> createState() => _InventoryScreenState();
@@ -11,193 +13,182 @@ class InventoryScreen extends StatefulWidget {
 class _InventoryScreenState extends State<InventoryScreen> {
   String _query = "";
 
-  final List<Map<String, dynamic>> _items = [
-    {
-      'id': '1',
-      'name': 'PP Color Class A',
-      'category': 'PP Color',
-      'subCategory': 'Class A',
-      'quantityKg': 12.5,
-      'notes': 'Clean and sorted',
-    },
-    {
-      'id': '2',
-      'name': 'HD Bottles',
-      'category': 'HD',
-      'subCategory': '',
-      'quantityKg': 6.0,
-      'notes': '',
-    },
-  ];
-
   @override
   Widget build(BuildContext context) {
-    final filtered = _items.where((item) {
-      if (_query.isEmpty) return true;
-      final hay = [
-        item['name'],
-        item['category'],
-        item['subCategory'],
-        item['notes'],
-      ].join(' ').toLowerCase();
-      return hay.contains(_query);
-    }).toList();
-
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final created = await Navigator.push<Map<String, dynamic>>(
-            context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  const InventoryFormScreen(mode: FormMode.create),
-            ),
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('Junkshop')
+          .doc(widget.shopID)
+          .collection('inventory')
+          .orderBy('createdAt', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
           );
+        }
 
-          if (created != null) {
-            setState(() {
-              _items.insert(0, {
-                ...created,
-                'id': DateTime.now()
-                    .microsecondsSinceEpoch
-                    .toString(),
-              });
-            });
-          }
-        },
-        child: const Icon(Icons.add),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            TextField(
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: "Search (e.g., PP Color, HD, cups...)",
-                hintStyle: TextStyle(color: Colors.grey.shade500),
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white.withOpacity(0.06),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              onChanged: (v) =>
-                  setState(() => _query = v.trim().toLowerCase()),
-            ),
-            const SizedBox(height: 12),
+        final docs = snapshot.data?.docs ?? [];
 
-            Expanded(
-              child: filtered.isEmpty
-                  ? Center(
-                      child: Text(
-                        "No items found",
-                        style: TextStyle(color: Colors.grey.shade400),
-                      ),
-                    )
-                  : ListView.separated(
-                      itemCount: filtered.length,
-                      separatorBuilder: (_, __) =>
-                          const SizedBox(height: 10),
-                      itemBuilder: (context, i) {
-                        final item = filtered[i];
-                        final name = item['name'];
-                        final category = item['category'];
-                        final sub = item['subCategory'];
-                        final qty =
-                            (item['quantityKg'] ?? 0).toDouble();
+        final items = docs.where((doc) {
+          if (_query.isEmpty) return true;
+          final data = doc.data() as Map<String, dynamic>;
+          final hay = [
+            data['name'] ?? '',
+            data['category'] ?? '',
+            data['subCategory'] ?? '',
+            data['notes'] ?? '',
+          ].join(' ').toLowerCase();
+          return hay.contains(_query.toLowerCase());
+        }).toList();
 
-                        return Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.06),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      name,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      "$category${sub.isNotEmpty ? " • $sub" : ""}",
-                                      style: TextStyle(
-                                          color:
-                                              Colors.grey.shade400),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      "${qty.toStringAsFixed(2)} kg",
-                                      style: TextStyle(
-                                          color:
-                                              Colors.grey.shade300),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.edit,
-                                    color: Colors.white),
-                                onPressed: () async {
-                                  final updated =
-                                      await Navigator.push<
-                                          Map<String, dynamic>>(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          InventoryFormScreen(
-                                        mode: FormMode.edit,
-                                        initial: item,
-                                      ),
-                                    ),
-                                  );
+        return Scaffold(
+          backgroundColor: const Color(0xFF0F172A),
 
-                                  if (updated != null) {
-                                    setState(() {
-                                      final idx = _items.indexWhere(
-                                          (x) =>
-                                              x['id'] ==
-                                              item['id']);
-                                      if (idx != -1) {
-                                        _items[idx] = {
-                                          ..._items[idx],
-                                          ...updated
-                                        };
-                                      }
-                                    });
-                                  }
-                                },
-                              ),
-                              IconButton(
-                                icon: Icon(Icons.delete,
-                                    color: Colors.red.shade300),
-                                onPressed: () =>
-                                    _confirmDelete(item['id']),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
+          /// ➕ ADD BUTTON
+          floatingActionButton: FloatingActionButton(
+            backgroundColor: Colors.greenAccent,
+            child: const Icon(Icons.add, color: Colors.black),
+            onPressed: _addItem,
+          ),
+
+          body: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                /// 🔍 SEARCH
+                TextField(
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: "Search inventory...",
+                    hintStyle: TextStyle(color: Colors.grey.shade500),
+                    prefixIcon: const Icon(Icons.search),
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.06),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
                     ),
+                  ),
+                  onChanged: (v) => setState(() => _query = v.trim()),
+                ),
+                const SizedBox(height: 12),
+
+                /// 📦 LIST
+                Expanded(
+                  child: items.isEmpty
+                      ? _emptyState()
+                      : ListView.separated(
+                          itemCount: items.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, i) {
+                            final doc = items[i];
+                            final data =
+                                doc.data() as Map<String, dynamic>;
+
+                            final name =
+                                data['name'] ?? 'Unnamed item';
+                            final category =
+                                data['category'] ?? '';
+                            final subCategory =
+                                data['subCategory'] ?? '';
+                            final notes = data['notes'] ?? '';
+
+                            return ListTile(
+                              tileColor:
+                                  Colors.white.withOpacity(0.06),
+                              title: Text(
+                                name,
+                                style: const TextStyle(
+                                    color: Colors.white),
+                              ),
+                              subtitle: Text(
+                                "$category • $subCategory",
+                                style: TextStyle(
+                                    color: Colors.grey.shade400),
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  /// ✏️ EDIT
+                                  IconButton(
+                                    icon: const Icon(Icons.edit,
+                                        color: Colors.white),
+                                    onPressed: () async {
+                                      final edited =
+                                          await showDialog<
+                                              Map<String, dynamic>>(
+                                        context: context,
+                                        builder: (_) =>
+                                            _EditInventoryDialog(
+                                          initialName: name,
+                                          initialCategory: category,
+                                          initialSubCategory:
+                                              subCategory,
+                                          initialNotes: notes,
+                                        ),
+                                      );
+
+                                      if (edited != null) {
+                                        await FirebaseFirestore
+                                            .instance
+                                            .collection('Junkshop')
+                                            .doc(widget.shopID)
+                                            .collection('inventory')
+                                            .doc(doc.id)
+                                            .update(edited);
+                                      }
+                                    },
+                                  ),
+
+                                  /// 🗑 DELETE
+                                  IconButton(
+                                    icon: Icon(Icons.delete,
+                                        color:
+                                            Colors.red.shade300),
+                                    onPressed: () =>
+                                        _confirmDelete(doc.id),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
+  /// ➕ CREATE
+  Future<void> _addItem() async {
+    final created = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => const _EditInventoryDialog(
+        initialName: '',
+        initialCategory: '',
+        initialSubCategory: '',
+        initialNotes: '',
+      ),
+    );
+
+    if (created != null) {
+      await FirebaseFirestore.instance
+          .collection('Junkshop')
+          .doc(widget.shopID)
+          .collection('inventory')
+          .add({
+        ...created,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
+  /// 🗑 DELETE CONFIRM
   Future<void> _confirmDelete(String id) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -219,9 +210,131 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
 
     if (ok == true) {
-      setState(() {
-        _items.removeWhere((x) => x['id'] == id);
-      });
+      await FirebaseFirestore.instance
+          .collection('Junkshop')
+          .doc(widget.shopID)
+          .collection('inventory')
+          .doc(id)
+          .delete();
     }
   }
+
+  /// 📭 EMPTY STATE
+  Widget _emptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.inventory_2,
+              size: 64, color: Colors.grey),
+          const SizedBox(height: 12),
+          const Text(
+            "No inventory items yet",
+            style: TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: _addItem,
+            icon: const Icon(Icons.add),
+            label: const Text("Add Item"),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+/// ✏️ ADD / EDIT DIALOG
+class _EditInventoryDialog extends StatefulWidget {
+  final String initialName;
+  final String initialCategory;
+  final String initialSubCategory;
+  final String initialNotes;
+
+  const _EditInventoryDialog({
+    required this.initialName,
+    required this.initialCategory,
+    required this.initialSubCategory,
+    required this.initialNotes,
+  });
+
+  @override
+  State<_EditInventoryDialog> createState() =>
+      _EditInventoryDialogState();
+}
+
+class _EditInventoryDialogState
+    extends State<_EditInventoryDialog> {
+  late TextEditingController nameCtrl;
+  late TextEditingController categoryCtrl;
+  late TextEditingController subCategoryCtrl;
+  late TextEditingController notesCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    nameCtrl = TextEditingController(text: widget.initialName);
+    categoryCtrl =
+        TextEditingController(text: widget.initialCategory);
+    subCategoryCtrl =
+        TextEditingController(text: widget.initialSubCategory);
+    notesCtrl =
+        TextEditingController(text: widget.initialNotes);
+  }
+
+  @override
+  void dispose() {
+    nameCtrl.dispose();
+    categoryCtrl.dispose();
+    subCategoryCtrl.dispose();
+    notesCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text("Inventory Item"),
+      content: SingleChildScrollView(
+        child: Column(
+          children: [
+            TextField(
+                controller: nameCtrl,
+                decoration:
+                    const InputDecoration(labelText: "Name")),
+            TextField(
+                controller: categoryCtrl,
+                decoration: const InputDecoration(
+                    labelText: "Category")),
+            TextField(
+                controller: subCategoryCtrl,
+                decoration: const InputDecoration(
+                    labelText: "Sub-category")),
+            TextField(
+                controller: notesCtrl,
+                decoration:
+                    const InputDecoration(labelText: "Notes")),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel")),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pop(context, {
+              'name': nameCtrl.text.trim(),
+              'category': categoryCtrl.text.trim(),
+              'subCategory': subCategoryCtrl.text.trim(),
+              'notes': notesCtrl.text.trim(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+          },
+          child: const Text("Save"),
+        ),
+      ],
+    );
+  }
+}
+ 

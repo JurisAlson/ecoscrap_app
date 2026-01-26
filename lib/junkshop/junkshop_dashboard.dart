@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:ui';
-
 import '../screens/inventory_screen.dart';
 
 class JunkshopDashboardPage extends StatefulWidget {
@@ -17,56 +17,23 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  // ========= UI-ONLY RECYCLE LOG (mock transactions) =========
-  // Each entry represents a recycle/collection transaction.
-  // Later you can replace this with Firestore "transactions" collection.
-  final List<Map<String, dynamic>> _recycleLogs = [
-    {
-      'id': 't1',
-      'category': 'PP Color',
-      'kg': 3.2,
-      'source': 'Household pickup',
-      'timestamp': DateTime.now().subtract(const Duration(hours: 1)),
-    },
-    {
-      'id': 't2',
-      'category': 'HD',
-      'kg': 1.5,
-      'source': 'Walk-in drop-off',
-      'timestamp': DateTime.now().subtract(const Duration(hours: 3)),
-    },
-    {
-      'id': 't3',
-      'category': 'PP White',
-      'kg': 2.0,
-      'source': 'Household pickup',
-      'timestamp': DateTime.now().subtract(const Duration(days: 1, hours: 2)),
-    },
-    {
-      'id': 't4',
-      'category': 'Black',
-      'kg': 4.4,
-      'source': 'Walk-in drop-off',
-      'timestamp': DateTime.now().subtract(const Duration(days: 4)),
-    },
-  ];
-
-  late final List<Widget> _tabScreens = [
-    _homeTab(), // ✅ Functional home
-    const InventoryScreen(),
-    const Center(
-      child: Text(
-        "Supplier Map Screen",
-        style: TextStyle(color: Colors.white, fontSize: 24),
-      ),
-    ),
-    const Center(
-      child: Text(
-        "Profile Screen",
-        style: TextStyle(color: Colors.white, fontSize: 24),
-      ),
-    ),
-  ];
+  // Bottom nav screens
+  List<Widget> _tabScreens() => [
+        _homeTabStream(),
+        InventoryScreen(shopID: FirebaseAuth.instance.currentUser!.uid),
+        const Center(
+          child: Text(
+            "Supplier Map Screen",
+            style: TextStyle(color: Colors.white, fontSize: 24),
+          ),
+        ),
+        const Center(
+          child: Text(
+            "Profile Screen",
+            style: TextStyle(color: Colors.white, fontSize: 24),
+          ),
+        ),
+      ];
 
   Future<void> _logout(BuildContext context) async {
     try {
@@ -81,12 +48,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     }
   }
 
-  // ========= KPI CALCULATIONS (from local logs) =========
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
   DateTime _startOfWeek(DateTime d) {
-    // Monday start (Mon=1 ... Sun=7)
     final diff = d.weekday - DateTime.monday;
     return DateTime(d.year, d.month, d.day).subtract(Duration(days: diff));
   }
@@ -121,7 +86,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           SafeArea(
             child: Column(
               children: [
-                // ===== TOP HEADER =====
+                // Top Header
                 Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
@@ -156,14 +121,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                   ),
                 ),
 
-                // ===== TAB CONTENT =====
+                // Tab content
                 Expanded(
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 300),
-                    child: KeyedSubtree(
-                      key: ValueKey(_activeTabIndex),
-                      child: _tabScreens[_activeTabIndex],
-                    ),
+                  child: KeyedSubtree(
+                    key: ValueKey(_activeTabIndex),
+                    child: _tabScreens()[_activeTabIndex],
                   ),
                 ),
               ],
@@ -172,7 +134,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
         ],
       ),
 
-      // ===== BOTTOM NAV =====
+      // Bottom navigation
       bottomNavigationBar: Container(
         height: 90,
         decoration: BoxDecoration(
@@ -202,13 +164,137 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
-  // ========= HOME TAB (functional) =========
-  Widget _homeTab() {
+  // ================== HOME TAB STREAM ==================
+Widget _homeTabStream() {
+  final userId = FirebaseAuth.instance.currentUser!.uid;
+
+  return StreamBuilder<QuerySnapshot>(
+    stream: FirebaseFirestore.instance
+        .collection('Junkshop')
+        .doc(userId)
+        .collection('recycleLogs')
+        .orderBy('timestamp', descending: true)
+        .snapshots(),
+    builder: (context, snapshot) {
+      if (!snapshot.hasData) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      final logs = snapshot.data!.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return {
+          'id': doc.id,
+          'category': data['category'] ?? 'Unknown',
+          'kg': (data['kg'] as num).toDouble(),
+          'source': data['source'] ?? '',
+          'timestamp': (data['timestamp'] as Timestamp).toDate(),
+        };
+      }).toList();
+
+      final now = DateTime.now();
+      final todayLogs =
+          logs.where((l) => _isSameDay(l['timestamp'] as DateTime, now));
+      final weekStart = _startOfWeek(now);
+      final weekLogs = logs.where((l) {
+        final t = l['timestamp'] as DateTime;
+        return t.isAfter(weekStart.subtract(const Duration(milliseconds: 1)));
+      });
+
+      final todayKg = _sumKg(todayLogs);
+      final weekKg = _sumKg(weekLogs);
+      final todayCount = todayLogs.length;
+
+      // Top category today
+      final Map<String, double> catKg = {};
+      for (final l in todayLogs) {
+        final cat = (l['category'] ?? 'Unknown').toString();
+        final kg = (l['kg'] as num).toDouble();
+        catKg[cat] = (catKg[cat] ?? 0) + kg;
+      }
+      String topCat = "—";
+      double topCatKg = 0;
+      catKg.forEach((k, v) {
+        if (v > topCatKg) {
+          topCatKg = v;
+          topCat = k;
+        }
+      });
+
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // KPI Cards
+            Row(
+              children: [
+                Expanded(
+                  child: _kpiCard(
+                    title: "Recycled Today",
+                    value: "${todayKg.toStringAsFixed(1)} kg",
+                    subtitle: "$todayCount transactions",
+                    icon: Icons.recycling,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _kpiCard(
+                    title: "This Week",
+                    value: "${weekKg.toStringAsFixed(1)} kg",
+                    subtitle: "since Monday",
+                    icon: Icons.calendar_month,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _kpiCard(
+                    title: "Top Plastic Today",
+                    value: topCat,
+                    subtitle: topCat == "—"
+                        ? "no logs yet"
+                        : "${topCatKg.toStringAsFixed(1)} kg",
+                    icon: Icons.category,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _actionCard(
+                    title: "Add Recycle Log",
+                    subtitle: "Realtime Firestore update",
+                    icon: Icons.add,
+                    onTap: _openAddLogDialog,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            Text(
+              "Recent Activity",
+              style: TextStyle(
+                color: Colors.grey.shade200,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 10),
+            ...logs.take(6).map((l) => _activityTile(l)),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+  Widget _homeTab(List<Map<String, dynamic>> logs) {
     final now = DateTime.now();
     final todayLogs =
-        _recycleLogs.where((l) => _isSameDay(l['timestamp'] as DateTime, now));
+        logs.where((l) => _isSameDay(l['timestamp'] as DateTime, now));
     final weekStart = _startOfWeek(now);
-    final weekLogs = _recycleLogs.where((l) {
+    final weekLogs = logs.where((l) {
       final t = l['timestamp'] as DateTime;
       return t.isAfter(weekStart.subtract(const Duration(milliseconds: 1)));
     });
@@ -233,17 +319,12 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       }
     });
 
-    // Recent (latest first)
-    final recent = [..._recycleLogs]
-      ..sort((a, b) => (b['timestamp'] as DateTime)
-          .compareTo(a['timestamp'] as DateTime));
-
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // KPI cards
+          // KPI Cards
           Row(
             children: [
               Expanded(
@@ -282,16 +363,14 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               Expanded(
                 child: _actionCard(
                   title: "Add Recycle Log",
-                  subtitle: "demo real-time updates",
+                  subtitle: "Realtime Firestore update",
                   icon: Icons.add,
                   onTap: _openAddLogDialog,
                 ),
               ),
             ],
           ),
-
           const SizedBox(height: 18),
-
           Text(
             "Recent Activity",
             style: TextStyle(
@@ -301,13 +380,39 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             ),
           ),
           const SizedBox(height: 10),
-
-          ...recent.take(6).map((l) => _activityTile(l)),
+          ...logs.take(6).map((l) => _activityTile(l)),
         ],
       ),
     );
   }
 
+  // ================== ADD LOG TO FIRESTORE ==================
+  Future<void> _openAddLogDialog() async {
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (_) => _AddRecycleLogDialog(primaryColor: primaryColor),
+  );
+
+  if (result != null) {
+    final userId = FirebaseAuth.instance.currentUser!.uid;
+
+    await FirebaseFirestore.instance
+        .collection('Junkshop')
+        .doc(userId)
+        .collection('recycleLogs')
+        .add({
+      'category': result['category'],
+      'kg': result['kg'],
+      'source': result['source'],
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+
+    // No need to setState anymore — StreamBuilder will auto-update
+  }
+}
+
+
+  // ================== UI Helpers ==================
   Widget _kpiCard({
     required String title,
     required String value,
@@ -464,27 +569,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
-  Future<void> _openAddLogDialog() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => _AddRecycleLogDialog(primaryColor: primaryColor),
-    );
-
-    if (result != null) {
-      setState(() {
-        _recycleLogs.insert(0, {
-          'id': DateTime.now().microsecondsSinceEpoch.toString(),
-          'category': result['category'],
-          'kg': result['kg'],
-          'source': result['source'],
-          'timestamp': DateTime.now(),
-        });
-      });
-    }
-  }
-
-  // ===== HELPERS =====
-
+  // ================== NAV / UI Helpers ==================
   Widget _navItem(int index, IconData icon, String label) {
     final isActive = _activeTabIndex == index;
 
@@ -568,19 +653,37 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 // ========= Add Log Dialog (UI-only) =========
 class _AddRecycleLogDialog extends StatefulWidget {
   final Color primaryColor;
-  const _AddRecycleLogDialog({required this.primaryColor});
+  final String? initialCategory;
+  final double? initialKg;
+  final String? initialSource;
+
+  const _AddRecycleLogDialog({
+    required this.primaryColor,
+    this.initialCategory,
+    this.initialKg,
+    this.initialSource,
+  });
 
   @override
   State<_AddRecycleLogDialog> createState() => _AddRecycleLogDialogState();
 }
 
 class _AddRecycleLogDialogState extends State<_AddRecycleLogDialog> {
-  String _category = "PP Color";
-  final _kgCtrl = TextEditingController(text: "1.0");
-  String _source = "Household pickup";
+  late String _category;
+  late TextEditingController _kgCtrl;
+  late String _source;
 
   final _categories = const ["PP Color", "PP White", "HD", "Black"];
   final _sources = const ["Household pickup", "Walk-in drop-off"];
+
+  @override
+  void initState() {
+    super.initState();
+    _category = widget.initialCategory ?? "PP Color";
+    _kgCtrl = TextEditingController(
+        text: widget.initialKg != null ? widget.initialKg.toString() : "1.0");
+    _source = widget.initialSource ?? "Household pickup";
+  }
 
   @override
   void dispose() {
