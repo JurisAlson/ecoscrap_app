@@ -39,25 +39,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
             data['category'] ?? '',
             data['subCategory'] ?? '',
             data['notes'] ?? '',
+            (data['unitsKg'] ?? '').toString(),
           ].join(' ').toLowerCase();
           return hay.contains(_query.toLowerCase());
         }).toList();
 
         return Scaffold(
           backgroundColor: const Color(0xFF0F172A),
-
-          /// ➕ ADD BUTTON
           floatingActionButton: FloatingActionButton(
             backgroundColor: Colors.greenAccent,
             child: const Icon(Icons.add, color: Colors.black),
             onPressed: _addItem,
           ),
-
           body: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                /// 🔍 SEARCH
                 TextField(
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
@@ -73,82 +70,66 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   onChanged: (v) => setState(() => _query = v.trim()),
                 ),
                 const SizedBox(height: 12),
-
-                /// 📦 LIST
                 Expanded(
                   child: items.isEmpty
                       ? _emptyState()
                       : ListView.separated(
                           itemCount: items.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 10),
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
                           itemBuilder: (context, i) {
                             final doc = items[i];
-                            final data =
-                                doc.data() as Map<String, dynamic>;
+                            final data = doc.data() as Map<String, dynamic>;
 
-                            final name =
-                                data['name'] ?? 'Unnamed item';
-                            final category =
-                                data['category'] ?? '';
-                            final subCategory =
-                                data['subCategory'] ?? '';
+                            final name = data['name'] ?? 'Unnamed item';
+                            final category = data['category'] ?? 'PP WHITE';
+                            final subCategory = data['subCategory'] ?? '';
                             final notes = data['notes'] ?? '';
+                            final unitsKg = (data['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
                             return ListTile(
-                              tileColor:
-                                  Colors.white.withOpacity(0.06),
-                              title: Text(
-                                name,
-                                style: const TextStyle(
-                                    color: Colors.white),
-                              ),
+                              tileColor: Colors.white.withOpacity(0.06),
+                              title: Text(name, style: const TextStyle(color: Colors.white)),
                               subtitle: Text(
-                                "$category • $subCategory",
-                                style: TextStyle(
-                                    color: Colors.grey.shade400),
+                                "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
+                                style: TextStyle(color: Colors.grey.shade400),
                               ),
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  /// ✏️ EDIT
                                   IconButton(
-                                    icon: const Icon(Icons.edit,
-                                        color: Colors.white),
+                                    icon: const Icon(Icons.edit, color: Colors.white),
                                     onPressed: () async {
-                                      final edited =
-                                          await showDialog<
-                                              Map<String, dynamic>>(
+                                      final edited = await showDialog<Map<String, dynamic>>(
                                         context: context,
-                                        builder: (_) =>
-                                            _EditInventoryDialog(
+                                        builder: (_) => _EditInventoryDialog(
                                           initialName: name,
                                           initialCategory: category,
-                                          initialSubCategory:
-                                              subCategory,
+                                          initialSubCategory: subCategory,
                                           initialNotes: notes,
+                                          initialUnitsKg: unitsKg,
                                         ),
                                       );
 
-                                      if (edited != null) {
-                                        await FirebaseFirestore
-                                            .instance
-                                            .collection('Junkshop')
-                                            .doc(widget.shopID)
-                                            .collection('inventory')
-                                            .doc(doc.id)
-                                            .update(edited);
-                                      }
+                                      if (edited == null) return;
+
+                                      await FirebaseFirestore.instance
+                                          .collection('Junkshop')
+                                          .doc(widget.shopID)
+                                          .collection('inventory')
+                                          .doc(doc.id)
+                                          .update({
+                                        'name': edited['name'] ?? '',
+                                        'category': edited['category'] ?? 'PP WHITE',
+                                        'subCategory': edited['subCategory'] ?? '',
+                                        'notes': edited['notes'] ?? '',
+                                        'unitsKg': (edited['unitsKg'] as num?)?.toDouble() ?? 0.0,
+                                        'updatedAt': FieldValue.serverTimestamp(),
+                                      });
                                     },
                                   ),
-
-                                  /// 🗑 DELETE
                                   IconButton(
-                                    icon: Icon(Icons.delete,
-                                        color:
-                                            Colors.red.shade300),
-                                    onPressed: () =>
-                                        _confirmDelete(doc.id),
+                                    icon: Icon(Icons.delete, color: Colors.red.shade300),
+                                    onPressed: () => _confirmDelete(doc.id),
                                   ),
                                 ],
                               ),
@@ -170,22 +151,28 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       builder: (_) => const _EditInventoryDialog(
         initialName: '',
-        initialCategory: '',
+        initialCategory: 'PP WHITE',
         initialSubCategory: '',
         initialNotes: '',
+        initialUnitsKg: 0.0,
       ),
     );
 
-    if (created != null) {
-      await FirebaseFirestore.instance
-          .collection('Junkshop')
-          .doc(widget.shopID)
-          .collection('inventory')
-          .add({
-        ...created,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    }
+    if (created == null) return;
+
+    await FirebaseFirestore.instance
+        .collection('Junkshop')
+        .doc(widget.shopID)
+        .collection('inventory')
+        .add({
+      'name': created['name'] ?? '',
+      'category': created['category'] ?? 'PP WHITE',
+      'subCategory': created['subCategory'] ?? '',
+      'notes': created['notes'] ?? '',
+      'unitsKg': (created['unitsKg'] as num?)?.toDouble() ?? 0.0,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   /// 🗑 DELETE CONFIRM
@@ -194,17 +181,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text("Delete item?"),
-        content:
-            const Text("This action cannot be undone."),
+        content: const Text("This action cannot be undone."),
         actions: [
-          TextButton(
-              onPressed: () =>
-                  Navigator.pop(context, false),
-              child: const Text("Cancel")),
-          TextButton(
-              onPressed: () =>
-                  Navigator.pop(context, true),
-              child: const Text("Delete")),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Delete")),
         ],
       ),
     );
@@ -219,19 +199,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  /// 📭 EMPTY STATE
   Widget _emptyState() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.inventory_2,
-              size: 64, color: Colors.grey),
+          const Icon(Icons.inventory_2, size: 64, color: Colors.grey),
           const SizedBox(height: 12),
-          const Text(
-            "No inventory items yet",
-            style: TextStyle(color: Colors.grey),
-          ),
+          const Text("No inventory items yet", style: TextStyle(color: Colors.grey)),
           const SizedBox(height: 12),
           ElevatedButton.icon(
             onPressed: _addItem,
@@ -244,51 +219,113 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 }
 
-/// ✏️ ADD / EDIT DIALOG
+/*
+|--------------------------------------------------------------------------
+| Inventory Add / Edit Dialog (UI Only)
+|--------------------------------------------------------------------------
+| This dialog is used by BOTH:
+| 1) Creating a new inventory item
+| 2) Editing an existing inventory item
+|
+| Responsibilities:
+| - Collect user input (name, category, subCategory, notes, unitsKg)
+| - Return a Map<String, dynamic> back to the caller via Navigator.pop
+|
+| Important:
+| - This widget DOES NOT talk to Firestore
+| - It DOES NOT create or update documents
+| - It DOES NOT handle timestamps
+|
+| Firestore responsibilities (create/update, timestamps) are handled
+| in the parent screen (InventoryScreen).
+|--------------------------------------------------------------------------
+*/
+
 class _EditInventoryDialog extends StatefulWidget {
   final String initialName;
   final String initialCategory;
   final String initialSubCategory;
   final String initialNotes;
+  final double initialUnitsKg;
 
   const _EditInventoryDialog({
     required this.initialName,
     required this.initialCategory,
     required this.initialSubCategory,
     required this.initialNotes,
+    this.initialUnitsKg = 0.0,
   });
 
   @override
-  State<_EditInventoryDialog> createState() =>
-      _EditInventoryDialogState();
+  State<_EditInventoryDialog> createState() => _EditInventoryDialogState();
 }
 
-class _EditInventoryDialogState
-    extends State<_EditInventoryDialog> {
+class _EditInventoryDialogState extends State<_EditInventoryDialog> {
+  static const List<String> kCategories = [
+    'PP WHITE',
+    'PP BLACK',
+    'PP COLOR',
+    'PP TRANS',
+  ];
+
   late TextEditingController nameCtrl;
-  late TextEditingController categoryCtrl;
   late TextEditingController subCategoryCtrl;
   late TextEditingController notesCtrl;
+  late TextEditingController unitsKgCtrl;
+
+  String? categoryValue;
+  String? nameError;
+  String? unitsError;
 
   @override
   void initState() {
     super.initState();
     nameCtrl = TextEditingController(text: widget.initialName);
-    categoryCtrl =
-        TextEditingController(text: widget.initialCategory);
-    subCategoryCtrl =
-        TextEditingController(text: widget.initialSubCategory);
-    notesCtrl =
-        TextEditingController(text: widget.initialNotes);
+    subCategoryCtrl = TextEditingController(text: widget.initialSubCategory);
+    notesCtrl = TextEditingController(text: widget.initialNotes);
+    unitsKgCtrl = TextEditingController(text: widget.initialUnitsKg.toString());
+
+    categoryValue = kCategories.contains(widget.initialCategory)
+        ? widget.initialCategory
+        : kCategories.first;
   }
 
   @override
   void dispose() {
     nameCtrl.dispose();
-    categoryCtrl.dispose();
     subCategoryCtrl.dispose();
     notesCtrl.dispose();
+    unitsKgCtrl.dispose();
     super.dispose();
+  }
+
+  void _save() {
+    final name = nameCtrl.text.trim();
+    final unitsRaw = unitsKgCtrl.text.trim();
+
+    setState(() {
+      nameError = null;
+      unitsError = null;
+    });
+
+    if (name.isEmpty) {
+      setState(() => nameError = "Name is required");
+      return;
+    }
+
+    final units = double.tryParse(unitsRaw);
+    if (units == null || units < 0) {
+      setState(() => unitsError = "Enter a valid kg value (0 or more)");
+      return;
+    }
+
+    Navigator.pop(context, {
+      'name': name,
+      'category': categoryValue ?? kCategories.first,
+      'subCategory': subCategoryCtrl.text.trim(),
+      'notes': notesCtrl.text.trim(),
+      'unitsKg': units,
+    });
   }
 
   @override
@@ -299,42 +336,53 @@ class _EditInventoryDialogState
         child: Column(
           children: [
             TextField(
-                controller: nameCtrl,
-                decoration:
-                    const InputDecoration(labelText: "Name")),
+              controller: nameCtrl,
+              decoration: InputDecoration(
+                labelText: "Name",
+                errorText: nameError,
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              value: categoryValue,
+              items: kCategories
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) => setState(() => categoryValue = v),
+              decoration: const InputDecoration(labelText: "Category"),
+            ),
+            const SizedBox(height: 10),
             TextField(
-                controller: categoryCtrl,
-                decoration: const InputDecoration(
-                    labelText: "Category")),
+              controller: subCategoryCtrl,
+              decoration: const InputDecoration(labelText: "Sub-category"),
+            ),
+            const SizedBox(height: 10),
             TextField(
-                controller: subCategoryCtrl,
-                decoration: const InputDecoration(
-                    labelText: "Sub-category")),
+              controller: unitsKgCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: "Units (kg)",
+                errorText: unitsError,
+              ),
+            ),
+            const SizedBox(height: 10),
             TextField(
-                controller: notesCtrl,
-                decoration:
-                    const InputDecoration(labelText: "Notes")),
+              controller: notesCtrl,
+              decoration: const InputDecoration(labelText: "Notes"),
+            ),
           ],
         ),
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel")),
+          onPressed: () => Navigator.pop(context),
+          child: const Text("Cancel"),
+        ),
         ElevatedButton(
-          onPressed: () {
-            Navigator.pop(context, {
-              'name': nameCtrl.text.trim(),
-              'category': categoryCtrl.text.trim(),
-              'subCategory': subCategoryCtrl.text.trim(),
-              'notes': notesCtrl.text.trim(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
-          },
+          onPressed: _save,
           child: const Text("Save"),
         ),
       ],
     );
   }
 }
- 
