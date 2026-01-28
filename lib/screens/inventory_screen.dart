@@ -219,28 +219,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 }
 
-/*
-|--------------------------------------------------------------------------
-| Inventory Add / Edit Dialog (UI Only)
-|--------------------------------------------------------------------------
-| This dialog is used by BOTH:
-| 1) Creating a new inventory item
-| 2) Editing an existing inventory item
-|
-| Responsibilities:
-| - Collect user input (name, category, subCategory, notes, unitsKg)
-| - Return a Map<String, dynamic> back to the caller via Navigator.pop
-|
-| Important:
-| - This widget DOES NOT talk to Firestore
-| - It DOES NOT create or update documents
-| - It DOES NOT handle timestamps
-|
-| Firestore responsibilities (create/update, timestamps) are handled
-| in the parent screen (InventoryScreen).
-|--------------------------------------------------------------------------
-*/
-
 class _EditInventoryDialog extends StatefulWidget {
   final String initialName;
   final String initialCategory;
