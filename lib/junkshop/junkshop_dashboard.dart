@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:ui';
 import '../screens/inventory_screen.dart';
+import '../screens/transaction_screen.dart';
 
 class JunkshopDashboardPage extends StatefulWidget {
   const JunkshopDashboardPage({super.key});
@@ -18,35 +19,27 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   final Color bgColor = const Color(0xFF0F172A);
 
   // Bottom nav screens
-  List<Widget> _tabScreens() => [
-        _homeTabStream(),
-        InventoryScreen(shopID: FirebaseAuth.instance.currentUser!.uid),
-        const Center(
-          child: Text(
-            "Supplier Map Screen",
-            style: TextStyle(color: Colors.white, fontSize: 24),
-          ),
-        ),
-        const Center(
-          child: Text(
-            "Profile Screen",
-            style: TextStyle(color: Colors.white, fontSize: 24),
-          ),
-        ),
-      ];
+List<Widget> _tabScreens() => [
+  _homeTabStream(),
 
-  Future<void> _logout(BuildContext context) async {
-    try {
-      await FirebaseAuth.instance.signOut();
-      if (!mounted) return;
-      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Logout failed: $e")),
-      );
-    }
-  }
+  //  Inventory tab (index 1)
+  InventoryScreen(shopID: FirebaseAuth.instance.currentUser!.uid),
+
+  //  Transactions tab (index 2)
+  const TransactionScreen(),
+
+  // Map tab (index 3)
+  const Center(
+    child: Text("Supplier Map Screen",
+        style: TextStyle(color: Colors.white, fontSize: 24)),
+  ),
+
+  // Profile tab (index 4)
+  const Center(
+    child: Text("Profile Screen",
+        style: TextStyle(color: Colors.white, fontSize: 24)),
+  ),
+];
 
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
@@ -116,12 +109,19 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                           ],
                         ),
                       ),
-                      _iconButton(Icons.logout, onTap: () => _logout(context)),
+                     _iconButton(
+                      Icons.logout,
+                      onTap: () async {
+                        await FirebaseAuth.instance.signOut();
+                        if (!mounted) return;
+                        Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+                      },
+                    ),
                     ],
                   ),
                 ),
-
                 // Tab content
+              
                 Expanded(
                   child: KeyedSubtree(
                     key: ValueKey(_activeTabIndex),
@@ -155,6 +155,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                   _navItem(1, Icons.inventory_2_outlined, "Inventory"),
                   _navItem(2, Icons.map_outlined, "Map"),
                   _navItem(3, Icons.person_outline, "Profile"),
+                  _navItem(4, Icons.person_outline, "Profile")
                 ],
               ),
             ),
