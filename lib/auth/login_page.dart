@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:ui'; // needed for blur effects
-import '../household/household_dashboard.dart';
 import 'forgot_password.dart';
-import '../junkshop/junkshop_dashboard.dart';
 import 'AccountCreation.dart';
+import 'package:ecoscrap_app/junkshop/junkshop_dashboard.dart';
+
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -47,31 +47,30 @@ class _LoginPageState extends State<LoginPage> {
         password: password,
       );
 
-      final user = userCredential.user;
-      if (user != null) {
-        // Checking 'Junkshop' collection (singular as per your Firebase)
-        final junkshopDoc = await FirebaseFirestore.instance
-            .collection('Junkshop') 
-            .doc(user.uid)
-            .get();
+    final user = userCredential.user;
 
-        if (junkshopDoc.exists) {
-          bool isVerified = junkshopDoc.data()?['Verified'] ?? false;
-          if (isVerified) {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const JunkshopDashboardPage()));
-          } else {
-            await FirebaseAuth.instance.signOut();
-            _showToast("Admin is still reviewing your business permit.", isError: true);
-          }
-        } else {
-          if (user.emailVerified) {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardPage()));
-          } else {
-            _showToast("Please verify your email via Gmail first.", isError: true);
-            await FirebaseAuth.instance.signOut();
-          }
-        }
+    if (user != null) {
+      final junkshopDoc = await FirebaseFirestore.instance
+          .collection('Junkshop')
+          .doc(user.uid)
+          .get();
+
+      if (junkshopDoc.exists) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => JunkshopDashboardPage(
+              shopID: user.uid, // ✅
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Shop record not found")),
+        );
       }
+    }
+
     } on FirebaseAuthException catch (e) {
       _showToast(e.message ?? "Login failed", isError: true);
     } finally {
