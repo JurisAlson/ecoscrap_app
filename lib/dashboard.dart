@@ -14,13 +14,6 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   int _activeTabIndex = 0;
 
-  // Logout function
-  Future<void> _logout(BuildContext context) async {
-    await FirebaseAuth.instance.signOut();
-    if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/login');
-  }
-
   // Camera function
   Future<void> _openLens(BuildContext context) async {
     var status = await Permission.camera.status;
