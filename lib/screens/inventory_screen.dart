@@ -48,8 +48,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
           backgroundColor: const Color(0xFF0F172A),
           floatingActionButton: FloatingActionButton(
             backgroundColor: Colors.greenAccent,
-            child: const Icon(Icons.add, color: Colors.black),
             onPressed: _addItem,
+            child: const Icon(Icons.add, color: Colors.black),
           ),
           body: Padding(
             padding: const EdgeInsets.all(16),
@@ -322,7 +322,7 @@ class _EditInventoryDialogState extends State<_EditInventoryDialog> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
-              value: categoryValue,
+              initialValue: categoryValue,
               items: kCategories
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
