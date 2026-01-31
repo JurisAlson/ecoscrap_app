@@ -83,7 +83,7 @@ class _InventoryFormScreenState
               const SizedBox(height: 10),
 
               DropdownButtonFormField<String>(
-                value: _category,
+                initialValue: _category,
                 items: _categories
                     .map((c) =>
                         DropdownMenuItem(value: c, child: Text(c)))

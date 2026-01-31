@@ -21,7 +21,6 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  // ✅ Use widget.shopID everywhere (don’t re-derive it)
   List<Widget> _tabScreens() => [
         _homeTabStream(),
 

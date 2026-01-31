@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
+
   const ReceiptScreen({super.key, required this.shopID});
 
   @override
@@ -26,6 +27,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   void _addItem() => setState(() => _items.add(_ReceiptItem()));
+
   void _removeItem(int index) => setState(() {
         _items[index].dispose();
         _items.removeAt(index);
@@ -40,6 +42,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     super.dispose();
   }
 
+  // ✅ Inventory picker (this was missing in your pasted version)
   Future<void> _pickInventoryItem(_ReceiptItem item) async {
     final picked = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -59,57 +62,68 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   Future<void> _saveReceipt() async {
-  // Validate
-  if (_items.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Add at least 1 item.")),
-    );
-    return;
-  }
-
-  final itemsPayload = <Map<String, dynamic>>[];
-
-  for (final it in _items) {
-    final name = it.itemNameCtrl.text.trim();
-    final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-    final subtotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
-
-    if (name.isEmpty || weightKg <= 0 || subtotal <= 0) {
+    if (_items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Fill up item name, weight, and subtotal.")),
+        const SnackBar(content: Text("Add at least 1 item.")),
       );
       return;
     }
 
-    itemsPayload.add({
-      'itemName': name,
-      'weightKg': weightKg,   // ✅ number
-      'subtotal': subtotal,   // ✅ number
-    });
-  }
+    final itemsPayload = <Map<String, dynamic>>[];
 
-  final customerName = _customerCtrl.text.trim();
+    for (final it in _items) {
+      // ✅ Require picking from inventory
+      if (it.inventoryDocId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please select an inventory item for each line.")),
+        );
+        return;
+      }
 
-  try {
-    await FirebaseFirestore.instance
-        .collection('Junkshop')
-        .doc(widget.shopID)
-        .collection('transaction')
-        .add({
-      'customerName': customerName,
-      'items': itemsPayload, // ✅ LIST, not MAP
-      'totalAmount': _totalAmount, // ✅ number
-      'transactionDate': FieldValue.serverTimestamp(),
-    });
+      final name = it.itemNameCtrl.text.trim();
+      final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+      final subtotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
 
-    if (!mounted) return;
-    Navigator.pop(context); // ✅ go back after saving
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Save failed: $e")),
-    );
-  }
-}
+      if (weightKg <= 0 || subtotal <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Weight and subtotal must be greater than 0.")),
+        );
+        return;
+      }
+
+      itemsPayload.add({
+        'inventoryDocId': it.inventoryDocId,
+        'itemName': name,
+        'category': it.categorySnapshot ?? '',
+        'subCategory': it.subCategorySnapshot ?? '',
+        'weightKg': weightKg,
+        'subtotal': subtotal,
+      });
+    }
+
+    final customerName = _customerCtrl.text.trim();
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('Junkshop')
+          .doc(widget.shopID)
+          .collection('transaction')
+          .add({
+        'customerName': customerName,
+        'items': itemsPayload, // ✅ LIST
+        'totalAmount': _totalAmount,
+        'transactionDate': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Save failed: $e")),
+      );
+    }
+  } // ✅ IMPORTANT: closes _saveReceipt()
 
   @override
   Widget build(BuildContext context) {
@@ -140,13 +154,16 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               ),
             ),
             const SizedBox(height: 16),
-
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
                   "Items",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 TextButton.icon(
                   onPressed: _addItem,
@@ -243,11 +260,17 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text("Total Amount",
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  const Text(
+                    "Total Amount",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
                   Text(
                     "₱${_totalAmount.toStringAsFixed(2)}",
-                    style: TextStyle(color: primaryColor, fontSize: 18, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: primaryColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ],
               ),
@@ -275,7 +298,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             Center(
               child: Text(
                 "Transaction Date is saved automatically",
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                style: TextStyle(color: Colors.grey, fontSize: 11),
               ),
             ),
           ],
@@ -306,8 +329,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Widget _label(String text) {
     return Text(
       text.toUpperCase(),
-      style: TextStyle(
-        color: Colors.grey.shade400,
+      style: const TextStyle(
+        color: Color(0xFF94A3B8),
         fontSize: 10,
         fontWeight: FontWeight.bold,
       ),
@@ -340,7 +363,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   InputDecoration _inputDecoration(String hint) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: TextStyle(color: Colors.grey.shade500),
+      hintStyle: const TextStyle(color: Color(0xFF64748B)),
       filled: true,
       fillColor: Colors.black.withOpacity(0.2),
       border: OutlineInputBorder(
@@ -357,11 +380,10 @@ class _ReceiptItem {
   final TextEditingController weightCtrl = TextEditingController();
   final TextEditingController subtotalCtrl = TextEditingController();
 
-  String? inventoryDocId; // IMPORTANT: points to inventory doc
+  String? inventoryDocId;
   String? categorySnapshot;
   String? subCategorySnapshot;
 
-  double get weightKg => double.tryParse(weightCtrl.text.trim()) ?? 0.0;
   double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
 
   void dispose() {
@@ -374,6 +396,7 @@ class _ReceiptItem {
 // ===== Bottom sheet inventory picker =====
 class _InventoryPickerSheet extends StatefulWidget {
   final String shopID;
+
   const _InventoryPickerSheet({required this.shopID});
 
   @override
@@ -410,7 +433,7 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
                 hintText: "Search inventory...",
-                hintStyle: TextStyle(color: Colors.grey.shade500),
+                hintStyle: const TextStyle(color: Color(0xFF64748B)),
                 prefixIcon: const Icon(Icons.search),
                 filled: true,
                 fillColor: Colors.white.withOpacity(0.06),
@@ -432,6 +455,7 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
+
                 final docs = snap.data?.docs ?? [];
 
                 final filtered = docs.where((d) {
@@ -470,7 +494,7 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
                       title: Text(name, style: const TextStyle(color: Colors.white)),
                       subtitle: Text(
                         "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
-                        style: TextStyle(color: Colors.grey.shade400),
+                        style: const TextStyle(color: Colors.grey),
                       ),
                       onTap: () {
                         Navigator.pop(context, {
