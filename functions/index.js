@@ -1,27 +1,40 @@
-const functions = require("firebase-functions");
 const admin = require("firebase-admin");
-
 admin.initializeApp();
 
-exports.deductInventoryOnTransactionCreate = functions.firestore
-  .document("Junkshop/{shopId}/transaction/{txId}")
-  .onCreate(async (snap, context) => {
-    const { shopId } = context.params;
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { logger } = require("firebase-functions");
+
+exports.deductInventoryOnTransactionCreate = onDocumentCreated(
+  { document: "Junkshop/{shopId}/transaction/{txId}", region: "asia-southeast1" },
+  async (event) => {
+    const { shopId, txId } = event.params;
+    const snap = event.data;
+
+    if (!snap) {
+      logger.warn("No snapshot data, skipping");
+      return;
+    }
+
     const data = snap.data();
 
+    logger.info("FUNCTION FIRED", { shopId, txId });
+    logger.info("TX DATA", data);
+
     if (!data || !Array.isArray(data.items)) {
-      console.log("No items array found, skipping");
-      return null;
+      logger.info("No items array found, skipping");
+      return;
     }
 
     const db = admin.firestore();
 
-    return db.runTransaction(async (transaction) => {
+    await db.runTransaction(async (t) => {
       for (const item of data.items) {
         const inventoryDocId = item.inventoryDocId;
         const weightKg = Number(item.weightKg);
 
-        if (!inventoryDocId || weightKg <= 0) continue;
+        if (!inventoryDocId || !Number.isFinite(weightKg) || weightKg <= 0) {
+          continue;
+        }
 
         const inventoryRef = db
           .collection("Junkshop")
@@ -29,30 +42,27 @@ exports.deductInventoryOnTransactionCreate = functions.firestore
           .collection("inventory")
           .doc(inventoryDocId);
 
-        const inventorySnap = await transaction.get(inventoryRef);
+        const inventorySnap = await t.get(inventoryRef);
 
         if (!inventorySnap.exists) {
-          console.warn(`Inventory item not found: ${inventoryDocId}`);
+          logger.warn("Inventory item not found", { inventoryDocId });
           continue;
         }
 
-        const currentKg =
-          Number(inventorySnap.data().unitsKg) || 0;
-
+        const currentKg = Number(inventorySnap.data().unitsKg) || 0;
         const newKg = Math.max(currentKg - weightKg, 0);
 
-        transaction.update(inventoryRef, {
+        t.update(inventoryRef, {
           unitsKg: newKg,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
       }
 
-      // mark transaction as processed
-      transaction.update(snap.ref, {
+      // mark transaction processed (optional but helpful)
+      t.update(snap.ref, {
         inventoryDeducted: true,
         inventoryDeductedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-
-      return null;
     });
-  });
+  }
+);
