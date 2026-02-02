@@ -18,16 +18,14 @@ class _DashboardPageState extends State<DashboardPage> {
   final Color bgColor = const Color(0xFF0F172A);
 
   // ================= TAB SCREENS =================
-
+  // ✅ Map removed from tabs
   List<Widget> get _tabScreens => [
         _householdHome(),
         const Center(
-          child: Text("Map Screen",
-              style: TextStyle(color: Colors.white, fontSize: 22)),
-        ),
-        const Center(
-          child: Text("Chat Screen",
-              style: TextStyle(color: Colors.white, fontSize: 22)),
+          child: Text(
+            "Chat Screen",
+            style: TextStyle(color: Colors.white, fontSize: 22),
+          ),
         ),
         _profileTab(),
       ];
@@ -60,20 +58,16 @@ class _DashboardPageState extends State<DashboardPage> {
     return Scaffold(
       backgroundColor: bgColor,
       extendBody: true,
-
       body: Stack(
         children: [
           _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
-          _blurCircle(Colors.green.withOpacity(0.1), 350,
-              bottom: 100, left: -100),
-
+          _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
           SafeArea(
             child: Column(
               children: [
                 // ===== HEADER =====
                 Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
                       _logoBox(),
@@ -82,21 +76,22 @@ class _DashboardPageState extends State<DashboardPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text("Welcome back,",
-                                style: TextStyle(
-                                    color: Colors.grey.shade400, fontSize: 12)),
+                            Text(
+                              "Welcome back,",
+                              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                            ),
                             Text(
                               user?.displayName ?? "Household User",
                               style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold),
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ],
                         ),
                       ),
-                      _iconButton(Icons.notifications_outlined,
-                          badge: true, onTap: () {}),
+                      _iconButton(Icons.notifications_outlined, badge: true, onTap: () {}),
                     ],
                   ),
                 ),
@@ -124,23 +119,20 @@ class _DashboardPageState extends State<DashboardPage> {
             onPressed: () => _openLens(context),
             backgroundColor: primaryColor,
             elevation: 10,
-            shape:
-                CircleBorder(side: BorderSide(color: bgColor, width: 4)),
-            child: const Icon(Icons.camera_alt,
-                color: Color(0xFF0F172A), size: 30),
+            shape: CircleBorder(side: BorderSide(color: bgColor, width: 4)),
+            child: const Icon(Icons.camera_alt, color: Color(0xFF0F172A), size: 30),
           ),
         ),
       ),
-      floatingActionButtonLocation:
-          FloatingActionButtonLocation.centerDocked,
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
 
       // ===== BOTTOM NAV =====
+      // ✅ Map removed from footer
       bottomNavigationBar: Container(
         height: 90,
         decoration: BoxDecoration(
           color: bgColor.withOpacity(0.8),
-          border:
-              Border(top: BorderSide(color: Colors.white.withOpacity(0.1))),
+          border: Border(top: BorderSide(color: Colors.white.withOpacity(0.1))),
         ),
         child: ClipRRect(
           child: BackdropFilter(
@@ -149,10 +141,9 @@ class _DashboardPageState extends State<DashboardPage> {
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _navItem(0, Icons.home_outlined, "Home"),
-                _navItem(1, Icons.location_on_outlined, "Map"),
-                const SizedBox(width: 48),
-                _navItem(2, Icons.message_outlined, "Chat"),
-                _navItem(3, Icons.person_outline, "Profile"),
+                const SizedBox(width: 48), // space for FAB
+                _navItem(1, Icons.message_outlined, "Chat"),
+                _navItem(2, Icons.person_outline, "Profile"),
               ],
             ),
           ),
@@ -178,7 +169,6 @@ class _DashboardPageState extends State<DashboardPage> {
               _statCard("CO₂ Saved", "3.2 kg", Icons.eco),
             ],
           ),
-
           const SizedBox(height: 30),
 
           GestureDetector(
@@ -186,8 +176,7 @@ class _DashboardPageState extends State<DashboardPage> {
             child: Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                gradient:
-                    LinearGradient(colors: [primaryColor, Colors.green]),
+                gradient: LinearGradient(colors: [primaryColor, Colors.green]),
                 borderRadius: BorderRadius.circular(24),
               ),
               child: Row(
@@ -198,9 +187,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     child: Text(
                       "Scan an item\nCheck if it’s recyclable",
                       style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600),
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
@@ -210,18 +200,32 @@ class _DashboardPageState extends State<DashboardPage> {
 
           const SizedBox(height: 30),
 
-          Text("What you can do",
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold)),
+          Text(
+            "What you can do",
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 12),
 
+          // ✅ Keep cards as UI only for now
           Row(
             children: [
-              _actionCard(Icons.local_shipping, "Request Pickup"),
+              _actionCard(Icons.local_shipping, "Request Pickup", onTap: () {
+                // Later flow: show after scan result
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Pickup flow will be available after scanning.")),
+                );
+              }),
               const SizedBox(width: 12),
-              _actionCard(Icons.location_on, "Find Junkshop"),
+              _actionCard(Icons.location_on, "Find Junkshop", onTap: () {
+                // Later flow: show after scan result
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Junkshop map will open after scanning.")),
+                );
+              }),
             ],
           ),
 
@@ -248,10 +252,7 @@ class _DashboardPageState extends State<DashboardPage> {
         children: [
           Text(
             user?.email ?? "Household User",
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold),
+            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 20),
           ElevatedButton.icon(
@@ -281,15 +282,16 @@ class _DashboardPageState extends State<DashboardPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon,
-              color: isActive ? primaryColor : Colors.grey.shade500),
+          Icon(icon, color: isActive ? primaryColor : Colors.grey.shade500),
           const SizedBox(height: 4),
-          Text(label.toUpperCase(),
-              style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  color:
-                      isActive ? primaryColor : Colors.grey.shade500)),
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              color: isActive ? primaryColor : Colors.grey.shade500,
+            ),
+          ),
         ],
       ),
     );
@@ -307,34 +309,32 @@ class _DashboardPageState extends State<DashboardPage> {
           children: [
             Icon(icon, color: primaryColor),
             const SizedBox(height: 8),
-            Text(value,
-                style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.bold)),
-            Text(label,
-                style:
-                    TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+            Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
           ],
         ),
       ),
     );
   }
 
-  Widget _actionCard(IconData icon, String text) {
+  // ✅ Added onTap parameter
+  Widget _actionCard(IconData icon, String text, {VoidCallback? onTap}) {
     return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: primaryColor, size: 28),
-            const SizedBox(height: 8),
-            Text(text,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white)),
-          ],
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            children: [
+              Icon(icon, color: primaryColor, size: 28),
+              const SizedBox(height: 8),
+              Text(text, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
+            ],
+          ),
         ),
       ),
     );
@@ -350,12 +350,9 @@ class _DashboardPageState extends State<DashboardPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title,
-              style: const TextStyle(
-                  color: Colors.white, fontWeight: FontWeight.bold)),
+          Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          Text(content,
-              style: TextStyle(color: Colors.grey.shade400)),
+          Text(content, style: TextStyle(color: Colors.grey.shade400)),
         ],
       ),
     );
@@ -366,16 +363,14 @@ class _DashboardPageState extends State<DashboardPage> {
       width: 45,
       height: 45,
       decoration: BoxDecoration(
-        gradient:
-            LinearGradient(colors: [primaryColor, Colors.green]),
+        gradient: LinearGradient(colors: [primaryColor, Colors.green]),
         borderRadius: BorderRadius.circular(12),
       ),
       child: const Icon(Icons.eco, color: Colors.white),
     );
   }
 
-  Widget _iconButton(IconData icon,
-      {bool badge = false, required VoidCallback onTap}) {
+  Widget _iconButton(IconData icon, {bool badge = false, required VoidCallback onTap}) {
     return Stack(
       children: [
         GestureDetector(
@@ -396,18 +391,14 @@ class _DashboardPageState extends State<DashboardPage> {
             child: Container(
               width: 8,
               height: 8,
-              decoration: const BoxDecoration(
-                color: Colors.red,
-                shape: BoxShape.circle,
-              ),
+              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
             ),
           ),
       ],
     );
   }
 
-  Widget _blurCircle(Color color, double size,
-      {double? top, double? bottom, double? left, double? right}) {
+  Widget _blurCircle(Color color, double size, {double? top, double? bottom, double? left, double? right}) {
     return Positioned(
       top: top,
       bottom: bottom,
