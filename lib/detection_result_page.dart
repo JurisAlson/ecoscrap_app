@@ -1,6 +1,8 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
+import 'geomapping.dart';
+
 class DetectionResultPage extends StatelessWidget {
   final bool isRecyclable;
   final String itemName;
@@ -22,35 +24,34 @@ class DetectionResultPage extends StatelessWidget {
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          _blurCircle(primaryColor.withOpacity(0.15), 300,
-              top: -100, right: -100),
+          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
           _blurCircle(
-              (isRecyclable ? Colors.green : Colors.red).withOpacity(0.1),
-              350,
-              bottom: 100,
-              left: -100),
+            (isRecyclable ? Colors.green : Colors.red).withOpacity(0.1),
+            350,
+            bottom: 100,
+            left: -100,
+          ),
 
           SafeArea(
             child: Column(
               children: [
                 // ===== TOP BAR =====
                 Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.arrow_back,
-                            color: Colors.white),
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
                         onPressed: () => Navigator.pop(context),
                       ),
                       const SizedBox(width: 8),
                       const Text(
                         "Detection Result",
                         style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold),
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ],
                   ),
@@ -65,14 +66,10 @@ class DetectionResultPage extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            isRecyclable
-                                ? Icons.check_circle
-                                : Icons.cancel,
-                            color:
-                                isRecyclable ? Colors.green : Colors.red,
+                            isRecyclable ? Icons.check_circle : Icons.cancel,
+                            color: isRecyclable ? Colors.green : Colors.red,
                             size: 100,
                           ),
-
                           const SizedBox(height: 24),
 
                           Text(
@@ -89,28 +86,21 @@ class DetectionResultPage extends StatelessWidget {
 
                           Text(
                             "Confidence: ${(confidence * 100).toStringAsFixed(1)}%",
-                            style:
-                                TextStyle(color: Colors.grey.shade400),
+                            style: TextStyle(color: Colors.grey.shade400),
                           ),
 
                           const SizedBox(height: 30),
 
                           if (isRecyclable) ...[
-                            _actionButton(
-                              icon: Icons.local_shipping,
-                              label: "Request Junkshop Pickup",
-                              onTap: () {
-                                // TODO: connect to Firebase pickup request
-                              },
-                              color: primaryColor,
-                              textColor: bgColor,
-                            ),
-                            const SizedBox(height: 12),
+                            // ✅ ONLY FEATURE YOU WANT
                             _actionButton(
                               icon: Icons.location_on,
                               label: "Find Nearest Junkshop",
                               onTap: () {
-                                // TODO: navigate to geomapping
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (_) => const GeoMappingPage()),
+                                );
                               },
                               outlined: true,
                               color: primaryColor,
@@ -130,13 +120,13 @@ class DetectionResultPage extends StatelessWidget {
                           const SizedBox(height: 30),
 
                           TextButton(
-                            onPressed: () =>
-                                Navigator.popUntil(context, (r) => r.isFirst),
+                            onPressed: () => Navigator.popUntil(context, (r) => r.isFirst),
                             child: const Text(
                               "Back to Dashboard",
                               style: TextStyle(
-                                  color: Color(0xFF1FA9A7),
-                                  fontWeight: FontWeight.bold),
+                                color: Color(0xFF1FA9A7),
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ],
@@ -193,8 +183,14 @@ class DetectionResultPage extends StatelessWidget {
   }
 
   // ===== BLUR HELPER =====
-  Widget _blurCircle(Color color, double size,
-      {double? top, double? bottom, double? left, double? right}) {
+  Widget _blurCircle(
+    Color color,
+    double size, {
+    double? top,
+    double? bottom,
+    double? left,
+    double? right,
+  }) {
     return Positioned(
       top: top,
       bottom: bottom,
@@ -202,7 +198,6 @@ class DetectionResultPage extends StatelessWidget {
       right: right,
       child: Container(
         width: size,
-        
         height: size,
         decoration: BoxDecoration(shape: BoxShape.circle, color: color),
         child: BackdropFilter(
