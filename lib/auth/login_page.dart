@@ -29,81 +29,123 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   // 2. PLACE YOUR LOGIN LOGIC HERE
-  Future<void> _login() async {
-    if (_isLoading) return;
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
+Future<void> _login() async {
+  if (_isLoading) return;
 
-    if (email.isEmpty || password.isEmpty) {
-      _showToast("Email and password are required.", isError: true);
+  final email = _emailController.text.trim();
+  final password = _passwordController.text.trim();
+
+  if (email.isEmpty || password.isEmpty) {
+    _showToast("Email and password are required.", isError: true);
+    return;
+  }
+
+  setState(() => _isLoading = true);
+
+  try {
+    UserCredential userCredential =
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    final user = userCredential.user;
+    if (user == null) return;
+
+    final uid = user.uid;
+
+    // ===============================
+    // STEP 1: GET JUNKSHOP DOCUMENT
+    // ===============================
+    final junkshopDoc = await FirebaseFirestore.instance
+        .collection('Junkshop')
+        .doc(uid)
+        .get();
+
+    if (!junkshopDoc.exists) {
+      _showToast("Shop record not found", isError: true);
       return;
     }
 
-    setState(() => _isLoading = true);
+    final shopData = junkshopDoc.data()!;
 
-    try {
-      UserCredential userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+    final bool verified = shopData['verified'] == true;
+    final String? permitId = shopData['activePermitRequestId'];
 
-    final user = userCredential.user;
-
-    if (user != null) {
-      final junkshopDoc = await FirebaseFirestore.instance
-          .collection('Junkshop')
-          .doc(user.uid)
-          .get();
-
-      if (junkshopDoc.exists) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => JunkshopDashboardPage(
-              shopID: user.uid, // ✅
-            ),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Shop record not found")),
-        );
-      }
+    // ===============================
+    // STEP 2: CHECK VERIFIED FIELD
+    // ===============================
+    if (!verified || permitId == null) {
+      _showToast("Your business is still under review.");
+      return;
     }
 
-    } on FirebaseAuthException catch (e) {
-      _showToast(e.message ?? "Login failed", isError: true);
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
+    // ===============================
+    // STEP 3: CHECK PERMIT APPROVAL
+    // ===============================
+    final permitDoc = await FirebaseFirestore.instance
+        .collection('permitRequests')
+        .doc(permitId)
+        .get();
 
-  // 3. PLACE YOUR UI HELPER METHODS HERE
-  void _showToast(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        elevation: 0,
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: Colors.transparent,
-        content: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-             color: Colors.black87,
-             borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            children: [
-              Icon(isError ? Icons.error_outline : Icons.check_circle_outline, 
-                   color: isError ? Colors.redAccent : const Color(0xFF1FA9A7)),
-              const SizedBox(width: 12),
-              Expanded(child: Text(message, style: const TextStyle(color: Colors.white))),
-            ],
-          ),
-        ),
+    final bool approved =
+        permitDoc.exists && permitDoc.data()!['approved'] == true;
+
+    if (!approved) {
+      _showToast("Permit still pending admin approval.");
+      return;
+    }
+
+    // ===============================
+    // STEP 4: ALLOW DASHBOARD
+    // ===============================
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => JunkshopDashboardPage(shopID: uid),
       ),
     );
-  }
 
+  } on FirebaseAuthException catch (e) {
+    _showToast(e.message ?? "Login failed", isError: true);
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
+  }
+}
+
+void _showToast(String message, {bool isError = false}) {
+  if (!mounted) return;
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      elevation: 0,
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: Colors.transparent,
+      content: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.black87,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
+              color: isError ? Colors.redAccent : const Color(0xFF1FA9A7),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
   Widget _buildTextField({
     required TextEditingController controller,
     required String hint,
