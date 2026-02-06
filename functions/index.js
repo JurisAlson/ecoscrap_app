@@ -1,20 +1,171 @@
 const admin = require("firebase-admin");
-const { logger } = require("firebase-functions");
+const { logger } = require("firebase-functions/v2");
 
-const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const crypto = require("crypto");
+const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
+const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onRequest } = require("firebase-functions/v2/https");
 
 admin.initializeApp();
+
+/* ====================================================
+   PII HELPERS (AES-256-GCM + HMAC lookup)
+==================================================== */
+function getKeysOrThrow() {
+  const aesKeyB64 = process.env.PII_AES_KEY_B64;
+  const hmacKeyB64 = process.env.PII_HMAC_KEY_B64;
+
+  if (!aesKeyB64 || !hmacKeyB64) {
+    throw new Error("Missing encryption secrets (PII_AES_KEY_B64 / PII_HMAC_KEY_B64).");
+  }
+
+  const AES_KEY = Buffer.from(aesKeyB64, "base64");
+  const HMAC_KEY = Buffer.from(hmacKeyB64, "base64");
+
+  if (AES_KEY.length !== 32) {
+    throw new Error("AES key must be 32 bytes (AES-256).");
+  }
+  if (HMAC_KEY.length < 32) {
+    throw new Error("HMAC key too short (recommend >= 32 bytes).");
+  }
+
+  return { AES_KEY, HMAC_KEY };
+}
+
+function normalizeEmail(email) {
+  return String(email).trim().toLowerCase();
+}
+
+function encryptEmailToFields(email, AES_KEY, HMAC_KEY) {
+  const normalized = normalizeEmail(email);
+
+  const nonce = crypto.randomBytes(12); // 12 bytes for GCM
+  const cipher = crypto.createCipheriv("aes-256-gcm", AES_KEY, nonce);
+
+  const ciphertext = Buffer.concat([cipher.update(normalized, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  const lookup = crypto.createHmac("sha256", HMAC_KEY).update(normalized).digest("hex");
+
+  return {
+    shopEmail_enc: ciphertext.toString("base64"),
+    shopEmail_nonce: nonce.toString("base64"),
+    shopEmail_tag: tag.toString("base64"),
+    shopEmail_lookup: lookup,
+    piiVersion: 1,
+    shopEmailSetAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
+/* ====================================================
+   AUTO-ENCRYPT Junkshop.email ON CREATE/UPDATE
+   - If plaintext `email` exists and not yet encrypted:
+     write encrypted fields + delete plaintext `email`
+==================================================== */
+exports.encryptJunkshopEmailOnWrite = onDocumentWritten(
+  {
+    document: "Junkshop/{shopId}",
+    region: "asia-southeast1",
+    secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
+  },
+  async (event) => {
+    const afterSnap = event.data?.after;
+    if (!afterSnap?.exists) return;
+
+    const after = afterSnap.data();
+    const shopId = event.params.shopId;
+
+    // Debug visibility (SAFE + useful)
+    logger.info("Encrypt trigger fired", {
+      shopId,
+      hasEmail: !!after?.email,
+      alreadyEncrypted: !!after?.shopEmail_enc,
+    });
+
+    // Only continue if plaintext email exists
+    if (!after.email || typeof after.email !== "string") return;
+
+    // Prevent infinite loop
+    if (after.shopEmail_enc) return;
+
+    try {
+      const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
+
+      const encFields = encryptEmailToFields(
+        after.email,
+        AES_KEY,
+        HMAC_KEY
+      );
+
+      await afterSnap.ref.update({
+        ...encFields,
+        email: admin.firestore.FieldValue.delete(),
+      });
+
+      logger.info("Encrypted junkshop email successfully", { shopId });
+
+    } catch (err) {
+      logger.error("Encryption failed", {
+        shopId,
+        error: String(err),
+      });
+    }
+  }
+);
+
+/* ====================================================
+   ADMIN-ONLY: SET/ENCRYPT Junkshop email via callable
+   (Optional if you already auto-encrypt on write)
+==================================================== */
+exports.setJunkshopEmail = onCall(
+  {
+    region: "asia-southeast1",
+    secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    }
+    if (request.auth.token?.admin !== true) {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const shopId = request.data?.shopId;
+    const email = request.data?.email;
+
+    if (!shopId || typeof shopId !== "string") {
+      throw new HttpsError("invalid-argument", "shopId is required.");
+    }
+    if (!email || typeof email !== "string") {
+      throw new HttpsError("invalid-argument", "email is required.");
+    }
+
+    try {
+      const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
+      const encFields = encryptEmailToFields(email, AES_KEY, HMAC_KEY);
+
+      const ref = admin.firestore().collection("Junkshop").doc(shopId);
+      await ref.set(
+        {
+          ...encFields,
+          email: admin.firestore.FieldValue.delete(), // ensure plaintext removed
+        },
+        { merge: true }
+      );
+
+      return { ok: true };
+    } catch (err) {
+      throw new HttpsError("internal", String(err));
+    }
+  }
+);
 
 /* ====================================================
    Helper — subtract days
 ==================================================== */
 function daysAgo(days) {
   const ms = days * 24 * 60 * 60 * 1000;
-  return admin.firestore.Timestamp.fromDate(
-    new Date(Date.now() - ms)
-  );
+  return admin.firestore.Timestamp.fromDate(new Date(Date.now() - ms));
 }
 
 /* ====================================================
@@ -31,14 +182,8 @@ exports.setApprovedAtOnApprove = onDocumentUpdated(
 
     if (!before || !after) return;
 
-    if (
-      before.approved !== true &&
-      after.approved === true &&
-      !after.approvedAt
-    ) {
-      logger.info("Auto setting approvedAt", {
-        requestId: event.params.requestId,
-      });
+    if (before.approved !== true && after.approved === true && !after.approvedAt) {
+      logger.info("Auto setting approvedAt", { requestId: event.params.requestId });
 
       await event.data.after.ref.update({
         approvedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -62,7 +207,6 @@ async function cleanupPermits() {
     cutoffApproved: cutoffApproved.toDate().toISOString(),
   });
 
-  /* ---------- QUERY UNAPPROVED ---------- */
   const unapprovedSnap = await db
     .collection("permitRequests")
     .where("approved", "==", false)
@@ -70,7 +214,6 @@ async function cleanupPermits() {
     .limit(200)
     .get();
 
-  /* ---------- QUERY APPROVED ---------- */
   const approvedSnap = await db
     .collection("permitRequests")
     .where("approved", "==", true)
@@ -91,7 +234,6 @@ async function cleanupPermits() {
     approved: approvedSnap.size,
   });
 
-  /* ---------- DELETE FILES ---------- */
   let deleted = 0;
 
   for (const doc of docsToDelete) {
@@ -110,21 +252,13 @@ async function cleanupPermits() {
 
       deleted++;
 
-      logger.info("Permit file removed", {
-        requestId: doc.id,
-        permitPath,
-      });
-
+      logger.info("Permit file removed", { requestId: doc.id, permitPath });
     } catch (err) {
-      logger.error("Permit deletion failed", {
-        requestId: doc.id,
-        err: String(err),
-      });
+      logger.error("Permit deletion failed", { requestId: doc.id, err: String(err) });
     }
   }
 
   logger.info("Cleanup finished", { deleted });
-
   return { deleted };
 }
 
@@ -174,14 +308,12 @@ exports.deductInventoryOnTransactionCreate = onDocumentCreated(
     if (!snap) return;
 
     const data = snap.data();
-
     if (!data || !Array.isArray(data.items)) return;
 
     const db = admin.firestore();
 
     await db.runTransaction(async (t) => {
       for (const item of data.items) {
-
         const inventoryRef = db
           .collection("Junkshop")
           .doc(shopId)
@@ -189,7 +321,6 @@ exports.deductInventoryOnTransactionCreate = onDocumentCreated(
           .doc(item.inventoryDocId);
 
         const inventorySnap = await t.get(inventoryRef);
-
         if (!inventorySnap.exists) continue;
 
         const currentKg = Number(inventorySnap.data().unitsKg) || 0;

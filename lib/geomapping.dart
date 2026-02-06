@@ -826,7 +826,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
-                        _statItem(Icons.access_time, "${_etaMinutes} min"),
+                        _statItem(Icons.access_time, "$_etaMinutes min"),
                         _statDivider(),
                         _statItem(Icons.navigation_outlined, "${_distanceKm.toStringAsFixed(1)} km"),
                         _statDivider(),
