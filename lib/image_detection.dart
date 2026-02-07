@@ -47,17 +47,11 @@ Future<void> _captureImageWithCamera() async {
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
 
-    final results =
-        await TFLiteService.runModel(_image!.path);
+    final score = await TFLiteService.runModel(_image!.path);
 
-    Navigator.pop(context);
+    final isRecyclable = score >= 0.5;
+    final confidence = isRecyclable ? score : (1.0 - score);
 
-    final recyclableScore = results[0];
-    final nonRecyclableScore = results[1];
-
-    final isRecyclable = recyclableScore > nonRecyclableScore;
-    final confidence =
-        isRecyclable ? recyclableScore : nonRecyclableScore;
 
     Navigator.push(
       context,
