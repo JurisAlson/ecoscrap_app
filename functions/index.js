@@ -13,6 +13,137 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 admin.initializeApp();
 
 /* ====================================================
+    ADMIN-ONLY: Set user role in Firestore (for app routing)
+==================================================== */
+exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  if (request.auth.token?.admin !== true) {
+    throw new HttpsError("permission-denied", "Admin only.");
+  }
+
+  const uid = request.data?.uid;
+  const role = String(request.data?.role || "").trim().toLowerCase();
+
+  const allowed = ["user", "collector", "junkshop", "admin"];
+  if (!uid || typeof uid !== "string") {
+    throw new HttpsError("invalid-argument", "uid required");
+  }
+  if (!allowed.includes(role)) {
+    throw new HttpsError("invalid-argument", "Invalid role");
+  }
+
+  await admin.firestore().collection("Users").doc(uid).set(
+    { Roles: role },
+    { merge: true }
+  );
+
+  return { ok: true, uid, role };
+});
+
+/* ====================================================
+   ADMIN-ONLY: Verify junkshop (lets them pass your checks)
+==================================================== */
+exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  if (request.auth.token?.admin !== true) {
+    throw new HttpsError("permission-denied", "Admin only.");
+  }
+
+  const uid = request.data?.uid;
+  if (!uid || typeof uid !== "string") {
+    throw new HttpsError("invalid-argument", "uid required");
+  }
+
+  await admin.firestore().collection("Junkshop").doc(uid).set(
+    { verified: true, verifiedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+
+  // Optional but recommended: ensure routing role is correct too
+  await admin.firestore().collection("Users").doc(uid).set(
+    { Roles: "junkshop" },
+    { merge: true }
+  );
+
+  return { ok: true, uid };
+});
+
+/* ====================================================
+   ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
+==================================================== */
+exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+  if (request.auth.token?.admin !== true) {
+    throw new HttpsError("permission-denied", "Admin only.");
+  }
+
+  const uid = request.data?.uid;
+  const deleteJunkshopData = request.data?.deleteJunkshopData === true;
+
+  if (!uid || typeof uid !== "string") {
+    throw new HttpsError("invalid-argument", "uid is required.");
+  }
+
+  const db = admin.firestore();
+
+  // Delete Users doc
+  await db.collection("Users").doc(uid).delete().catch(() => {});
+
+  // Optional: delete Junkshop + subcollections
+  if (deleteJunkshopData) {
+    const junkRef = db.collection("Junkshop").doc(uid);
+
+    const subcols = ["inventory", "transaction", "recycleLogs"];
+    for (const sub of subcols) {
+      const snap = await junkRef.collection(sub).limit(500).get();
+      if (!snap.empty) {
+        const batch = db.batch();
+        snap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+    }
+
+    await junkRef.delete().catch(() => {});
+  }
+
+  // Delete Auth user
+  await admin.auth().deleteUser(uid).catch((err) => {
+    if (String(err?.code) !== "auth/user-not-found") throw err;
+  });
+
+  return { ok: true, uid };
+});
+
+/* ====================================================
+   OWNER-ONLY: Grant/Revoke admin claim
+   IMPORTANT: user must re-login to refresh token
+==================================================== */
+exports.setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+
+  const callerEmail = String(request.auth.token.email || "").toLowerCase();
+  if (callerEmail !== "jurisalson@gmail.com") {
+    throw new HttpsError("permission-denied", "Only project owner can grant admin.");
+  }
+
+  const uid = request.data?.uid;
+  const makeAdmin = request.data?.admin === true;
+
+  if (!uid || typeof uid !== "string") {
+    throw new HttpsError("invalid-argument", "uid is required.");
+  }
+
+  await admin.auth().setCustomUserClaims(uid, { admin: makeAdmin });
+
+  return {
+    ok: true,
+    uid,
+    admin: makeAdmin,
+    note: "User must sign out/in to refresh the token.",
+  };
+});
+
+/* ====================================================
    KEYS
 ==================================================== */
 function getKeysOrThrow() {

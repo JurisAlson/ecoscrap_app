@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui';
+
 import 'login_page.dart';
-import '../household/household_dashboard.dart';
+import '../role_gate.dart';  
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -13,7 +14,6 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
-
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
 
@@ -21,7 +21,6 @@ class _SplashScreenState extends State<SplashScreen>
   void initState() {
     super.initState();
 
-    // Fade animation (kept same)
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -38,15 +37,16 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _checkLogin() async {
     final user = FirebaseAuth.instance.currentUser;
-
-    if (!mounted) return; // prevents errors
+    if (!mounted) return;
 
     if (user != null) {
+      // ✅ Logged in → let RoleGate decide Admin/Junkshop/Household
       Navigator.pushReplacement(
         context,
-        _createRoute(const DashboardPage()),
+        _createRoute(const RoleGate()),
       );
     } else {
+      // ✅ Not logged in → Login page
       Navigator.pushReplacement(
         context,
         _createRoute(const LoginPage()),
@@ -54,7 +54,6 @@ class _SplashScreenState extends State<SplashScreen>
     }
   }
 
-  // Slide-up transition — unchanged
   Route _createRoute(Widget page) {
     return PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 700),
@@ -84,10 +83,8 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
-
       body: Stack(
         children: [
-          // Faint Glow Background
           Positioned(
             top: -50,
             right: -50,
@@ -104,14 +101,12 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
           ),
-
           Center(
             child: FadeTransition(
               opacity: _fadeAnimation,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Logo Box
                   Transform.rotate(
                     angle: -0.1,
                     child: Container(
@@ -125,7 +120,8 @@ class _SplashScreenState extends State<SplashScreen>
                         borderRadius: BorderRadius.circular(32),
                         boxShadow: [
                           BoxShadow(
-                            color: const Color(0xFF1FA9A7).withValues(alpha: 0.3),
+                            color:
+                                const Color(0xFF1FA9A7).withValues(alpha: 0.3),
                             blurRadius: 40,
                           ),
                         ],
@@ -138,10 +134,7 @@ class _SplashScreenState extends State<SplashScreen>
                       ),
                     ),
                   ),
-
-
                   const SizedBox(height: 32),
-
                   const Text(
                     "EcoScrap",
                     style: TextStyle(
@@ -150,9 +143,7 @@ class _SplashScreenState extends State<SplashScreen>
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-
                   const SizedBox(height: 8),
-
                   Text(
                     "JOIN THE REVOLUTION",
                     style: TextStyle(
@@ -162,9 +153,7 @@ class _SplashScreenState extends State<SplashScreen>
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-
                   const SizedBox(height: 50),
-
                   const SizedBox(
                     width: 40,
                     child: LinearProgressIndicator(

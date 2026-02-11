@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:ui'; // needed for blur effects
+import 'dart:ui';
+
 import 'forgot_password.dart';
 import 'AccountCreation.dart';
-import 'package:ecoscrap_app/junkshop/junkshop_dashboard.dart';
-import 'package:ecoscrap_app/household/household_dashboard.dart';
-
-
+import '../role_gate.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -17,9 +14,9 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+
   bool _isLoading = false;
   bool _obscurePassword = true;
 
@@ -30,148 +27,73 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  // 2. PLACE YOUR LOGIN LOGIC HERE
-Future<void> _login() async {
-  if (_isLoading) return;
+  Future<void> _login() async {
+    if (_isLoading) return;
 
-  final email = _emailController.text.trim();
-  final password = _passwordController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
 
-  if (email.isEmpty || password.isEmpty) {
-    _showToast("Email and password are required.", isError: true);
-    return;
+    if (email.isEmpty || password.isEmpty) {
+      _showToast("Email and password are required.", isError: true);
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      if (cred.user == null) return;
+
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const RoleGate()),
+      );
+    } on FirebaseAuthException catch (e) {
+      _showToast(e.message ?? "Login failed", isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
-  setState(() => _isLoading = true);
+  void _showToast(String message, {bool isError = false}) {
+    if (!mounted) return;
 
-  try {
-    UserCredential userCredential =
-        await FirebaseAuth.instance.signInWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-
-    final user = userCredential.user;
-    if (user == null) return;
-
-    final uid = user.uid;
-
-    // ===============================
-    // STEP A: CHECK USERS DOCUMENT
-    // ===============================
-    final userDoc = await FirebaseFirestore.instance
-        .collection('Users')
-        .doc(uid)
-        .get();
-
-    if (userDoc.exists) {
-      // Optional role check (since you have Roles field)
-      final data = userDoc.data() ?? {};
-      final role = (data['Roles'] ?? '').toString().toLowerCase();
-
-      // If it's a household user, go to household dashboard
-      if (role.isEmpty || role == 'users' || role == 'user' || role == 'household') {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const DashboardPage()),
-        );
-        return;
-      }
-    }
-
-
-    // ===============================
-    // STEP 1: GET JUNKSHOP DOCUMENT
-    // ===============================
-    final junkshopDoc = await FirebaseFirestore.instance
-        .collection('Junkshop')
-        .doc(uid)
-        .get();
-
-    if (!junkshopDoc.exists) {
-      _showToast("Shop record not found", isError: true);
-      return;
-    }
-
-    final shopData = junkshopDoc.data()!;
-
-    final bool verified = shopData['verified'] == true;
-    final String? permitId = shopData['activePermitRequestId'];
-
-    // ===============================
-    // STEP 2: CHECK VERIFIED FIELD
-    // ===============================
-    if (!verified || permitId == null) {
-      _showToast("Your business is still under review.");
-      return;
-    }
-
-    // ===============================
-    // STEP 3: CHECK PERMIT APPROVAL
-    // ===============================
-    final permitDoc = await FirebaseFirestore.instance
-        .collection('permitRequests')
-        .doc(permitId)
-        .get();
-
-    final bool approved =
-        permitDoc.exists && permitDoc.data()!['approved'] == true;
-
-    if (!approved) {
-      _showToast("Permit still pending admin approval.");
-      return;
-    }
-
-    // ===============================
-    // STEP 4: ALLOW DASHBOARD
-    // ===============================
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => JunkshopDashboardPage(shopID: uid),
-      ),
-    );
-
-  } on FirebaseAuthException catch (e) {
-    _showToast(e.message ?? "Login failed", isError: true);
-  } finally {
-    if (mounted) setState(() => _isLoading = false);
-  }
-}
-
-void _showToast(String message, {bool isError = false}) {
-  if (!mounted) return;
-
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      elevation: 0,
-      behavior: SnackBarBehavior.floating,
-      backgroundColor: Colors.transparent,
-      content: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.black87,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              isError ? Icons.error_outline : Icons.check_circle_outline,
-              color: isError ? Colors.redAccent : const Color(0xFF1FA9A7),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(color: Colors.white),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        elevation: 0,
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        content: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isError ? Icons.error_outline : Icons.check_circle_outline,
+                color: isError ? Colors.redAccent : const Color(0xFF1FA9A7),
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
+
   Widget _buildTextField({
     required TextEditingController controller,
     required String hint,
@@ -199,11 +121,17 @@ void _showToast(String message, {bool isError = false}) {
           suffixIcon: isPassword
               ? IconButton(
                   onPressed: onToggleVisibility,
-                  icon: Icon(obscureText ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: const Color(0xFF475569)),
+                  icon: Icon(
+                    obscureText
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    color: const Color(0xFF475569),
+                  ),
                 )
               : null,
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
         ),
       ),
     );
@@ -369,7 +297,8 @@ void _showToast(String message, {bool isError = false}) {
                       child: _isLoading
                           ? const CircularProgressIndicator(
                               strokeWidth: 3,
-                              color: Color(0xFF0F172A))
+                              color: Color(0xFF0F172A),
+                            )
                           : const Text(
                               "Continue",
                               style: TextStyle(
@@ -404,7 +333,6 @@ void _showToast(String message, {bool isError = false}) {
                       ),
                     ],
                   ),
-
                   const SizedBox(height: 30),
                 ],
               ),
