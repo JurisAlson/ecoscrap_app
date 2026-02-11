@@ -5,6 +5,8 @@ import 'dart:ui'; // needed for blur effects
 import 'forgot_password.dart';
 import 'AccountCreation.dart';
 import 'package:ecoscrap_app/junkshop/junkshop_dashboard.dart';
+import 'package:ecoscrap_app/household/household_dashboard.dart';
+
 
 
 class LoginPage extends StatefulWidget {
@@ -53,6 +55,30 @@ Future<void> _login() async {
     if (user == null) return;
 
     final uid = user.uid;
+
+    // ===============================
+    // STEP A: CHECK USERS DOCUMENT
+    // ===============================
+    final userDoc = await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(uid)
+        .get();
+
+    if (userDoc.exists) {
+      // Optional role check (since you have Roles field)
+      final data = userDoc.data() ?? {};
+      final role = (data['Roles'] ?? '').toString().toLowerCase();
+
+      // If it's a household user, go to household dashboard
+      if (role.isEmpty || role == 'users' || role == 'user' || role == 'household') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const DashboardPage()),
+        );
+        return;
+      }
+    }
+
 
     // ===============================
     // STEP 1: GET JUNKSHOP DOCUMENT
