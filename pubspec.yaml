@@ -44,4 +44,3 @@ flutter:
   assets:
     - assets/images/
     - assets/models/plastic_model.tflite
-
