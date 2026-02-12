@@ -22,7 +22,13 @@ exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
   }
 
   const uid = request.data?.uid;
-  const role = String(request.data?.role || "").trim().toLowerCase();
+  let role = String(request.data?.role || "").trim().toLowerCase();
+
+  // normalize common variants
+  if (role === "users") role = "user";
+  if (role === "admins") role = "admin";
+  if (role === "collectors") role = "collector";
+  if (role === "junkshops") role = "junkshop";
 
   const allowed = ["user", "collector", "junkshop", "admin"];
   if (!uid || typeof uid !== "string") {
@@ -59,7 +65,7 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
     { merge: true }
   );
 
-  // Optional but recommended: ensure routing role is correct too
+  // keep routing role in sync
   await admin.firestore().collection("Users").doc(uid).set(
     { Roles: "junkshop" },
     { merge: true }
@@ -86,10 +92,8 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
 
   const db = admin.firestore();
 
-  // Delete Users doc
   await db.collection("Users").doc(uid).delete().catch(() => {});
 
-  // Optional: delete Junkshop + subcollections
   if (deleteJunkshopData) {
     const junkRef = db.collection("Junkshop").doc(uid);
 
@@ -106,7 +110,6 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
     await junkRef.delete().catch(() => {});
   }
 
-  // Delete Auth user
   await admin.auth().deleteUser(uid).catch((err) => {
     if (String(err?.code) !== "auth/user-not-found") throw err;
   });
@@ -116,32 +119,90 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
 
 /* ====================================================
    OWNER-ONLY: Grant/Revoke admin claim
-   IMPORTANT: user must re-login to refresh token
+   IMPORTANT: user must re-login/refresh token to see claim
 ==================================================== */
 exports.setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
 
-  const callerEmail = String(request.auth.token.email || "").toLowerCase();
-  if (callerEmail !== "jurisalson@gmail.com") {
-    throw new HttpsError("permission-denied", "Only project owner can grant admin.");
-  }
+  const OWNER_EMAIL = "jurisalson@gmail.com";
+  const callerEmail = String(request.auth.token?.email || "").toLowerCase();
+  const callerIsAdmin = request.auth.token?.admin === true;
+  const callerIsOwner = callerEmail === OWNER_EMAIL;
 
   const uid = request.data?.uid;
   const makeAdmin = request.data?.admin === true;
 
   if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid is required.");
+    throw new HttpsError("invalid-argument", "uid required.");
   }
 
-  await admin.auth().setCustomUserClaims(uid, { admin: makeAdmin });
+  // owner can bootstrap self or manage anyone
+  if (callerIsOwner) {
+    // allow
+  } else if (callerIsAdmin) {
+    // prevent self-edit mistakes
+    if (request.auth.uid === uid) {
+      throw new HttpsError("failed-precondition", "Admins cannot modify their own claim.");
+    }
+  } else {
+    throw new HttpsError("permission-denied", "Admin only.");
+  }
 
-  return {
-    ok: true,
-    uid,
-    admin: makeAdmin,
-    note: "User must sign out/in to refresh the token.",
-  };
+  // ✅ preserve existing claims (don’t wipe others!)
+  const existing = (await admin.auth().getUser(uid)).customClaims || {};
+  await admin.auth().setCustomUserClaims(uid, { ...existing, admin: makeAdmin });
+
+  // keep Firestore role in sync for routing
+  await admin.firestore().collection("Users").doc(uid).set(
+    { Roles: makeAdmin ? "admin" : "user" },
+    { merge: true }
+  );
+
+  return { ok: true, uid, admin: makeAdmin };
 });
+
+/* ====================================================
+   Auto-sync claims whenever Users/{uid}.Roles changes
+   NOTE: preserves existing claims
+==================================================== */
+exports.syncRoleClaims = onDocumentWritten(
+  { document: "Users/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    try {
+      const beforeSnap = event.data?.before;
+      const afterSnap = event.data?.after;
+      if (!afterSnap?.exists) return;
+
+      const before = beforeSnap?.data() || {};
+      const after = afterSnap.data() || {};
+      const uid = event.params.uid;
+
+      const beforeRole = String(before.Roles || before.roles || "").trim().toLowerCase();
+      let role = String(after.Roles || after.roles || "").trim().toLowerCase();
+
+      // normalize
+      if (role === "users") role = "user";
+      if (role === "admins") role = "admin";
+      if (role === "collectors") role = "collector";
+      if (role === "junkshops") role = "junkshop";
+
+      if (beforeRole === role) return; // ✅ no change, skip
+
+      const roleClaims = {
+        admin: role === "admin",
+        collector: role === "collector",
+        junkshop: role === "junkshop",
+      };
+
+      const existing = (await admin.auth().getUser(uid)).customClaims || {};
+      await admin.auth().setCustomUserClaims(uid, { ...existing, ...roleClaims });
+
+      logger.info("RBAC Claims synced", { uid, role, roleClaims });
+    } catch (e) {
+      logger.error("syncRoleClaims FAILED", { error: String(e), stack: e?.stack });
+    }
+  }
+);
 
 /* ====================================================
    KEYS
