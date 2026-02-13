@@ -100,59 +100,33 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
   }
 
   const uid = request.data?.uid;
-  const deleteJunkshopData = request.data?.deleteJunkshopData === true;
-
   if (!uid || typeof uid !== "string") {
     throw new HttpsError("invalid-argument", "uid required");
   }
 
   const db = admin.firestore();
 
-  // Helper: delete docs in a subcollection in batches
-  async function deleteSubcollectionDocs(parentRef, subName, batchSize = 300) {
-    const colRef = parentRef.collection(subName);
-
-    while (true) {
-      const snap = await colRef.limit(batchSize).get();
-      if (snap.empty) break;
-
-      const batch = db.batch();
-      snap.docs.forEach((doc) => batch.delete(doc.ref));
-      await batch.commit();
-    }
-  }
-
   try {
-    // 1) Delete Firestore user profile
+    // 🔥 Delete Users profile
     await db.collection("Users").doc(uid).delete().catch(() => null);
 
-    // 2) Optionally delete junkshop data + subcollections
-    if (deleteJunkshopData) {
-      const junkRef = db.collection("Junkshop").doc(uid);
+    // 🔥 Delete Junkshop profile
+    await db.collection("Junkshop").doc(uid).delete().catch(() => null);
 
-      // delete known subcollections (add more if you have)
-      await deleteSubcollectionDocs(junkRef, "inventory");
-      await deleteSubcollectionDocs(junkRef, "transaction");
-      await deleteSubcollectionDocs(junkRef, "recycleLogs");
+    // 🔥 Delete Permit Requests
+    const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
+    const batch = db.batch();
+    permits.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit().catch(() => null);
 
-      // finally delete the junkshop doc itself
-      await junkRef.delete().catch(() => null);
-    }
+    // 🔥 Delete Firebase Auth account
+    await admin.auth().deleteUser(uid);
 
-    // 3) (Optional) delete permit requests linked to uid
-    // If you store uid field in permitRequests, this works:
-    // const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
-    // const pb = db.batch();
-    // permits.docs.forEach((d) => pb.delete(d.ref));
-    // await pb.commit();
+    return { ok: true, uid };
 
-    // 4) Delete Firebase Auth account LAST
-    await admin.auth().deleteUser(uid).catch(() => null);
-
-    return { ok: true, uid, deleteJunkshopData };
   } catch (err) {
-    console.error("adminDeleteUser failed:", err);
-    throw new HttpsError("internal", err?.message || "delete failed");
+    console.error("adminDeleteUser error:", err);
+    throw new HttpsError("internal", err.message);
   }
 });
 
@@ -160,49 +134,46 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
    OWNER-ONLY: Grant/Revoke admin claim
    IMPORTANT: user must re-login/refresh token to see claim
 ==================================================== */
-exports.setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
-
-  const OWNER_EMAIL = "jurisalson@gmail.com";
-  const callerEmail = String(request.auth.token?.email || "").toLowerCase();
-  const callerIsAdmin = request.auth.token?.admin === true;
-  const callerIsOwner = callerEmail === OWNER_EMAIL;
-
-  const uid = request.data?.uid;
-  const makeAdmin = request.data?.admin === true;
-
-  if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid required.");
-  }
-
-  // owner can bootstrap self or manage anyone
-  if (callerIsOwner) {
-    // allow
-  } else if (callerIsAdmin) {
-    // prevent self-edit mistakes
-    if (request.auth.uid === uid) {
-      throw new HttpsError("failed-precondition", "Admins cannot modify their own claim.");
-    }
-  } else {
+exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  if (request.auth.token?.admin !== true) {
     throw new HttpsError("permission-denied", "Admin only.");
   }
 
-  // ✅ preserve existing claims (don’t wipe others!)
-  const existing = (await admin.auth().getUser(uid)).customClaims || {};
-  await admin.auth().setCustomUserClaims(uid, { ...existing, admin: makeAdmin });
+  const uid = request.data?.uid;
+  if (!uid || typeof uid !== "string") {
+    throw new HttpsError("invalid-argument", "uid required");
+  }
 
-  // keep Firestore role in sync for routing
-  await admin.firestore().collection("Users").doc(uid).set(
-    { Roles: makeAdmin ? "admin" : "user" },
-    { merge: true }
-  );
+  const db = admin.firestore();
 
-  return { ok: true, uid, admin: makeAdmin };
+  try {
+    // 🔥 Delete Users profile
+    await db.collection("Users").doc(uid).delete().catch(() => null);
+
+    // 🔥 Delete Junkshop profile
+    await db.collection("Junkshop").doc(uid).delete().catch(() => null);
+
+    // 🔥 Delete Permit Requests
+    const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
+    const batch = db.batch();
+    permits.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit().catch(() => null);
+
+    // 🔥 Delete Firebase Auth account
+    await admin.auth().deleteUser(uid);
+
+    return { ok: true, uid };
+
+  } catch (err) {
+    console.error("adminDeleteUser error:", err);
+    throw new HttpsError("internal", err.message);
+  }
 });
 
 /* ====================================================
    Auto-sync claims whenever Users/{uid}.Roles changes
-   NOTE: preserves existing claims
+   NOTE: preserves existiqng claims
 ==================================================== */
 exports.syncRoleClaims = onDocumentWritten(
   { document: "Users/{uid}", region: "asia-southeast1" },

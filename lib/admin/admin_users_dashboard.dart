@@ -47,9 +47,9 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     await callable.call({"uid": uid});
   }
 
-  Future<void> _callAdminDeleteUser(String uid, {bool deleteJunkshopData = false}) async {
+  Future<void> _callAdminDeleteUser(String uid) async {
     final callable = _fn.httpsCallable("adminDeleteUser");
-    await callable.call({"uid": uid, "deleteJunkshopData": deleteJunkshopData});
+    await callable.call({"uid": uid});
   }
 
   Future<void> _showClaims() async {
@@ -89,6 +89,27 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _deleteUserFlow(String uid, String label) async {
+    final ok = await _confirm<bool>(
+      title: "Delete User?",
+      body: "This will permanently delete the entire account ($label).",
+      yesValue: true,
+      yesLabel: "Delete",
+    );
+
+    if (ok != true) return;
+
+    setState(() => _busy = true);
+    try {
+      await _callAdminDeleteUser(uid);
+      _toast("Deleted $label");
+    } catch (e) {
+      _toast("Delete failed: $e");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   // ---------- PermitRequests helpers ----------
@@ -185,7 +206,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                     ),
                   ),
                 ),
-
                 SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   sliver: SliverToBoxAdapter(
@@ -205,7 +225,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                     ),
                   ),
                 ),
-
                 SliverPadding(
                   padding: const EdgeInsets.all(24),
                   sliver: SliverToBoxAdapter(
@@ -249,7 +268,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
       children: [
         const Text("Users / RBAC", style: TextStyle(color: Colors.white, fontSize: 18)),
         const SizedBox(height: 10),
-
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: usersStream,
           builder: (context, snap) {
@@ -260,13 +278,14 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
               return const Text("Loading Users...", style: TextStyle(color: Colors.white));
             }
 
+            // ✅ Hide junkshops from Users/RBAC list
             final allDocs = snap.data!.docs.where((d) {
-            final data = d.data();
-            final role = _normRole(data["Roles"] ?? data["roles"]);
-            return role != "junkshop"; // ✅ hide junkshops from Users/RBAC list
-          }).toList();
+              final data = d.data();
+              final role = _normRole(data["Roles"] ?? data["roles"]);
+              return role != "junkshop";
+            }).toList();
 
-            final counts = <String, int>{"admin": 0, "user": 0, "collector": 0, "junkshop": 0, "unknown": 0};
+            final counts = <String, int>{"admin": 0, "user": 0, "collector": 0, "unknown": 0};
             for (final d in allDocs) {
               final role = _normRole(d.data()["Roles"] ?? d.data()["roles"]);
               counts[role] = (counts[role] ?? 0) + 1;
@@ -288,10 +307,8 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                   _countChip("Admins", counts["admin"] ?? 0),
                   _countChip("Users", counts["user"] ?? 0),
                   _countChip("Collectors", counts["collector"] ?? 0),
-                  _countChip("Junkshops", counts["junkshop"] ?? 0),
                 ]),
                 const SizedBox(height: 12),
-
                 if (filtered.isEmpty)
                   const Text("No users found.", style: TextStyle(color: Colors.white))
                 else
@@ -320,7 +337,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
       children: [
         const Text("Junkshops", style: TextStyle(color: Colors.white, fontSize: 18)),
         const SizedBox(height: 10),
-
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: junkStream,
           builder: (context, snap) {
@@ -361,7 +377,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                   _countChip("Pending", pendingCount),
                 ]),
                 const SizedBox(height: 12),
-
                 if (filtered.isEmpty)
                   const Text("No junkshops found.", style: TextStyle(color: Colors.white))
                 else
@@ -382,206 +397,178 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     );
   }
 
-Widget _permitRequestsSection() {
-  final permitsStream = FirebaseFirestore.instance
-      .collection("permitRequests")
-      .where("approved", isEqualTo: false)
-      .snapshots();
+  Widget _permitRequestsSection() {
+    final permitsStream = FirebaseFirestore.instance
+        .collection("permitRequests")
+        .where("approved", isEqualTo: false)
+        .snapshots();
 
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text("Permit Requests",
-          style: TextStyle(color: Colors.white, fontSize: 18)),
-      const SizedBox(height: 10),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Permit Requests", style: TextStyle(color: Colors.white, fontSize: 18)),
+        const SizedBox(height: 10),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: permitsStream,
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Text("PERMITS ERROR: ${snap.error}", style: const TextStyle(color: Colors.red));
+            }
+            if (!snap.hasData) {
+              return const Text("Loading Permit Requests...", style: TextStyle(color: Colors.white));
+            }
 
-      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: permitsStream,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return Text("PERMITS ERROR: ${snap.error}",
-                style: const TextStyle(color: Colors.red));
-          }
-          if (!snap.hasData) {
-            return const Text("Loading Permit Requests...",
-                style: TextStyle(color: Colors.white));
-          }
+            final docs = snap.data!.docs;
 
-          final docs = snap.data!.docs;
-
-          // ✅ EMPTY STATE (ONLY ONCE)
-          if (docs.isEmpty) {
-            return Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.06)),
-              ),
-              child: Column(
-                children: const [
-                  Icon(Icons.mark_email_read,
-                      color: Colors.greenAccent, size: 40),
-                  SizedBox(height: 10),
-                  Text(
-                    "No New Permit Requests",
-                    style: TextStyle(color: Colors.white, fontSize: 16),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          // ✅ HAS DATA
-          return ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: docs.length,
-            itemBuilder: (context, i) {
-              final d = docs[i];
-              final data = d.data();
-
-              final shopName = (data["shopName"] ?? "Unknown").toString();
-              final email = (data["email"] ?? "").toString();
-              final permitPath = (data["permitPath"] ?? "").toString();
-              final approved = data["approved"] == true;
-
+            if (docs.isEmpty) {
               return Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(12),
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.05),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: Colors.white.withOpacity(0.06)),
                 ),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(shopName,
-                        style: const TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold)),
-                    if (email.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child:
-                            Text(email, style: TextStyle(color: Colors.grey.shade300)),
-                      ),
-                    const SizedBox(height: 8),
-
-                    Row(
-                      children: [
-                        Text(
-                          approved ? "approved" : "pending",
-                          style: TextStyle(
-                              color: approved
-                                  ? Colors.greenAccent
-                                  : Colors.orangeAccent),
-                        ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () async {
-                            setState(() => _busy = true);
-                            try {
-                              await _setPermitApproved(d.reference, true);
-                              _toast("Approved $shopName");
-                            } catch (e) {
-                              _toast("Approve failed: $e");
-                            } finally {
-                              if (mounted) setState(() => _busy = false);
-                            }
-                          },
-                          child: const Text("Approve"),
-                        ),
-                        TextButton(
-                          onPressed: () async {
-                            setState(() => _busy = true);
-                            try {
-                              await _setPermitApproved(d.reference, false);
-                              _toast("Rejected $shopName");
-                            } catch (e) {
-                              _toast("Reject failed: $e");
-                            } finally {
-                              if (mounted) setState(() => _busy = false);
-                            }
-                          },
-                          child: const Text("Reject"),
-                        ),
-                        IconButton(
-                          tooltip: "Delete request",
-                          onPressed: () async {
-                            final ok = await _confirm<bool>(
-                              title: "Delete permit request?",
-                              body:
-                                  "This will delete the request document in Firestore.",
-                              yesValue: true,
-                              yesLabel: "Delete",
-                            );
-                            if (ok != true) return;
-
-                            setState(() => _busy = true);
-                            try {
-                              await _deletePermit(d.reference);
-                              _toast("Deleted request");
-                            } catch (e) {
-                              _toast("Delete failed: $e");
-                            } finally {
-                              if (mounted) setState(() => _busy = false);
-                            }
-                          },
-                          icon: const Icon(Icons.delete_outline,
-                              color: Colors.redAccent),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    if (permitPath.isEmpty)
-                      const Text("No permitPath.",
-                          style: TextStyle(color: Colors.white))
-                    else
-                      FutureBuilder<String>(
-                        future: _permitUrl(permitPath),
-                        builder: (context, urlSnap) {
-                          if (urlSnap.connectionState ==
-                              ConnectionState.waiting) {
-                            return const SizedBox(
-                              height: 180,
-                              child: Center(
-                                  child: CircularProgressIndicator(strokeWidth: 2)),
-                            );
-                          }
-                          if (urlSnap.hasError || !urlSnap.hasData) {
-                            return Text("Image failed: ${urlSnap.error}",
-                                style: const TextStyle(color: Colors.redAccent));
-                          }
-
-                          final url = urlSnap.data!;
-                          return GestureDetector(
-                            onTap: () => _showImageDialog(url),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Image.network(
-                                url,
-                                height: 180,
-                                width: double.infinity,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                  children: const [
+                    Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 40),
+                    SizedBox(height: 10),
+                    Text("No New Permit Requests", style: TextStyle(color: Colors.white, fontSize: 16)),
                   ],
                 ),
               );
-            },
-          );
-        },
-      ),
-    ],
-  );
-}
+            }
+
+            return ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: docs.length,
+              itemBuilder: (context, i) {
+                final d = docs[i];
+                final data = d.data();
+
+                final shopName = (data["shopName"] ?? "Unknown").toString();
+                final email = (data["email"] ?? "").toString();
+                final permitPath = (data["permitPath"] ?? "").toString();
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withOpacity(0.06)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      if (email.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                        ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Text("pending", style: TextStyle(color: Colors.orangeAccent)),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () async {
+                              setState(() => _busy = true);
+                              try {
+                                await _setPermitApproved(d.reference, true);
+                                _toast("Approved $shopName");
+                              } catch (e) {
+                                _toast("Approve failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            child: const Text("Approve"),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              setState(() => _busy = true);
+                              try {
+                                await _setPermitApproved(d.reference, false);
+                                _toast("Rejected $shopName");
+                              } catch (e) {
+                                _toast("Reject failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            child: const Text("Reject"),
+                          ),
+                          IconButton(
+                            tooltip: "Delete request",
+                            onPressed: () async {
+                              final ok = await _confirm<bool>(
+                                title: "Delete permit request?",
+                                body: "This will delete the request document in Firestore.",
+                                yesValue: true,
+                                yesLabel: "Delete",
+                              );
+                              if (ok != true) return;
+
+                              setState(() => _busy = true);
+                              try {
+                                await _deletePermit(d.reference);
+                                _toast("Deleted request");
+                              } catch (e) {
+                                _toast("Delete failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (permitPath.isEmpty)
+                        const Text("No permitPath.", style: TextStyle(color: Colors.white))
+                      else
+                        FutureBuilder<String>(
+                          future: _permitUrl(permitPath),
+                          builder: (context, urlSnap) {
+                            if (urlSnap.connectionState == ConnectionState.waiting) {
+                              return const SizedBox(
+                                height: 180,
+                                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                              );
+                            }
+                            if (urlSnap.hasError || !urlSnap.hasData) {
+                              return Text("Image failed: ${urlSnap.error}",
+                                  style: const TextStyle(color: Colors.redAccent));
+                            }
+
+                            final url = urlSnap.data!;
+                            return GestureDetector(
+                              onTap: () => _showImageDialog(url),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.network(
+                                  url,
+                                  height: 180,
+                                  width: double.infinity,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
 
   // ---------- Tiles ----------
   Widget _userTile({required String uid, required Map<String, dynamic> data}) {
@@ -620,9 +607,9 @@ Widget _permitRequestsSection() {
                     ? Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                         decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.12),
+                          color: Colors.orangeAccent.withOpacity(0.12),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.orange.withOpacity(0.25)),
+                          border: Border.all(color: Colors.orangeAccent.withOpacity(0.25)),
                         ),
                         child: const Text(
                           "Role: junkshop (set via verification)",
@@ -658,32 +645,8 @@ Widget _permitRequestsSection() {
               IconButton(
                 tooltip: "Delete user",
                 onPressed: () async {
-                  final choice = await showDialog<int>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text("Delete user"),
-                      content: const Text(
-                        "This deletes Firebase Auth account and Users/{uid}.\n\n"
-                        "If this is a junkshop account, you can also delete Junkshop data (inventory/transaction/logs).",
-                      ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
-                        TextButton(onPressed: () => Navigator.pop(ctx, 1), child: const Text("Delete user only")),
-                        ElevatedButton(onPressed: () => Navigator.pop(ctx, 2), child: const Text("Delete incl. junkshop data")),
-                      ],
-                    ),
-                  );
-                  if (choice != 1 && choice != 2) return;
-
-                  setState(() => _busy = true);
-                  try {
-                    await _callAdminDeleteUser(uid, deleteJunkshopData: choice == 2);
-                    _toast("Deleted $uid");
-                  } catch (e) {
-                    _toast("Delete failed: $e");
-                  } finally {
-                    if (mounted) setState(() => _busy = false);
-                  }
+                  final label = name.isNotEmpty ? name : (email.isNotEmpty ? email : uid);
+                  await _deleteUserFlow(uid, label);
                 },
                 icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
               ),
@@ -695,103 +658,72 @@ Widget _permitRequestsSection() {
   }
 
   Widget _junkshopTile({required String uid, required Map<String, dynamic> data}) {
-  final shopName = (data["shopName"] ?? uid).toString();
-  final verified = data["verified"] == true;
-  final email = (data["shopEmail"] ?? data["email"] ?? "").toString();
+    final shopName = (data["shopName"] ?? uid).toString();
+    final verified = data["verified"] == true;
+    final email = (data["shopEmail"] ?? data["email"] ?? "").toString();
 
-  return Container(
-    margin: const EdgeInsets.only(bottom: 10),
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: Colors.white.withOpacity(0.05),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Colors.white.withOpacity(0.06)),
-    ),
-    child: Row(
-      children: [
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            if (email.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
-              ),
-            const SizedBox(height: 6),
-            Text(
-              verified ? "verified" : "pending",
-              style: TextStyle(color: verified ? Colors.greenAccent : Colors.orangeAccent),
-            ),
-          ]),
-        ),
-
-        // ✅ Pending → show Verify
-        if (!verified)
-          ElevatedButton(
-            onPressed: () async {
-              final ok = await _confirm<bool>(
-                title: "Verify junkshop?",
-                body: "Verify $uid ($shopName)?",
-                yesValue: true,
-                yesLabel: "Verify",
-              );
-              if (ok != true) return;
-
-              setState(() => _busy = true);
-              try {
-                await _callVerifyJunkshop(uid);
-                _toast("Verified $shopName");
-              } catch (e) {
-                _toast("Verify failed: $e");
-              } finally {
-                if (mounted) setState(() => _busy = false);
-              }
-            },
-            child: const Text("Verify"),
-          ),
-
-        // ✅ Verified → show Delete
-        if (verified)
-          IconButton(
-            tooltip: "Delete verified junkshop",
-            onPressed: () async {
-              final choice = await showDialog<int>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text("Delete Junkshop Account"),
-                  content: Text(
-                    "This will delete:\n"
-                    "• Firebase Auth user\n"
-                    "• Users/$uid\n\n"
-                    "Optional: also delete Junkshop/$uid data (inventory/transaction/logs).\n\n"
-                    "Junkshop: $shopName",
-                  ),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
-                    TextButton(onPressed: () => Navigator.pop(ctx, 1), child: const Text("Delete account only")),
-                    ElevatedButton(onPressed: () => Navigator.pop(ctx, 2), child: const Text("Delete incl. junkshop data")),
-                  ],
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              if (email.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
                 ),
-              );
-
-              if (choice != 1 && choice != 2) return;
-
-              setState(() => _busy = true);
-              try {
-                await _callAdminDeleteUser(uid, deleteJunkshopData: choice == 2);
-                _toast("Deleted junkshop: $shopName");
-              } catch (e) {
-                _toast("Delete failed: $e");
-              } finally {
-                if (mounted) setState(() => _busy = false);
-              }
-            },
-            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              const SizedBox(height: 6),
+              Text(
+                verified ? "verified" : "pending",
+                style: TextStyle(color: verified ? Colors.greenAccent : Colors.orangeAccent),
+              ),
+            ]),
           ),
-      ],
-    ),
-  );
-}
+
+          if (!verified)
+            ElevatedButton(
+              onPressed: () async {
+                final ok = await _confirm<bool>(
+                  title: "Verify junkshop?",
+                  body: "Verify $uid ($shopName)?",
+                  yesValue: true,
+                  yesLabel: "Verify",
+                );
+                if (ok != true) return;
+
+                setState(() => _busy = true);
+                try {
+                  await _callVerifyJunkshop(uid);
+                  _toast("Verified $shopName");
+                } catch (e) {
+                  _toast("Verify failed: $e");
+                } finally {
+                  if (mounted) setState(() => _busy = false);
+                }
+              },
+              child: const Text("Verify"),
+            ),
+
+          if (verified)
+            IconButton(
+              tooltip: "Delete verified junkshop",
+              onPressed: () async {
+                await _deleteUserFlow(uid, shopName);
+              },
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            ),
+        ],
+      ),
+    );
+  }
 
   // ---------- Small UI widgets ----------
   Widget _countRow(List<Widget> chips) {
@@ -810,10 +742,7 @@ Widget _permitRequestsSection() {
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: Colors.white.withOpacity(0.06)),
       ),
-      child: Text(
-        "$label: $value",
-        style: const TextStyle(color: Colors.white),
-      ),
+      child: Text("$label: $value", style: const TextStyle(color: Colors.white)),
     );
   }
 
@@ -839,10 +768,7 @@ Widget _permitRequestsSection() {
           iconEnabledColor: Colors.white,
           style: const TextStyle(color: Colors.white),
           items: roles
-              .map((r) => DropdownMenuItem(
-                    value: r,
-                    child: Text(r),
-                  ))
+              .map((r) => DropdownMenuItem(value: r, child: Text(r)))
               .toList(),
           onChanged: (v) => onChanged(v),
         ),
