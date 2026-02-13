@@ -695,63 +695,103 @@ Widget _permitRequestsSection() {
   }
 
   Widget _junkshopTile({required String uid, required Map<String, dynamic> data}) {
-    final shopName = (data["shopName"] ?? uid).toString();
-    final verified = data["verified"] == true;
+  final shopName = (data["shopName"] ?? uid).toString();
+  final verified = data["verified"] == true;
+  final email = (data["shopEmail"] ?? data["email"] ?? "").toString();
 
-    final email = (data["shopEmail"] ?? data["email"] ?? "").toString();
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              if (email.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
-                ),
-              const SizedBox(height: 6),
-              Text(
-                verified ? "verified" : "pending",
-                style: TextStyle(color: verified ? Colors.greenAccent : Colors.orangeAccent),
+  return Container(
+    margin: const EdgeInsets.only(bottom: 10),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(0.05),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Colors.white.withOpacity(0.06)),
+    ),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            if (email.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
               ),
-            ]),
-          ),
-          if (!verified)
-            ElevatedButton(
-              onPressed: () async {
-                final ok = await _confirm<bool>(
-                  title: "Verify junkshop?",
-                  body: "Verify $uid ($shopName)?",
-                  yesValue: true,
-                  yesLabel: "Verify",
-                );
-                if (ok != true) return;
-
-                setState(() => _busy = true);
-                try {
-                  await _callVerifyJunkshop(uid);
-                  _toast("Verified $shopName");
-                } catch (e) {
-                  _toast("Verify failed: $e");
-                } finally {
-                  if (mounted) setState(() => _busy = false);
-                }
-              },
-              child: const Text("Verify"),
+            const SizedBox(height: 6),
+            Text(
+              verified ? "verified" : "pending",
+              style: TextStyle(color: verified ? Colors.greenAccent : Colors.orangeAccent),
             ),
-        ],
-      ),
-    );
-  }
+          ]),
+        ),
+
+        // ✅ Pending → show Verify
+        if (!verified)
+          ElevatedButton(
+            onPressed: () async {
+              final ok = await _confirm<bool>(
+                title: "Verify junkshop?",
+                body: "Verify $uid ($shopName)?",
+                yesValue: true,
+                yesLabel: "Verify",
+              );
+              if (ok != true) return;
+
+              setState(() => _busy = true);
+              try {
+                await _callVerifyJunkshop(uid);
+                _toast("Verified $shopName");
+              } catch (e) {
+                _toast("Verify failed: $e");
+              } finally {
+                if (mounted) setState(() => _busy = false);
+              }
+            },
+            child: const Text("Verify"),
+          ),
+
+        // ✅ Verified → show Delete
+        if (verified)
+          IconButton(
+            tooltip: "Delete verified junkshop",
+            onPressed: () async {
+              final choice = await showDialog<int>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text("Delete Junkshop Account"),
+                  content: Text(
+                    "This will delete:\n"
+                    "• Firebase Auth user\n"
+                    "• Users/$uid\n\n"
+                    "Optional: also delete Junkshop/$uid data (inventory/transaction/logs).\n\n"
+                    "Junkshop: $shopName",
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                    TextButton(onPressed: () => Navigator.pop(ctx, 1), child: const Text("Delete account only")),
+                    ElevatedButton(onPressed: () => Navigator.pop(ctx, 2), child: const Text("Delete incl. junkshop data")),
+                  ],
+                ),
+              );
+
+              if (choice != 1 && choice != 2) return;
+
+              setState(() => _busy = true);
+              try {
+                await _callAdminDeleteUser(uid, deleteJunkshopData: choice == 2);
+                _toast("Deleted junkshop: $shopName");
+              } catch (e) {
+                _toast("Delete failed: $e");
+              } finally {
+                if (mounted) setState(() => _busy = false);
+              }
+            },
+            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+          ),
+      ],
+    ),
+  );
+}
 
   // ---------- Small UI widgets ----------
   Widget _countRow(List<Widget> chips) {
