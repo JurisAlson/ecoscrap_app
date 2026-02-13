@@ -60,16 +60,32 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
     throw new HttpsError("invalid-argument", "uid required");
   }
 
+  // 1) Mark junkshop verified in Firestore
   await admin.firestore().collection("Junkshop").doc(uid).set(
-    { verified: true, verifiedAt: admin.firestore.FieldValue.serverTimestamp() },
+    {
+      verified: true,
+      verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
     { merge: true }
   );
 
-  // keep routing role in sync
+  // 2) Keep Users role in sync (for RBAC UI)
   await admin.firestore().collection("Users").doc(uid).set(
     { Roles: "junkshop" },
     { merge: true }
   );
+
+  // 3) Keep Auth custom claims in sync (for routing/guards)
+  const user = await admin.auth().getUser(uid);
+  const existing = user.customClaims || {};
+
+  await admin.auth().setCustomUserClaims(uid, {
+    ...existing,
+    junkshop: true,
+    collector: false,
+    // keep admin if already admin
+    admin: existing.admin === true,
+  });
 
   return { ok: true, uid };
 });
