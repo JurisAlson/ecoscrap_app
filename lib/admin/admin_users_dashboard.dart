@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class AdminUsersDashboardPage extends StatefulWidget {
   const AdminUsersDashboardPage({super.key});
@@ -34,8 +35,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     return fields.any((f) => f.toLowerCase().contains(q));
   }
 
-  FirebaseFunctions get _fn =>
-      FirebaseFunctions.instanceFor(region: "asia-southeast1");
+  FirebaseFunctions get _fn => FirebaseFunctions.instanceFor(region: "asia-southeast1");
 
   Future<void> _callSetUserRole(String uid, String role) async {
     final callable = _fn.httpsCallable("setUserRole");
@@ -89,6 +89,36 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  // ---------- PermitRequests helpers ----------
+  final Map<String, Future<String>> _permitUrlCache = {};
+
+  Future<String> _permitUrl(String permitPath) {
+    return _permitUrlCache.putIfAbsent(
+      permitPath,
+      () => FirebaseStorage.instance.ref(permitPath).getDownloadURL(),
+    );
+  }
+
+  Future<void> _setPermitApproved(DocumentReference ref, bool value) async {
+    await ref.update({'approved': value});
+  }
+
+  Future<void> _deletePermit(DocumentReference ref) async {
+    await ref.delete();
+  }
+
+  void _showImageDialog(String url) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        child: InteractiveViewer(
+          child: Image.network(url, fit: BoxFit.contain),
+        ),
+      ),
+    );
   }
 
   // ---------- UI ----------
@@ -196,6 +226,8 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                         _usersSection(),
                         const SizedBox(height: 24),
                         _junkshopsSection(),
+                        const SizedBox(height: 24),
+                        _permitRequestsSection(),
                       ],
                     ),
                   ),
@@ -228,16 +260,18 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
               return const Text("Loading Users...", style: TextStyle(color: Colors.white));
             }
 
-            final allDocs = snap.data!.docs;
+            final allDocs = snap.data!.docs.where((d) {
+            final data = d.data();
+            final role = _normRole(data["Roles"] ?? data["roles"]);
+            return role != "junkshop"; // ✅ hide junkshops from Users/RBAC list
+          }).toList();
 
-            // Counts
             final counts = <String, int>{"admin": 0, "user": 0, "collector": 0, "junkshop": 0, "unknown": 0};
             for (final d in allDocs) {
               final role = _normRole(d.data()["Roles"] ?? d.data()["roles"]);
               counts[role] = (counts[role] ?? 0) + 1;
             }
 
-            // Filtered list
             final filtered = allDocs.where((d) {
               final data = d.data();
               final email = (data["Email"] ?? data["email"] ?? "").toString();
@@ -261,8 +295,14 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                 if (filtered.isEmpty)
                   const Text("No users found.", style: TextStyle(color: Colors.white))
                 else
-                  Column(
-                    children: filtered.map((d) => _userTile(uid: d.id, data: d.data())).toList(),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: filtered.length,
+                    itemBuilder: (_, i) {
+                      final d = filtered[i];
+                      return _userTile(uid: d.id, data: d.data());
+                    },
                   ),
               ],
             );
@@ -325,8 +365,14 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                 if (filtered.isEmpty)
                   const Text("No junkshops found.", style: TextStyle(color: Colors.white))
                 else
-                  Column(
-                    children: filtered.map((d) => _junkshopTile(uid: d.id, data: d.data())).toList(),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: filtered.length,
+                    itemBuilder: (_, i) {
+                      final d = filtered[i];
+                      return _junkshopTile(uid: d.id, data: d.data());
+                    },
                   ),
               ],
             );
@@ -336,11 +382,214 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     );
   }
 
+Widget _permitRequestsSection() {
+  final permitsStream = FirebaseFirestore.instance
+      .collection("permitRequests")
+      .where("approved", isEqualTo: false)
+      .snapshots();
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text("Permit Requests",
+          style: TextStyle(color: Colors.white, fontSize: 18)),
+      const SizedBox(height: 10),
+
+      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: permitsStream,
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return Text("PERMITS ERROR: ${snap.error}",
+                style: const TextStyle(color: Colors.red));
+          }
+          if (!snap.hasData) {
+            return const Text("Loading Permit Requests...",
+                style: TextStyle(color: Colors.white));
+          }
+
+          final docs = snap.data!.docs;
+
+          // ✅ EMPTY STATE (ONLY ONCE)
+          if (docs.isEmpty) {
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: Column(
+                children: const [
+                  Icon(Icons.mark_email_read,
+                      color: Colors.greenAccent, size: 40),
+                  SizedBox(height: 10),
+                  Text(
+                    "No New Permit Requests",
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          // ✅ HAS DATA
+          return ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: docs.length,
+            itemBuilder: (context, i) {
+              final d = docs[i];
+              final data = d.data();
+
+              final shopName = (data["shopName"] ?? "Unknown").toString();
+              final email = (data["email"] ?? "").toString();
+              final permitPath = (data["permitPath"] ?? "").toString();
+              final approved = data["approved"] == true;
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.06)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(shopName,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    if (email.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child:
+                            Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                      ),
+                    const SizedBox(height: 8),
+
+                    Row(
+                      children: [
+                        Text(
+                          approved ? "approved" : "pending",
+                          style: TextStyle(
+                              color: approved
+                                  ? Colors.greenAccent
+                                  : Colors.orangeAccent),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () async {
+                            setState(() => _busy = true);
+                            try {
+                              await _setPermitApproved(d.reference, true);
+                              _toast("Approved $shopName");
+                            } catch (e) {
+                              _toast("Approve failed: $e");
+                            } finally {
+                              if (mounted) setState(() => _busy = false);
+                            }
+                          },
+                          child: const Text("Approve"),
+                        ),
+                        TextButton(
+                          onPressed: () async {
+                            setState(() => _busy = true);
+                            try {
+                              await _setPermitApproved(d.reference, false);
+                              _toast("Rejected $shopName");
+                            } catch (e) {
+                              _toast("Reject failed: $e");
+                            } finally {
+                              if (mounted) setState(() => _busy = false);
+                            }
+                          },
+                          child: const Text("Reject"),
+                        ),
+                        IconButton(
+                          tooltip: "Delete request",
+                          onPressed: () async {
+                            final ok = await _confirm<bool>(
+                              title: "Delete permit request?",
+                              body:
+                                  "This will delete the request document in Firestore.",
+                              yesValue: true,
+                              yesLabel: "Delete",
+                            );
+                            if (ok != true) return;
+
+                            setState(() => _busy = true);
+                            try {
+                              await _deletePermit(d.reference);
+                              _toast("Deleted request");
+                            } catch (e) {
+                              _toast("Delete failed: $e");
+                            } finally {
+                              if (mounted) setState(() => _busy = false);
+                            }
+                          },
+                          icon: const Icon(Icons.delete_outline,
+                              color: Colors.redAccent),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    if (permitPath.isEmpty)
+                      const Text("No permitPath.",
+                          style: TextStyle(color: Colors.white))
+                    else
+                      FutureBuilder<String>(
+                        future: _permitUrl(permitPath),
+                        builder: (context, urlSnap) {
+                          if (urlSnap.connectionState ==
+                              ConnectionState.waiting) {
+                            return const SizedBox(
+                              height: 180,
+                              child: Center(
+                                  child: CircularProgressIndicator(strokeWidth: 2)),
+                            );
+                          }
+                          if (urlSnap.hasError || !urlSnap.hasData) {
+                            return Text("Image failed: ${urlSnap.error}",
+                                style: const TextStyle(color: Colors.redAccent));
+                          }
+
+                          final url = urlSnap.data!;
+                          return GestureDetector(
+                            onTap: () => _showImageDialog(url),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.network(
+                                url,
+                                height: 180,
+                                width: double.infinity,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    ],
+  );
+}
+
   // ---------- Tiles ----------
   Widget _userTile({required String uid, required Map<String, dynamic> data}) {
     final email = (data["Email"] ?? data["email"] ?? "").toString();
     final name = (data["Name"] ?? data["name"] ?? "").toString();
+
     final role = _normRole(data["Roles"] ?? data["roles"]);
+    final isJunkshop = role == "junkshop";
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -367,31 +616,43 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
           Row(
             children: [
               Expanded(
-                child: _roleDropdown(
-                  value: role,
-                  onChanged: (newRole) async {
-                    if (newRole == null || newRole == role) return;
+                child: isJunkshop
+                    ? Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.orange.withOpacity(0.25)),
+                        ),
+                        child: const Text(
+                          "Role: junkshop (set via verification)",
+                          style: TextStyle(color: Colors.orangeAccent),
+                        ),
+                      )
+                    : _roleDropdown(
+                        value: role,
+                        onChanged: (newRole) async {
+                          if (newRole == null || newRole == role) return;
 
-                    final ok = await _confirm<bool>(
-                      title: "Change role?",
-                      body: "Set $uid role to '$newRole'?",
-                      yesValue: true,
-                      yesLabel: "Change",
-                    );
+                          final ok = await _confirm<bool>(
+                            title: "Change role?",
+                            body: "Set $uid role to '$newRole'?",
+                            yesValue: true,
+                            yesLabel: "Change",
+                          );
+                          if (ok != true) return;
 
-                    if (ok != true) return;
-
-                    setState(() => _busy = true);
-                    try {
-                      await _callSetUserRole(uid, newRole);
-                      _toast("Role updated to $newRole");
-                    } catch (e) {
-                      _toast("Failed: $e");
-                    } finally {
-                      if (mounted) setState(() => _busy = false);
-                    }
-                  },
-                ),
+                          setState(() => _busy = true);
+                          try {
+                            await _callSetUserRole(uid, newRole);
+                            _toast("Role updated to $newRole");
+                          } catch (e) {
+                            _toast("Failed: $e");
+                          } finally {
+                            if (mounted) setState(() => _busy = false);
+                          }
+                        },
+                      ),
               ),
               const SizedBox(width: 10),
               IconButton(
@@ -520,8 +781,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     required String value,
     required Future<void> Function(String?) onChanged,
   }) {
-    const roles = ["user", "collector", "junkshop", "admin"];
-
+    const roles = ["user", "collector", "admin"];
     final safeValue = roles.contains(value) ? value : "user";
 
     return Container(
