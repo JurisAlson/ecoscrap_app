@@ -94,7 +94,7 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
    ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
 ==================================================== */
 exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
   if (request.auth.token?.admin !== true) {
     throw new HttpsError("permission-denied", "Admin only.");
   }
@@ -103,34 +103,57 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
   const deleteJunkshopData = request.data?.deleteJunkshopData === true;
 
   if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid is required.");
+    throw new HttpsError("invalid-argument", "uid required");
   }
 
   const db = admin.firestore();
 
-  await db.collection("Users").doc(uid).delete().catch(() => {});
+  // Helper: delete docs in a subcollection in batches
+  async function deleteSubcollectionDocs(parentRef, subName, batchSize = 300) {
+    const colRef = parentRef.collection(subName);
 
-  if (deleteJunkshopData) {
-    const junkRef = db.collection("Junkshop").doc(uid);
+    while (true) {
+      const snap = await colRef.limit(batchSize).get();
+      if (snap.empty) break;
 
-    const subcols = ["inventory", "transaction", "recycleLogs"];
-    for (const sub of subcols) {
-      const snap = await junkRef.collection(sub).limit(500).get();
-      if (!snap.empty) {
-        const batch = db.batch();
-        snap.docs.forEach((d) => batch.delete(d.ref));
-        await batch.commit();
-      }
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
     }
-
-    await junkRef.delete().catch(() => {});
   }
 
-  await admin.auth().deleteUser(uid).catch((err) => {
-    if (String(err?.code) !== "auth/user-not-found") throw err;
-  });
+  try {
+    // 1) Delete Firestore user profile
+    await db.collection("Users").doc(uid).delete().catch(() => null);
 
-  return { ok: true, uid };
+    // 2) Optionally delete junkshop data + subcollections
+    if (deleteJunkshopData) {
+      const junkRef = db.collection("Junkshop").doc(uid);
+
+      // delete known subcollections (add more if you have)
+      await deleteSubcollectionDocs(junkRef, "inventory");
+      await deleteSubcollectionDocs(junkRef, "transaction");
+      await deleteSubcollectionDocs(junkRef, "recycleLogs");
+
+      // finally delete the junkshop doc itself
+      await junkRef.delete().catch(() => null);
+    }
+
+    // 3) (Optional) delete permit requests linked to uid
+    // If you store uid field in permitRequests, this works:
+    // const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
+    // const pb = db.batch();
+    // permits.docs.forEach((d) => pb.delete(d.ref));
+    // await pb.commit();
+
+    // 4) Delete Firebase Auth account LAST
+    await admin.auth().deleteUser(uid).catch(() => null);
+
+    return { ok: true, uid, deleteJunkshopData };
+  } catch (err) {
+    console.error("adminDeleteUser failed:", err);
+    throw new HttpsError("internal", err?.message || "delete failed");
+  }
 });
 
 /* ====================================================
