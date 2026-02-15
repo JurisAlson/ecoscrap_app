@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'forgot_password.dart';
 import 'AccountCreation.dart';
 import '../role_gate.dart';
@@ -40,6 +41,7 @@ class _LoginPageState extends State<LoginPage> {
 
     setState(() => _isLoading = true);
 
+
     try {
       final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email,
@@ -47,6 +49,16 @@ class _LoginPageState extends State<LoginPage> {
       );
 
       if (cred.user == null) return;
+      final u = cred.user!;
+      debugPrint("LOGIN OK UID=${u.uid} EMAIL=${u.email}");
+      debugPrint("PROJECT=${Firebase.app().options.projectId}");
+
+      try {
+        final snap = await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
+        debugPrint("ROLE DOC exists=${snap.exists} data=${snap.data()}");
+      } catch (e) {
+        debugPrint("ROLE READ FAILED: $e");
+      }
 
       if (!mounted) return;
       Navigator.pushReplacement(
