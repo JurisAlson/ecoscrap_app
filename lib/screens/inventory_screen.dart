@@ -20,7 +20,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           .collection('Junkshop')
           .doc(widget.shopID)
           .collection('inventory')
-          .orderBy('createdAt', descending: true)
+          .orderBy('updatedAt', descending: true)
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -40,7 +40,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             data['category'] ?? '',
             data['subCategory'] ?? '',
             data['notes'] ?? '',
-            (data['unitsKg'] ?? '').toString(),
+            (data['unitsKg'] ?? '').toString(), // ✅ correct
           ].join(' ').toLowerCase();
           return hay.contains(_query.toLowerCase());
         }).toList();
@@ -76,9 +76,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             final doc = items[i];
                             final data = doc.data() as Map<String, dynamic>;
 
-                            final name = data['name'] ?? 'Unnamed item';
-                            final category = data['category'] ?? 'PP WHITE';
-                            final subCategory = data['subCategory'] ?? '';
+                            final name = (data['name'] ?? 'Unnamed item').toString();
+                            final category = (data['category'] ?? '').toString();
+                            final subCategory = (data['subCategory'] ?? '').toString();
                             final unitsKg = (data['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
                             return ListTile(
@@ -94,7 +94,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
                                 style: TextStyle(color: Colors.grey.shade400),
                               ),
-                              // ✅ view-only: no trailing edit/delete
                             );
                           },
                         ),

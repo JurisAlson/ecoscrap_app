@@ -29,10 +29,7 @@ class TransactionScreen extends StatelessWidget {
         },
         backgroundColor: Colors.greenAccent,
         icon: const Icon(Icons.add, color: Colors.black),
-        label: const Text(
-          "NEW RECEIPT",
-          style: TextStyle(color: Colors.black),
-        ),
+        label: const Text("NEW RECEIPT", style: TextStyle(color: Colors.black)),
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
@@ -47,13 +44,9 @@ class TransactionScreen extends StatelessWidget {
           }
 
           final docs = snapshot.data?.docs ?? [];
-
           if (docs.isEmpty) {
             return const Center(
-              child: Text(
-                "No transactions yet",
-                style: TextStyle(color: Colors.grey),
-              ),
+              child: Text("No transactions yet", style: TextStyle(color: Colors.grey)),
             );
           }
 
@@ -62,14 +55,20 @@ class TransactionScreen extends StatelessWidget {
             itemBuilder: (context, index) {
               final data = docs[index].data() as Map<String, dynamic>;
 
-              final customerName = (data['customerName'] ?? '') as String;
-              final total = (data['totalAmount'] as num?)?.toDouble() ?? 0.0;
+              final customerName = (data['customerNameDisplay'] ??
+                      data['customerName'] ??
+                      '') as String;
+
+              final total = (data['totalAmountDisplay'] as num?)?.toDouble() ??
+                  (data['totalAmount'] as num?)?.toDouble() ??
+                  0.0;
+
               final ts = data['transactionDate'] as Timestamp?;
               final date = ts?.toDate();
 
               return ListTile(
                 title: Text(
-                  customerName.isEmpty ? "Walk-in customer" : customerName,
+                  customerName.trim().isEmpty ? "Walk-in customer" : customerName,
                   style: const TextStyle(color: Colors.white),
                 ),
                 subtitle: Text(

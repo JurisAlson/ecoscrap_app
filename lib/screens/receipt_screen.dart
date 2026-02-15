@@ -4,6 +4,34 @@ import 'package:flutter/material.dart';
 
 enum TransactionType { buy, sell }
 
+// ---------------- FIXED TAXONOMY ----------------
+const kCategories = <String>[
+  "PP White",
+  "HDPE",
+  "Black",
+  "PP Colored",
+  "PET",
+];
+
+const kSubCategories = <String>[
+  "Plastic Bottles",
+  "Water Gallon",
+  "Tupperware",
+  "Containers",
+  "Mixed Plastic",
+];
+
+// Deterministic inventory doc id so we never need to query
+String inventoryDocIdFor(String category, String subCategory) {
+  String norm(String s) => s
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+      .replaceAll(RegExp(r'_+'), '_')
+      .replaceAll(RegExp(r'^_|_$'), '');
+  return "${norm(category)}__${norm(subCategory)}";
+}
+
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
 
@@ -21,7 +49,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   final List<_ReceiptItem> _items = [];
 
   TransactionType _type = TransactionType.buy;
-
   bool _saving = false;
 
   double get _totalAmount {
@@ -48,22 +75,21 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     super.dispose();
   }
 
-  // ✅ Inventory picker
-  Future<void> _pickInventoryItem(_ReceiptItem item) async {
-    final picked = await showModalBottomSheet<Map<String, dynamic>>(
+  // ✅ Fixed picker for Category + Subcategory (no Firestore dependency)
+  Future<void> _pickFixedItem(_ReceiptItem item) async {
+    final picked = await showModalBottomSheet<Map<String, String>>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _InventoryPickerSheet(shopID: widget.shopID),
+      builder: (_) => const _FixedItemPickerSheet(),
     );
 
     if (picked == null) return;
 
     setState(() {
-      item.inventoryDocId = picked['id'] as String;
-      item.itemNameCtrl.text = (picked['name'] ?? '').toString();
-      item.categorySnapshot = (picked['category'] ?? '').toString();
-      item.subCategorySnapshot = (picked['subCategory'] ?? '').toString();
+      item.category = picked['category']!;
+      item.subCategory = picked['subCategory']!;
+      item.displayName = "${item.category} • ${item.subCategory}";
     });
   }
 
@@ -80,33 +106,40 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     final itemsPayload = <Map<String, dynamic>>[];
 
     for (final it in _items) {
-      if (it.inventoryDocId == null) {
+      if (it.category == null || it.subCategory == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text("Please select an inventory item for each line.")),
+          const SnackBar(content: Text("Please select Category + Subcategory for each line.")),
         );
         return;
       }
 
-      final name = it.itemNameCtrl.text.trim();
+      // NOTE: must be numeric only (no ₱, no commas)
       final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
       final subtotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
 
       if (weightKg <= 0 || subtotal <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text("Weight and subtotal must be greater than 0.")),
+          const SnackBar(content: Text("Weight and subtotal must be greater than 0.")),
         );
         return;
       }
 
+      final category = it.category!;
+      final subCategory = it.subCategory!;
+      final invId = inventoryDocIdFor(category, subCategory);
+
       itemsPayload.add({
-        'inventoryDocId': it.inventoryDocId,
-        'itemName': name,
-        'category': it.categorySnapshot ?? '',
-        'subCategory': it.subCategorySnapshot ?? '',
+        'inventoryDocId': invId, // ✅ deterministic
+        'itemName': it.displayName, // display label
+        'category': category,
+        'subCategory': subCategory,
+
         'weightKg': weightKg,
         'subtotal': subtotal,
+
+        // ✅ display-safe duplicates (in case encryption overwrites plaintext)
+        'weightKgDisplay': weightKg,
+        'subtotalDisplay': subtotal,
       });
     }
 
@@ -117,12 +150,14 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     try {
       final db = FirebaseFirestore.instance;
       final shopRef = db.collection('Junkshop').doc(widget.shopID);
-      final txRef = shopRef.collection('transaction').doc(); // create id first
+      final txRef = shopRef.collection('transaction').doc();
 
       await db.runTransaction((trx) async {
-        // 1) Update inventory first (all must succeed)
+        // 1) Update/create inventory
         for (final item in itemsPayload) {
-          final invId = (item['inventoryDocId'] ?? '').toString();
+          final invId = (item['inventoryDocId'] as String);
+          final category = (item['category'] as String);
+          final subCategory = (item['subCategory'] as String);
           final weightKg = (item['weightKg'] as num).toDouble();
 
           final delta = _type == TransactionType.buy ? weightKg : -weightKg;
@@ -131,30 +166,48 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           final invSnap = await trx.get(invRef);
 
           if (!invSnap.exists) {
-            throw Exception("Inventory item not found: ${item['itemName']}");
+            if (_type == TransactionType.sell) {
+              throw Exception("No stock yet for $category • $subCategory. Use BUY first.");
+            }
+
+            trx.set(invRef, {
+              'name': "$category • $subCategory",
+              'category': category,
+              'subCategory': subCategory,
+              'notes': '',
+              'unitsKg': 0.0,
+              'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
           }
 
-          final currentKg =
-              (invSnap.data()?['unitsKg'] as num?)?.toDouble() ?? 0.0;
+          final currentKg = invSnap.exists
+              ? ((invSnap.data()?['unitsKg'] as num?)?.toDouble() ?? 0.0)
+              : 0.0;
+
           final nextKg = currentKg + delta;
 
           if (nextKg < 0) {
-            throw Exception(
-                "Not enough stock for ${item['itemName']} (current: $currentKg kg)");
+            throw Exception("Not enough stock for $category • $subCategory (current: $currentKg kg)");
           }
 
-          trx.update(invRef, {
+          trx.set(invRef, {
             'unitsKg': nextKg,
             'updatedAt': FieldValue.serverTimestamp(),
-          });
+          }, SetOptions(merge: true));
         }
 
-        // 2) Write the transaction ONLY if inventory updates succeeded
+        // 2) Write transaction
         trx.set(txRef, {
-          'type': _type.name, // "buy" or "sell"
+          'type': _type.name,
           'customerName': customerName,
-          'items': itemsPayload,
+
+          // ✅ display-safe duplicates
+          'customerNameDisplay': customerName,
           'totalAmount': _totalAmount,
+          'totalAmountDisplay': _totalAmount,
+
+          'items': itemsPayload,
           'transactionDate': FieldValue.serverTimestamp(),
           'createdAt': FieldValue.serverTimestamp(),
           'inventoryDeducted': true,
@@ -191,7 +244,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ✅ BUY/SELL toggle
             _glassCard(
               child: Row(
                 children: [
@@ -207,14 +259,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                     child: _typeChip(
                       label: "SELL (minus stock)",
                       active: _type == TransactionType.sell,
-                      onTap: () =>
-                          setState(() => _type = TransactionType.sell),
+                      onTap: () => setState(() => _type = TransactionType.sell),
                     ),
                   ),
                 ],
               ),
             ),
-
             const SizedBox(height: 16),
 
             _glassCard(
@@ -248,8 +298,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 TextButton.icon(
                   onPressed: _addItem,
                   icon: const Icon(Icons.add, color: Colors.green),
-                  label: const Text("Add Item",
-                      style: TextStyle(color: Colors.green)),
+                  label: const Text("Add Item", style: TextStyle(color: Colors.green)),
                 ),
               ],
             ),
@@ -260,9 +309,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               final index = entry.key;
               final item = entry.value;
 
-              final pickedLabel = item.inventoryDocId == null
+              final pickedLabel = (item.category == null || item.subCategory == null)
                   ? "Select Item"
-                  : "${item.itemNameCtrl.text} • ${item.categorySnapshot ?? ''}";
+                  : item.displayName;
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -280,26 +329,20 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                 SizedBox(
                                   width: double.infinity,
                                   child: OutlinedButton.icon(
-                                    onPressed: () => _pickInventoryItem(item),
-                                    icon: const Icon(Icons.inventory_2,
-                                        color: Colors.white),
+                                    onPressed: () => _pickFixedItem(item),
+                                    icon: const Icon(Icons.inventory_2, color: Colors.white),
                                     label: Text(
                                       pickedLabel,
-                                      style:
-                                          const TextStyle(color: Colors.white),
+                                      style: const TextStyle(color: Colors.white),
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                     style: OutlinedButton.styleFrom(
-                                      side: BorderSide(
-                                          color: Colors.white.withOpacity(0.2)),
+                                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
                                       shape: RoundedRectangleBorder(
-                                        borderRadius:
-                                            BorderRadius.circular(14),
+                                        borderRadius: BorderRadius.circular(14),
                                       ),
-                                      backgroundColor:
-                                          Colors.black.withOpacity(0.2),
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 14, horizontal: 12),
+                                      backgroundColor: Colors.black.withOpacity(0.2),
+                                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                                     ),
                                   ),
                                 ),
@@ -319,10 +362,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                             child: _textField(
                               controller: item.weightCtrl,
                               label: "Weight (kg)",
-                              hint: "0.0",
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                      decimal: true),
+                              hint: "10",
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
                               onChanged: (_) => setState(() {}),
                             ),
                           ),
@@ -331,10 +372,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                             child: _textField(
                               controller: item.subtotalCtrl,
                               label: "Subtotal (₱)",
-                              hint: "0.00",
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                      decimal: true),
+                              hint: "200",
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
                               onChanged: (_) => setState(() {}),
                             ),
                           ),
@@ -354,8 +393,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 children: [
                   const Text(
                     "Total Amount",
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold),
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                   Text(
                     "₱${_totalAmount.toStringAsFixed(2)}",
@@ -378,13 +416,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 onPressed: _saving ? null : _saveReceipt,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primaryColor,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                 ),
                 child: Text(
                   _saving ? "SAVING..." : "SAVE RECEIPT",
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                  style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
               ),
             ),
@@ -403,7 +439,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   // ===== UI HELPERS =====
-
   Widget _typeChip({
     required String label,
     required bool active,
@@ -415,13 +450,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
         decoration: BoxDecoration(
-          color:
-              active ? primaryColor.withOpacity(0.22) : Colors.white.withOpacity(0.06),
+          color: active ? primaryColor.withOpacity(0.22) : Colors.white.withOpacity(0.06),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: active
-                ? primaryColor.withOpacity(0.65)
-                : Colors.white.withOpacity(0.08),
+            color: active ? primaryColor.withOpacity(0.65) : Colors.white.withOpacity(0.08),
           ),
         ),
         child: Text(
@@ -503,144 +535,107 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 }
 
-// ===== Receipt line item model =====
 class _ReceiptItem {
-  final TextEditingController itemNameCtrl = TextEditingController(); // display only
   final TextEditingController weightCtrl = TextEditingController();
   final TextEditingController subtotalCtrl = TextEditingController();
 
-  String? inventoryDocId;
-  String? categorySnapshot;
-  String? subCategorySnapshot;
+  String? category;
+  String? subCategory;
+  String displayName = "";
 
   double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
 
   void dispose() {
-    itemNameCtrl.dispose();
     weightCtrl.dispose();
     subtotalCtrl.dispose();
   }
 }
 
-// ===== Bottom sheet inventory picker =====
-class _InventoryPickerSheet extends StatefulWidget {
-  final String shopID;
-
-  const _InventoryPickerSheet({required this.shopID});
+class _FixedItemPickerSheet extends StatefulWidget {
+  const _FixedItemPickerSheet();
 
   @override
-  State<_InventoryPickerSheet> createState() => _InventoryPickerSheetState();
+  State<_FixedItemPickerSheet> createState() => _FixedItemPickerSheetState();
 }
 
-class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
-  String q = "";
+class _FixedItemPickerSheetState extends State<_FixedItemPickerSheet> {
+  String _category = kCategories.first;
+  String _sub = kSubCategories.first;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: MediaQuery.of(context).size.height * 0.85,
+      height: MediaQuery.of(context).size.height * 0.55,
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         border: Border.all(color: Colors.white.withOpacity(0.08)),
       ),
-      child: Column(
-        children: [
-          const SizedBox(height: 10),
-          Container(
-            width: 40,
-            height: 5,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(20),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextField(
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: "Search inventory...",
-                hintStyle: const TextStyle(color: Color(0xFF64748B)),
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white.withOpacity(0.06),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Container(
+              width: 40,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(20),
               ),
-              onChanged: (v) => setState(() => q = v.trim().toLowerCase()),
             ),
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('Junkshop')
-                  .doc(widget.shopID)
-                  .collection('inventory')
-                  .orderBy('createdAt', descending: true)
-                  .snapshots(),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final docs = snap.data?.docs ?? [];
-
-                final filtered = docs.where((d) {
-                  if (q.isEmpty) return true;
-                  final m = d.data() as Map<String, dynamic>;
-                  final hay = [
-                    (m['name'] ?? '').toString(),
-                    (m['category'] ?? '').toString(),
-                    (m['subCategory'] ?? '').toString(),
-                  ].join(' ').toLowerCase();
-                  return hay.contains(q);
-                }).toList();
-
-                if (filtered.isEmpty) {
-                  return const Center(
-                    child: Text("No matching items", style: TextStyle(color: Colors.grey)),
-                  );
-                }
-
-                return ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: filtered.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, i) {
-                    final d = filtered[i];
-                    final m = d.data() as Map<String, dynamic>;
-
-                    final name = (m['name'] ?? '').toString();
-                    final category = (m['category'] ?? '').toString();
-                    final subCategory = (m['subCategory'] ?? '').toString();
-                    final unitsKg = (m['unitsKg'] as num?)?.toDouble() ?? 0.0;
-
-                    return ListTile(
-                      tileColor: Colors.white.withOpacity(0.06),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      title: Text(name, style: const TextStyle(color: Colors.white)),
-                      subtitle: Text(
-                        "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                      onTap: () {
-                        Navigator.pop(context, {
-                          'id': d.id,
-                          'name': name,
-                          'category': category,
-                          'subCategory': subCategory,
-                          'unitsKg': unitsKg,
-                        });
-                      },
-                    );
-                  },
-                );
-              },
+            const SizedBox(height: 14),
+            const Text(
+              "Select Category & Subcategory",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              value: _category,
+              dropdownColor: const Color(0xFF0F172A),
+              items: kCategories
+                  .map((c) => DropdownMenuItem(
+                        value: c,
+                        child: Text(c, style: const TextStyle(color: Colors.white)),
+                      ))
+                  .toList(),
+              onChanged: (v) => setState(() => _category = v!),
+              decoration: const InputDecoration(
+                labelText: "Category",
+                labelStyle: TextStyle(color: Colors.white70),
+              ),
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              value: _sub,
+              dropdownColor: const Color(0xFF0F172A),
+              items: kSubCategories
+                  .map((s) => DropdownMenuItem(
+                        value: s,
+                        child: Text(s, style: const TextStyle(color: Colors.white)),
+                      ))
+                  .toList(),
+              onChanged: (v) => setState(() => _sub = v!),
+              decoration: const InputDecoration(
+                labelText: "Subcategory",
+                labelStyle: TextStyle(color: Colors.white70),
+              ),
+            ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context, {
+                    'category': _category,
+                    'subCategory': _sub,
+                  });
+                },
+                child: const Text("SELECT"),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

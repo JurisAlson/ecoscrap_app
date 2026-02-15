@@ -635,6 +635,7 @@ exports.runPermitCleanupNow = onRequest(
 /* ====================================================
    EXISTING INVENTORY FUNCTION (UNCHANGED)
 ==================================================== */
+/*
 exports.deductInventoryOnTransactionCreate = onDocumentCreated(
   {
     document: "Junkshop/{shopId}/transaction/{txId}",
@@ -677,4 +678,4 @@ exports.deductInventoryOnTransactionCreate = onDocumentCreated(
       });
     });
   }
-);
+); */
