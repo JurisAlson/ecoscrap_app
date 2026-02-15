@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 
 class InventoryScreen extends StatefulWidget {
   final String shopID;
-
   const InventoryScreen({super.key, required this.shopID});
 
   @override
@@ -15,7 +14,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('Junkshop')
           .doc(widget.shopID)
@@ -34,13 +33,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
         final items = docs.where((doc) {
           if (_query.isEmpty) return true;
-          final data = doc.data() as Map<String, dynamic>;
+          final data = doc.data();
           final hay = [
-            data['name'] ?? '',
-            data['category'] ?? '',
-            data['subCategory'] ?? '',
-            data['notes'] ?? '',
-            (data['unitsKg'] ?? '').toString(), // ✅ correct
+            (data['name'] ?? '').toString(),
+            (data['category'] ?? '').toString(),
+            (data['subCategory'] ?? '').toString(),
+            (data['notes'] ?? '').toString(),
+            (data['unitsKg'] ?? '').toString(),
           ].join(' ').toLowerCase();
           return hay.contains(_query.toLowerCase());
         }).toList();
@@ -68,13 +67,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 const SizedBox(height: 12),
                 Expanded(
                   child: items.isEmpty
-                      ? _emptyState()
+                      ? const Center(
+                          child: Text("No inventory items yet",
+                              style: TextStyle(color: Colors.grey)),
+                        )
                       : ListView.separated(
                           itemCount: items.length,
                           separatorBuilder: (_, __) => const SizedBox(height: 10),
                           itemBuilder: (context, i) {
-                            final doc = items[i];
-                            final data = doc.data() as Map<String, dynamic>;
+                            final data = items[i].data();
 
                             final name = (data['name'] ?? 'Unnamed item').toString();
                             final category = (data['category'] ?? '').toString();
@@ -88,7 +89,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               ),
                               title: Text(
                                 name,
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                               subtitle: Text(
                                 "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
@@ -103,25 +107,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
         );
       },
-    );
-  }
-
-  Widget _emptyState() {
-    return const Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.inventory_2, size: 64, color: Colors.grey),
-          SizedBox(height: 12),
-          Text("No inventory items yet", style: TextStyle(color: Colors.grey)),
-          SizedBox(height: 6),
-          Text(
-            "Add items through Transactions (Buy/Sell).",
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
     );
   }
 }

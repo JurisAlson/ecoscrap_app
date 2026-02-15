@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 enum TransactionType { buy, sell }
 
-// ---------------- FIXED TAXONOMY ----------------
+// ---------------- FIXED TAXONOMY (BUY) ----------------
 const kCategories = <String>[
   "PP White",
   "HDPE",
@@ -21,7 +21,7 @@ const kSubCategories = <String>[
   "Mixed Plastic",
 ];
 
-// Deterministic inventory doc id so we never need to query
+// Deterministic inventory doc id (BUY creates/updates same doc consistently)
 String inventoryDocIdFor(String category, String subCategory) {
   String norm(String s) => s
       .trim()
@@ -34,7 +34,6 @@ String inventoryDocIdFor(String category, String subCategory) {
 
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
-
   const ReceiptScreen({super.key, required this.shopID});
 
   @override
@@ -75,8 +74,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     super.dispose();
   }
 
-  // ✅ Fixed picker for Category + Subcategory (no Firestore dependency)
-  Future<void> _pickFixedItem(_ReceiptItem item) async {
+  // ✅ BUY: fixed taxonomy picker
+  Future<void> _pickBuyItem(_ReceiptItem item) async {
     final picked = await showModalBottomSheet<Map<String, String>>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -86,11 +85,119 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     if (picked == null) return;
 
+    final category = picked['category']!;
+    final subCategory = picked['subCategory']!;
+    final invId = inventoryDocIdFor(category, subCategory);
+
     setState(() {
-      item.category = picked['category']!;
-      item.subCategory = picked['subCategory']!;
-      item.displayName = "${item.category} • ${item.subCategory}";
+      item.inventoryDocId = invId;
+      item.category = category;
+      item.subCategory = subCategory;
+      item.displayName = "$category • $subCategory";
+      item.availableKg = 0.0; // not needed for BUY
     });
+  }
+
+  // ✅ SELL: pick from existing inventory docs, then ask kg + sold price
+  Future<void> _pickSellItem(_ReceiptItem item) async {
+    final selected = await showModalBottomSheet<_InventoryPick>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _InventoryPickerSheet(shopID: widget.shopID),
+    );
+
+    if (selected == null) return;
+
+    final sellInputs = await _askSellInputs(
+      title: selected.displayName,
+      availableKg: selected.unitsKg,
+    );
+    if (sellInputs == null) return;
+
+    setState(() {
+      item.inventoryDocId = selected.docId;
+      item.category = selected.category;
+      item.subCategory = selected.subCategory;
+      item.displayName = selected.displayName;
+      item.availableKg = selected.unitsKg;
+
+      item.weightCtrl.text = sellInputs.weightKg.toString();
+      item.subtotalCtrl.text = sellInputs.subtotal.toString();
+    });
+  }
+
+  // ✅ single entrypoint for the Select Item button
+  Future<void> _pickItem(_ReceiptItem item) async {
+    if (_type == TransactionType.buy) {
+      await _pickBuyItem(item);
+    } else {
+      await _pickSellItem(item);
+    }
+  }
+
+  Future<_SellInputs?> _askSellInputs({
+    required String title,
+    required double availableKg,
+  }) async {
+    final weightCtrl = TextEditingController();
+    final subtotalCtrl = TextEditingController();
+
+    _showError(String msg) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+
+    return showDialog<_SellInputs>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text("Sell: $title"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Available: ${availableKg.toStringAsFixed(2)} kg"),
+            const SizedBox(height: 12),
+            TextField(
+              controller: weightCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: "Weight to sell (kg)"),
+            ),
+            TextField(
+              controller: subtotalCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: "Sold price (₱)"),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final w = double.tryParse(weightCtrl.text.trim()) ?? 0.0;
+              final s = double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
+
+              if (w <= 0) {
+                _showError("Weight must be greater than 0.");
+                return;
+              }
+              if (s <= 0) {
+                _showError("Sold price must be greater than 0.");
+                return;
+              }
+              if (w > availableKg) {
+                _showError("Not enough stock. Available: ${availableKg.toStringAsFixed(2)} kg");
+                return;
+              }
+
+              Navigator.pop(context, _SellInputs(weightKg: w, subtotal: s));
+            },
+            child: const Text("Add"),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _saveReceipt() async {
@@ -103,17 +210,17 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       return;
     }
 
-    final itemsPayload = <Map<String, dynamic>>[];
+    final customerName = _customerCtrl.text.trim();
 
+    final itemsPayload = <Map<String, dynamic>>[];
     for (final it in _items) {
-      if (it.category == null || it.subCategory == null) {
+      if (it.inventoryDocId == null || it.category == null || it.subCategory == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please select Category + Subcategory for each line.")),
+          const SnackBar(content: Text("Please select an item for each line.")),
         );
         return;
       }
 
-      // NOTE: must be numeric only (no ₱, no commas)
       final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
       final subtotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
 
@@ -124,26 +231,23 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         return;
       }
 
-      final category = it.category!;
-      final subCategory = it.subCategory!;
-      final invId = inventoryDocIdFor(category, subCategory);
-
       itemsPayload.add({
-        'inventoryDocId': invId, // ✅ deterministic
-        'itemName': it.displayName, // display label
-        'category': category,
-        'subCategory': subCategory,
+        // used for inventory write:
+        'inventoryDocId': it.inventoryDocId,
+        'category': it.category,
+        'subCategory': it.subCategory,
 
+        // receipt display:
+        'itemName': it.displayName,
         'weightKg': weightKg,
         'subtotal': subtotal,
 
-        // ✅ display-safe duplicates (in case encryption overwrites plaintext)
+        // ✅ display-safe duplicates (survive encryption)
+        'itemNameDisplay': it.displayName,
         'weightKgDisplay': weightKg,
         'subtotalDisplay': subtotal,
       });
     }
-
-    final customerName = _customerCtrl.text.trim();
 
     setState(() => _saving = true);
 
@@ -153,7 +257,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       final txRef = shopRef.collection('transaction').doc();
 
       await db.runTransaction((trx) async {
-        // 1) Update/create inventory
+        // 1) Update inventory
         for (final item in itemsPayload) {
           final invId = (item['inventoryDocId'] as String);
           final category = (item['category'] as String);
@@ -165,6 +269,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           final invRef = shopRef.collection('inventory').doc(invId);
           final invSnap = await trx.get(invRef);
 
+          // If missing:
+          // - BUY -> create
+          // - SELL -> block (must exist)
           if (!invSnap.exists) {
             if (_type == TransactionType.sell) {
               throw Exception("No stock yet for $category • $subCategory. Use BUY first.");
@@ -181,37 +288,37 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             }, SetOptions(merge: true));
           }
 
-          final currentKg = invSnap.exists
-              ? ((invSnap.data()?['unitsKg'] as num?)?.toDouble() ?? 0.0)
-              : 0.0;
-
-          final nextKg = currentKg + delta;
-
-          if (nextKg < 0) {
-            throw Exception("Not enough stock for $category • $subCategory (current: $currentKg kg)");
+          // SELL protection
+          if (_type == TransactionType.sell) {
+            final currentKg = invSnap.exists
+                ? ((invSnap.data()?['unitsKg'] as num?)?.toDouble() ?? 0.0)
+                : 0.0;
+            if (currentKg + delta < 0) {
+              throw Exception("Not enough stock for $category • $subCategory (current: $currentKg kg)");
+            }
           }
 
+          // ✅ safer inventory update
           trx.set(invRef, {
-            'unitsKg': nextKg,
+            'unitsKg': FieldValue.increment(delta),
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
 
         // 2) Write transaction
         trx.set(txRef, {
-          'type': _type.name,
+          'type': _type.name, // buy/sell
+
           'customerName': customerName,
+          'totalAmount': _totalAmount,
+          'items': itemsPayload,
+
+          'transactionDate': FieldValue.serverTimestamp(),
+          'createdAt': FieldValue.serverTimestamp(),
 
           // ✅ display-safe duplicates
           'customerNameDisplay': customerName,
-          'totalAmount': _totalAmount,
           'totalAmountDisplay': _totalAmount,
-
-          'items': itemsPayload,
-          'transactionDate': FieldValue.serverTimestamp(),
-          'createdAt': FieldValue.serverTimestamp(),
-          'inventoryDeducted': true,
-          'inventoryDeductedAt': FieldValue.serverTimestamp(),
         });
       });
 
@@ -257,7 +364,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: _typeChip(
-                      label: "SELL (minus stock)",
+                      label: "SELL (from inventory)",
                       active: _type == TransactionType.sell,
                       onTap: () => setState(() => _type = TransactionType.sell),
                     ),
@@ -309,8 +416,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               final index = entry.key;
               final item = entry.value;
 
-              final pickedLabel = (item.category == null || item.subCategory == null)
-                  ? "Select Item"
+              final pickedLabel = (item.inventoryDocId == null)
+                  ? (_type == TransactionType.buy ? "Select item (BUY list)" : "Select item from Inventory")
                   : item.displayName;
 
               return Padding(
@@ -329,7 +436,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                 SizedBox(
                                   width: double.infinity,
                                   child: OutlinedButton.icon(
-                                    onPressed: () => _pickFixedItem(item),
+                                    onPressed: () => _pickItem(item),
                                     icon: const Icon(Icons.inventory_2, color: Colors.white),
                                     label: Text(
                                       pickedLabel,
@@ -346,6 +453,14 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                     ),
                                   ),
                                 ),
+                                if (_type == TransactionType.sell && item.inventoryDocId != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(
+                                      "Available: ${item.availableKg.toStringAsFixed(2)} kg",
+                                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
@@ -535,13 +650,16 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 }
 
+// ===== Receipt line item model =====
 class _ReceiptItem {
   final TextEditingController weightCtrl = TextEditingController();
   final TextEditingController subtotalCtrl = TextEditingController();
 
+  String? inventoryDocId;
   String? category;
   String? subCategory;
   String displayName = "";
+  double availableKg = 0.0;
 
   double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
 
@@ -551,6 +669,13 @@ class _ReceiptItem {
   }
 }
 
+class _SellInputs {
+  final double weightKg;
+  final double subtotal;
+  _SellInputs({required this.weightKg, required this.subtotal});
+}
+
+// ===== Fixed picker sheet (BUY) =====
 class _FixedItemPickerSheet extends StatefulWidget {
   const _FixedItemPickerSheet();
 
@@ -632,6 +757,141 @@ class _FixedItemPickerSheetState extends State<_FixedItemPickerSheet> {
                   });
                 },
                 child: const Text("SELECT"),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ===== Inventory picker (SELL) =====
+class _InventoryPick {
+  final String docId;
+  final String category;
+  final String subCategory;
+  final String displayName;
+  final double unitsKg;
+
+  _InventoryPick({
+    required this.docId,
+    required this.category,
+    required this.subCategory,
+    required this.displayName,
+    required this.unitsKg,
+  });
+}
+
+class _InventoryPickerSheet extends StatefulWidget {
+  final String shopID;
+  const _InventoryPickerSheet({required this.shopID});
+
+  @override
+  State<_InventoryPickerSheet> createState() => _InventoryPickerSheetState();
+}
+
+class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
+  String q = "";
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.78,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            TextField(
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: "Search inventory...",
+                hintStyle: const TextStyle(color: Colors.white54),
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.06),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onChanged: (v) => setState(() => q = v.trim().toLowerCase()),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('Junkshop')
+                    .doc(widget.shopID)
+                    .collection('inventory')
+                    .snapshots(),
+                builder: (context, snap) {
+                  if (!snap.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final docs = snap.data!.docs;
+
+                  final filtered = docs.where((d) {
+                    final data = d.data();
+                    final name = (data['name'] ?? '').toString().toLowerCase();
+                    final cat = (data['category'] ?? '').toString().toLowerCase();
+                    final sub = (data['subCategory'] ?? '').toString().toLowerCase();
+                    final units = (data['unitsKg'] as num?)?.toDouble() ?? 0.0;
+
+                    // ✅ only show in-stock items for SELL
+                    if (units <= 0) return false;
+
+                    final hay = "$name $cat $sub $units";
+                    return q.isEmpty || hay.contains(q);
+                  }).toList();
+
+                  if (filtered.isEmpty) {
+                    return const Center(
+                      child: Text("No items in stock", style: TextStyle(color: Colors.white54)),
+                    );
+                  }
+
+                  return ListView.separated(
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, i) {
+                      final doc = filtered[i];
+                      final data = doc.data();
+
+                      final category = (data['category'] ?? '').toString();
+                      final subCategory = (data['subCategory'] ?? '').toString();
+                      final name = (data['name'] ?? "$category • $subCategory").toString();
+                      final unitsKg = (data['unitsKg'] as num?)?.toDouble() ?? 0.0;
+
+                      final display = name.isNotEmpty ? name : "$category • $subCategory";
+
+                      return ListTile(
+                        tileColor: Colors.white.withOpacity(0.06),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        title: Text(display, style: const TextStyle(color: Colors.white)),
+                        subtitle: Text(
+                          "${unitsKg.toStringAsFixed(2)} kg available",
+                          style: const TextStyle(color: Colors.white54),
+                        ),
+                        onTap: () {
+                          Navigator.pop(
+                            context,
+                            _InventoryPick(
+                              docId: doc.id,
+                              category: category,
+                              subCategory: subCategory,
+                              displayName: display,
+                              unitsKg: unitsKg,
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
               ),
             ),
           ],
