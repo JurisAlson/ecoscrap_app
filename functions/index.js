@@ -22,7 +22,13 @@ exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
   }
 
   const uid = request.data?.uid;
-  const role = String(request.data?.role || "").trim().toLowerCase();
+  let role = String(request.data?.role || "").trim().toLowerCase();
+
+  // normalize common variants
+  if (role === "users") role = "user";
+  if (role === "admins") role = "admin";
+  if (role === "collectors") role = "collector";
+  if (role === "junkshops") role = "junkshop";
 
   const allowed = ["user", "collector", "junkshop", "admin"];
   if (!uid || typeof uid !== "string") {
@@ -54,16 +60,32 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
     throw new HttpsError("invalid-argument", "uid required");
   }
 
+  // 1) Mark junkshop verified in Firestore
   await admin.firestore().collection("Junkshop").doc(uid).set(
-    { verified: true, verifiedAt: admin.firestore.FieldValue.serverTimestamp() },
+    {
+      verified: true,
+      verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
     { merge: true }
   );
 
-  // Optional but recommended: ensure routing role is correct too
+  // 2) Keep Users role in sync (for RBAC UI)
   await admin.firestore().collection("Users").doc(uid).set(
     { Roles: "junkshop" },
     { merge: true }
   );
+
+  // 3) Keep Auth custom claims in sync (for routing/guards)
+  const user = await admin.auth().getUser(uid);
+  const existing = user.customClaims || {};
+
+  await admin.auth().setCustomUserClaims(uid, {
+    ...existing,
+    junkshop: true,
+    collector: false,
+    // keep admin if already admin
+    admin: existing.admin === true,
+  });
 
   return { ok: true, uid };
 });
@@ -72,76 +94,125 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
    ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
 ==================================================== */
 exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
   if (request.auth.token?.admin !== true) {
     throw new HttpsError("permission-denied", "Admin only.");
   }
 
   const uid = request.data?.uid;
-  const deleteJunkshopData = request.data?.deleteJunkshopData === true;
-
   if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid is required.");
+    throw new HttpsError("invalid-argument", "uid required");
   }
 
   const db = admin.firestore();
 
-  // Delete Users doc
-  await db.collection("Users").doc(uid).delete().catch(() => {});
+  try {
+    // 🔥 Delete Users profile
+    await db.collection("Users").doc(uid).delete().catch(() => null);
 
-  // Optional: delete Junkshop + subcollections
-  if (deleteJunkshopData) {
-    const junkRef = db.collection("Junkshop").doc(uid);
+    // 🔥 Delete Junkshop profile
+    await db.collection("Junkshop").doc(uid).delete().catch(() => null);
 
-    const subcols = ["inventory", "transaction", "recycleLogs"];
-    for (const sub of subcols) {
-      const snap = await junkRef.collection(sub).limit(500).get();
-      if (!snap.empty) {
-        const batch = db.batch();
-        snap.docs.forEach((d) => batch.delete(d.ref));
-        await batch.commit();
-      }
-    }
+    // 🔥 Delete Permit Requests
+    const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
+    const batch = db.batch();
+    permits.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit().catch(() => null);
 
-    await junkRef.delete().catch(() => {});
+    // 🔥 Delete Firebase Auth account
+    await admin.auth().deleteUser(uid);
+
+    return { ok: true, uid };
+
+  } catch (err) {
+    console.error("adminDeleteUser error:", err);
+    throw new HttpsError("internal", err.message);
   }
-
-  // Delete Auth user
-  await admin.auth().deleteUser(uid).catch((err) => {
-    if (String(err?.code) !== "auth/user-not-found") throw err;
-  });
-
-  return { ok: true, uid };
 });
 
 /* ====================================================
    OWNER-ONLY: Grant/Revoke admin claim
-   IMPORTANT: user must re-login to refresh token
+   IMPORTANT: user must re-login/refresh token to see claim
 ==================================================== */
-exports.setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
-
-  const callerEmail = String(request.auth.token.email || "").toLowerCase();
-  if (callerEmail !== "jurisalson@gmail.com") {
-    throw new HttpsError("permission-denied", "Only project owner can grant admin.");
+exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  if (request.auth.token?.admin !== true) {
+    throw new HttpsError("permission-denied", "Admin only.");
   }
 
   const uid = request.data?.uid;
-  const makeAdmin = request.data?.admin === true;
-
   if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid is required.");
+    throw new HttpsError("invalid-argument", "uid required");
   }
 
-  await admin.auth().setCustomUserClaims(uid, { admin: makeAdmin });
+  const db = admin.firestore();
 
-  return {
-    ok: true,
-    uid,
-    admin: makeAdmin,
-    note: "User must sign out/in to refresh the token.",
-  };
+  try {
+    // 🔥 Delete Users profile
+    await db.collection("Users").doc(uid).delete().catch(() => null);
+
+    // 🔥 Delete Junkshop profile
+    await db.collection("Junkshop").doc(uid).delete().catch(() => null);
+
+    // 🔥 Delete Permit Requests
+    const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
+    const batch = db.batch();
+    permits.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit().catch(() => null);
+
+    // 🔥 Delete Firebase Auth account
+    await admin.auth().deleteUser(uid);
+
+    return { ok: true, uid };
+
+  } catch (err) {
+    console.error("adminDeleteUser error:", err);
+    throw new HttpsError("internal", err.message);
+  }
 });
+
+/* ====================================================
+   Auto-sync claims whenever Users/{uid}.Roles changes
+   NOTE: preserves existiqng claims
+==================================================== */
+exports.syncRoleClaims = onDocumentWritten(
+  { document: "Users/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    try {
+      const beforeSnap = event.data?.before;
+      const afterSnap = event.data?.after;
+      if (!afterSnap?.exists) return;
+
+      const before = beforeSnap?.data() || {};
+      const after = afterSnap.data() || {};
+      const uid = event.params.uid;
+
+      const beforeRole = String(before.Roles || before.roles || "").trim().toLowerCase();
+      let role = String(after.Roles || after.roles || "").trim().toLowerCase();
+
+      // normalize
+      if (role === "users") role = "user";
+      if (role === "admins") role = "admin";
+      if (role === "collectors") role = "collector";
+      if (role === "junkshops") role = "junkshop";
+
+      if (beforeRole === role) return; // ✅ no change, skip
+
+      const roleClaims = {
+        admin: role === "admin",
+        collector: role === "collector",
+        junkshop: role === "junkshop",
+      };
+
+      const existing = (await admin.auth().getUser(uid)).customClaims || {};
+      await admin.auth().setCustomUserClaims(uid, { ...existing, ...roleClaims });
+
+      logger.info("RBAC Claims synced", { uid, role, roleClaims });
+    } catch (e) {
+      logger.error("syncRoleClaims FAILED", { error: String(e), stack: e?.stack });
+    }
+  }
+);
 
 /* ====================================================
    KEYS

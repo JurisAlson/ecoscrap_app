@@ -2,6 +2,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class AdminUsersDashboardPage extends StatefulWidget {
   const AdminUsersDashboardPage({super.key});
@@ -15,18 +17,46 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
   final bgColor = const Color(0xFF0F172A);
 
   String _query = "";
+  bool _busy = false;
 
-  /// ✅ DEBUG → Shows Auth Claims
+  // ---------- Helpers ----------
+  String _normRole(dynamic raw) {
+    final s = (raw ?? "").toString().trim().toLowerCase();
+    if (s == "users" || s == "user" || s == "household" || s == "households") return "user";
+    if (s == "admins" || s == "admin") return "admin";
+    if (s == "collectors" || s == "collector") return "collector";
+    if (s == "junkshops" || s == "junkshop") return "junkshop";
+    return "unknown";
+  }
+
+  bool _matchesQuery(List<String> fields) {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return fields.any((f) => f.toLowerCase().contains(q));
+  }
+
+  FirebaseFunctions get _fn => FirebaseFunctions.instanceFor(region: "asia-southeast1");
+
+  Future<void> _callSetUserRole(String uid, String role) async {
+    final callable = _fn.httpsCallable("setUserRole");
+    await callable.call({"uid": uid, "role": role});
+  }
+
+  Future<void> _callVerifyJunkshop(String uid) async {
+    final callable = _fn.httpsCallable("verifyJunkshop");
+    await callable.call({"uid": uid});
+  }
+
+  Future<void> _callAdminDeleteUser(String uid) async {
+    final callable = _fn.httpsCallable("adminDeleteUser");
+    await callable.call({"uid": uid});
+  }
+
   Future<void> _showClaims() async {
     final token = await FirebaseAuth.instance.currentUser?.getIdTokenResult(true);
-
     if (!mounted) return;
-
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("Claims: ${token?.claims}"),
-        duration: const Duration(seconds: 5),
-      ),
+      SnackBar(content: Text("Claims: ${token?.claims}")),
     );
   }
 
@@ -36,24 +66,91 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
   }
 
-  bool _matchesQuery(String a, String b, String c) {
-    if (_query.isEmpty) return true;
-    final q = _query.toLowerCase();
-    return a.toLowerCase().contains(q) ||
-        b.toLowerCase().contains(q) ||
-        c.toLowerCase().contains(q);
+  Future<T?> _confirm<T>({
+    required String title,
+    required String body,
+    required T yesValue,
+    required String yesLabel,
+    String noLabel = "Cancel",
+  }) async {
+    return showDialog<T>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(noLabel)),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, yesValue), child: Text(yesLabel)),
+        ],
+      ),
+    );
   }
 
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _deleteUserFlow(String uid, String label) async {
+    final ok = await _confirm<bool>(
+      title: "Delete User?",
+      body: "This will permanently delete the entire account ($label).",
+      yesValue: true,
+      yesLabel: "Delete",
+    );
+
+    if (ok != true) return;
+
+    setState(() => _busy = true);
+    try {
+      await _callAdminDeleteUser(uid);
+      _toast("Deleted $label");
+    } catch (e) {
+      _toast("Delete failed: $e");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ---------- PermitRequests helpers ----------
+  final Map<String, Future<String>> _permitUrlCache = {};
+
+  Future<String> _permitUrl(String permitPath) {
+    return _permitUrlCache.putIfAbsent(
+      permitPath,
+      () => FirebaseStorage.instance.ref(permitPath).getDownloadURL(),
+    );
+  }
+
+  Future<void> _setPermitApproved(DocumentReference ref, bool value) async {
+    await ref.update({'approved': value});
+  }
+
+  Future<void> _deletePermit(DocumentReference ref) async {
+    await ref.delete();
+  }
+
+  void _showImageDialog(String url) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        child: InteractiveViewer(
+          child: Image.network(url, fit: BoxFit.contain),
+        ),
+      ),
+    );
+  }
+
+  // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
     final admin = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
       backgroundColor: bgColor,
-      extendBody: true,
       body: Stack(
         children: [
-          /// Background blur
           Positioned(
             top: -100,
             right: -100,
@@ -70,11 +167,9 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
               ),
             ),
           ),
-
           SafeArea(
             child: CustomScrollView(
               slivers: [
-                /// Top Bar
                 SliverPadding(
                   padding: const EdgeInsets.all(24),
                   sliver: SliverToBoxAdapter(
@@ -82,55 +177,79 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                       children: [
                         const Icon(Icons.admin_panel_settings, color: Colors.white),
                         const SizedBox(width: 12),
-
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                "Admin Panel",
-                                style: TextStyle(color: Colors.grey.shade400),
-                              ),
+                              Text("Admin Panel", style: TextStyle(color: Colors.grey.shade400)),
                               Text(
                                 admin?.email ?? "Admin",
                                 style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold),
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ],
                           ),
                         ),
-
-                        /// ✅ DEBUG BUTTON
-                        _iconButton(Icons.verified_user, onTap: _showClaims),
-
-                        const SizedBox(width: 10),
-
-                        _iconButton(Icons.logout, onTap: _logout),
+                        IconButton(
+                          onPressed: _showClaims,
+                          icon: const Icon(Icons.verified_user, color: Colors.white),
+                          tooltip: "Show claims",
+                        ),
+                        IconButton(
+                          onPressed: _logout,
+                          icon: const Icon(Icons.logout, color: Colors.white),
+                          tooltip: "Logout",
+                        ),
                       ],
                     ),
                   ),
                 ),
-
-                /// Search
                 SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   sliver: SliverToBoxAdapter(
                     child: TextField(
-                      onChanged: (v) => setState(() => _query = v.trim()),
+                      onChanged: (v) => setState(() => _query = v),
                       style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(
-                        hintText: "Search...",
-                        hintStyle: TextStyle(color: Colors.grey),
+                      decoration: InputDecoration(
+                        hintText: "Search (email / name / role / status)...",
+                        hintStyle: const TextStyle(color: Colors.grey),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
                       ),
                     ),
                   ),
                 ),
-
-                /// List Card
                 SliverPadding(
                   padding: const EdgeInsets.all(24),
-                  sliver: SliverToBoxAdapter(child: _combinedCard()),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (_busy)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Row(
+                              children: const [
+                                SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                                SizedBox(width: 10),
+                                Text("Processing...", style: TextStyle(color: Colors.white)),
+                              ],
+                            ),
+                          ),
+                        _usersSection(),
+                        const SizedBox(height: 24),
+                        _junkshopsSection(),
+                        const SizedBox(height: 24),
+                        _permitRequestsSection(),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -140,90 +259,520 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     );
   }
 
-  /// -------------------------------
-  /// USERS + JUNKSHOP STREAM
-  /// -------------------------------
-  Widget _combinedCard() {
-    final usersStream =
-        FirebaseFirestore.instance.collection("Users").snapshots();
+  // ---------- Sections ----------
+  Widget _usersSection() {
+    final usersStream = FirebaseFirestore.instance.collection("Users").snapshots();
 
-    final junkStream =
-        FirebaseFirestore.instance.collection("Junkshop").snapshots();
-
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: usersStream,
-      builder: (context, usersSnap) {
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: junkStream,
-          builder: (context, junkSnap) {
-            if (usersSnap.hasError || junkSnap.hasError) {
-              return Text(
-                "Firestore Error:\nUsers: ${usersSnap.error}\nJunk: ${junkSnap.error}",
-                style: const TextStyle(color: Colors.white),
-              );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Users / RBAC", style: TextStyle(color: Colors.white, fontSize: 18)),
+        const SizedBox(height: 10),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: usersStream,
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Text("USERS ERROR: ${snap.error}", style: const TextStyle(color: Colors.red));
+            }
+            if (!snap.hasData) {
+              return const Text("Loading Users...", style: TextStyle(color: Colors.white));
             }
 
-            if (!usersSnap.hasData || !junkSnap.hasData) {
-              return const Center(child: CircularProgressIndicator());
+            // ✅ Hide junkshops from Users/RBAC list
+            final allDocs = snap.data!.docs.where((d) {
+              final data = d.data();
+              final role = _normRole(data["Roles"] ?? data["roles"]);
+              return role != "junkshop";
+            }).toList();
+
+            final counts = <String, int>{"admin": 0, "user": 0, "collector": 0, "unknown": 0};
+            for (final d in allDocs) {
+              final role = _normRole(d.data()["Roles"] ?? d.data()["roles"]);
+              counts[role] = (counts[role] ?? 0) + 1;
             }
 
-            final users = usersSnap.data!.docs;
-            final junkshops = junkSnap.data!.docs;
+            final filtered = allDocs.where((d) {
+              final data = d.data();
+              final email = (data["Email"] ?? data["email"] ?? "").toString();
+              final name = (data["Name"] ?? data["name"] ?? "").toString();
+              final role = _normRole(data["Roles"] ?? data["roles"]);
+              return _matchesQuery([email, name, role, d.id]);
+            }).toList();
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("Users (${users.length})",
-                    style: const TextStyle(color: Colors.white)),
-                const SizedBox(height: 8),
-
-                ...users.map((d) => _userTile(d.data(), d.id)),
-
-                const SizedBox(height: 24),
-
-                Text("Junkshops (${junkshops.length})",
-                    style: const TextStyle(color: Colors.white)),
-                const SizedBox(height: 8),
-
-                ...junkshops.map((d) => _userTile(d.data(), d.id)),
+                _countRow([
+                  _countChip("Total", allDocs.length),
+                  _countChip("Admins", counts["admin"] ?? 0),
+                  _countChip("Users", counts["user"] ?? 0),
+                  _countChip("Collectors", counts["collector"] ?? 0),
+                ]),
+                const SizedBox(height: 12),
+                if (filtered.isEmpty)
+                  const Text("No users found.", style: TextStyle(color: Colors.white))
+                else
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: filtered.length,
+                    itemBuilder: (_, i) {
+                      final d = filtered[i];
+                      return _userTile(uid: d.id, data: d.data());
+                    },
+                  ),
               ],
             );
           },
-        );
-      },
+        ),
+      ],
     );
   }
 
-  Widget _userTile(Map<String, dynamic> data, String id) {
-    final email = data["Email"] ?? id;
-    final role = data["Roles"] ?? "User";
+  Widget _junkshopsSection() {
+    final junkStream = FirebaseFirestore.instance.collection("Junkshop").snapshots();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Junkshops", style: TextStyle(color: Colors.white, fontSize: 18)),
+        const SizedBox(height: 10),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: junkStream,
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Text("JUNKSHOP ERROR: ${snap.error}", style: const TextStyle(color: Colors.red));
+            }
+            if (!snap.hasData) {
+              return const Text("Loading Junkshops...", style: TextStyle(color: Colors.white));
+            }
+
+            final allDocs = snap.data!.docs;
+
+            int verifiedCount = 0;
+            int pendingCount = 0;
+            for (final d in allDocs) {
+              final v = d.data()["verified"] == true;
+              if (v) {
+                verifiedCount++;
+              } else {
+                pendingCount++;
+              }
+            }
+
+            final filtered = allDocs.where((d) {
+              final data = d.data();
+              final shopName = (data["shopName"] ?? "").toString();
+              final email = (data["shopEmail"] ?? data["email"] ?? "").toString();
+              final status = data["verified"] == true ? "verified" : "pending";
+              return _matchesQuery([shopName, email, status, d.id]);
+            }).toList();
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _countRow([
+                  _countChip("Total", allDocs.length),
+                  _countChip("Verified", verifiedCount),
+                  _countChip("Pending", pendingCount),
+                ]),
+                const SizedBox(height: 12),
+                if (filtered.isEmpty)
+                  const Text("No junkshops found.", style: TextStyle(color: Colors.white))
+                else
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: filtered.length,
+                    itemBuilder: (_, i) {
+                      final d = filtered[i];
+                      return _junkshopTile(uid: d.id, data: d.data());
+                    },
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _permitRequestsSection() {
+    final permitsStream = FirebaseFirestore.instance
+        .collection("permitRequests")
+        .where("approved", isEqualTo: false)
+        .snapshots();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Permit Requests", style: TextStyle(color: Colors.white, fontSize: 18)),
+        const SizedBox(height: 10),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: permitsStream,
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Text("PERMITS ERROR: ${snap.error}", style: const TextStyle(color: Colors.red));
+            }
+            if (!snap.hasData) {
+              return const Text("Loading Permit Requests...", style: TextStyle(color: Colors.white));
+            }
+
+            final docs = snap.data!.docs;
+
+            if (docs.isEmpty) {
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.06)),
+                ),
+                child: Column(
+                  children: const [
+                    Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 40),
+                    SizedBox(height: 10),
+                    Text("No New Permit Requests", style: TextStyle(color: Colors.white, fontSize: 16)),
+                  ],
+                ),
+              );
+            }
+
+            return ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: docs.length,
+              itemBuilder: (context, i) {
+                final d = docs[i];
+                final data = d.data();
+
+                final shopName = (data["shopName"] ?? "Unknown").toString();
+                final email = (data["email"] ?? "").toString();
+                final permitPath = (data["permitPath"] ?? "").toString();
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withOpacity(0.06)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      if (email.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                        ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Text("pending", style: TextStyle(color: Colors.orangeAccent)),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () async {
+                              setState(() => _busy = true);
+                              try {
+                                await _setPermitApproved(d.reference, true);
+                                _toast("Approved $shopName");
+                              } catch (e) {
+                                _toast("Approve failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            child: const Text("Approve"),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              setState(() => _busy = true);
+                              try {
+                                await _setPermitApproved(d.reference, false);
+                                _toast("Rejected $shopName");
+                              } catch (e) {
+                                _toast("Reject failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            child: const Text("Reject"),
+                          ),
+                          IconButton(
+                            tooltip: "Delete request",
+                            onPressed: () async {
+                              final ok = await _confirm<bool>(
+                                title: "Delete permit request?",
+                                body: "This will delete the request document in Firestore.",
+                                yesValue: true,
+                                yesLabel: "Delete",
+                              );
+                              if (ok != true) return;
+
+                              setState(() => _busy = true);
+                              try {
+                                await _deletePermit(d.reference);
+                                _toast("Deleted request");
+                              } catch (e) {
+                                _toast("Delete failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (permitPath.isEmpty)
+                        const Text("No permitPath.", style: TextStyle(color: Colors.white))
+                      else
+                        FutureBuilder<String>(
+                          future: _permitUrl(permitPath),
+                          builder: (context, urlSnap) {
+                            if (urlSnap.connectionState == ConnectionState.waiting) {
+                              return const SizedBox(
+                                height: 180,
+                                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                              );
+                            }
+                            if (urlSnap.hasError || !urlSnap.hasData) {
+                              return Text("Image failed: ${urlSnap.error}",
+                                  style: const TextStyle(color: Colors.redAccent));
+                            }
+
+                            final url = urlSnap.data!;
+                            return GestureDetector(
+                              onTap: () => _showImageDialog(url),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.network(
+                                  url,
+                                  height: 180,
+                                  width: double.infinity,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  // ---------- Tiles ----------
+  Widget _userTile({required String uid, required Map<String, dynamic> data}) {
+    final email = (data["Email"] ?? data["email"] ?? "").toString();
+    final name = (data["Name"] ?? data["name"] ?? "").toString();
+
+    final role = _normRole(data["Roles"] ?? data["roles"]);
+    final isJunkshop = role == "junkshop";
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.person, color: Colors.white),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              "$email ($role)",
-              style: const TextStyle(color: Colors.white),
+          Text(
+            name.isNotEmpty ? name : (email.isNotEmpty ? email : uid),
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          if (email.isNotEmpty && name.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
             ),
+          const SizedBox(height: 10),
+
+          Row(
+            children: [
+              Expanded(
+                child: isJunkshop
+                    ? Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.orangeAccent.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.orangeAccent.withOpacity(0.25)),
+                        ),
+                        child: const Text(
+                          "Role: junkshop (set via verification)",
+                          style: TextStyle(color: Colors.orangeAccent),
+                        ),
+                      )
+                    : _roleDropdown(
+                        value: role,
+                        onChanged: (newRole) async {
+                          if (newRole == null || newRole == role) return;
+
+                          final ok = await _confirm<bool>(
+                            title: "Change role?",
+                            body: "Set $uid role to '$newRole'?",
+                            yesValue: true,
+                            yesLabel: "Change",
+                          );
+                          if (ok != true) return;
+
+                          setState(() => _busy = true);
+                          try {
+                            await _callSetUserRole(uid, newRole);
+                            _toast("Role updated to $newRole");
+                          } catch (e) {
+                            _toast("Failed: $e");
+                          } finally {
+                            if (mounted) setState(() => _busy = false);
+                          }
+                        },
+                      ),
+              ),
+              const SizedBox(width: 10),
+              IconButton(
+                tooltip: "Delete user",
+                onPressed: () async {
+                  final label = name.isNotEmpty ? name : (email.isNotEmpty ? email : uid);
+                  await _deleteUserFlow(uid, label);
+                },
+                icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _iconButton(IconData icon, {required VoidCallback onTap}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Icon(icon, color: Colors.white),
+  Widget _junkshopTile({required String uid, required Map<String, dynamic> data}) {
+    final shopName = (data["shopName"] ?? uid).toString();
+    final verified = data["verified"] == true;
+    final email = (data["shopEmail"] ?? data["email"] ?? "").toString();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              if (email.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                ),
+              const SizedBox(height: 6),
+              Text(
+                verified ? "verified" : "pending",
+                style: TextStyle(color: verified ? Colors.greenAccent : Colors.orangeAccent),
+              ),
+            ]),
+          ),
+
+          if (!verified)
+            ElevatedButton(
+              onPressed: () async {
+                final ok = await _confirm<bool>(
+                  title: "Verify junkshop?",
+                  body: "Verify $uid ($shopName)?",
+                  yesValue: true,
+                  yesLabel: "Verify",
+                );
+                if (ok != true) return;
+
+                setState(() => _busy = true);
+                try {
+                  await _callVerifyJunkshop(uid);
+                  _toast("Verified $shopName");
+                } catch (e) {
+                  _toast("Verify failed: $e");
+                } finally {
+                  if (mounted) setState(() => _busy = false);
+                }
+              },
+              child: const Text("Verify"),
+            ),
+
+          if (verified)
+            IconButton(
+              tooltip: "Delete verified junkshop",
+              onPressed: () async {
+                await _deleteUserFlow(uid, shopName);
+              },
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- Small UI widgets ----------
+  Widget _countRow(List<Widget> chips) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: chips,
+    );
+  }
+
+  Widget _countChip(String label, int value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Text("$label: $value", style: const TextStyle(color: Colors.white)),
+    );
+  }
+
+  Widget _roleDropdown({
+    required String value,
+    required Future<void> Function(String?) onChanged,
+  }) {
+    const roles = ["user", "collector", "admin"];
+    final safeValue = roles.contains(value) ? value : "user";
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          dropdownColor: const Color(0xFF111827),
+          value: safeValue,
+          isExpanded: true,
+          iconEnabledColor: Colors.white,
+          style: const TextStyle(color: Colors.white),
+          items: roles
+              .map((r) => DropdownMenuItem(value: r, child: Text(r)))
+              .toList(),
+          onChanged: (v) => onChanged(v),
+        ),
+      ),
     );
   }
 }
