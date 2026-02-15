@@ -4,7 +4,6 @@ import 'receipt_screen.dart';
 
 class TransactionScreen extends StatelessWidget {
   final String shopID;
-
   const TransactionScreen({super.key, required this.shopID});
 
   @override
@@ -22,16 +21,14 @@ class TransactionScreen extends StatelessWidget {
         onPressed: () {
           Navigator.push(
             context,
-            MaterialPageRoute(
-              builder: (_) => ReceiptScreen(shopID: shopID),
-            ),
+            MaterialPageRoute(builder: (_) => ReceiptScreen(shopID: shopID)),
           );
         },
         backgroundColor: Colors.greenAccent,
         icon: const Icon(Icons.add, color: Colors.black),
         label: const Text("NEW RECEIPT", style: TextStyle(color: Colors.black)),
       ),
-      body: StreamBuilder<QuerySnapshot>(
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
             .collection('Junkshop')
             .doc(shopID)
@@ -53,11 +50,13 @@ class TransactionScreen extends StatelessWidget {
           return ListView.builder(
             itemCount: docs.length,
             itemBuilder: (context, index) {
-              final data = docs[index].data() as Map<String, dynamic>;
+              final data = docs[index].data();
 
+              final type = (data['type'] ?? '').toString();
               final customerName = (data['customerNameDisplay'] ??
                       data['customerName'] ??
-                      '') as String;
+                      '')
+                  .toString();
 
               final total = (data['totalAmountDisplay'] as num?)?.toDouble() ??
                   (data['totalAmount'] as num?)?.toDouble() ??
@@ -72,7 +71,7 @@ class TransactionScreen extends StatelessWidget {
                   style: const TextStyle(color: Colors.white),
                 ),
                 subtitle: Text(
-                  date != null ? date.toString() : '',
+                  "${type.toUpperCase()} • ${date != null ? date.toString() : ''}",
                   style: const TextStyle(color: Colors.grey),
                 ),
                 trailing: Text(
