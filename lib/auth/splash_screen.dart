@@ -1,9 +1,9 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:ui';
 
 import 'login_page.dart';
-import '../role_gate.dart';  
+import '../role_gate.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -14,8 +14,8 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
+  late final AnimationController _controller;
+  late final Animation<double> _fadeAnimation;
 
   @override
   void initState() {
@@ -30,23 +30,20 @@ class _SplashScreenState extends State<SplashScreen>
 
     _controller.forward();
 
-    Future.delayed(const Duration(seconds: 2), () {
-      _checkLogin();
-    });
+    Future.delayed(const Duration(seconds: 2), _checkLogin);
   }
 
   Future<void> _checkLogin() async {
-    final user = FirebaseAuth.instance.currentUser;
     if (!mounted) return;
 
+    final user = FirebaseAuth.instance.currentUser;
+
     if (user != null) {
-      // ✅ Logged in → let RoleGate decide Admin/Junkshop/Household
       Navigator.pushReplacement(
         context,
         _createRoute(const RoleGate()),
       );
     } else {
-      // ✅ Not logged in → Login page
       Navigator.pushReplacement(
         context,
         _createRoute(const LoginPage()),
@@ -57,13 +54,12 @@ class _SplashScreenState extends State<SplashScreen>
   Route _createRoute(Widget page) {
     return PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 700),
-      pageBuilder: (context, animation, secondaryAnimation) => page,
-      transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        const begin = Offset(0.0, 1.0);
-        const end = Offset.zero;
-
-        final tween = Tween(begin: begin, end: end)
-            .chain(CurveTween(curve: Curves.easeOutCubic));
+      pageBuilder: (_, __, ___) => page,
+      transitionsBuilder: (_, animation, __, child) {
+        final tween = Tween(
+          begin: const Offset(0, 1),
+          end: Offset.zero,
+        ).chain(CurveTween(curve: Curves.easeOutCubic));
 
         return SlideTransition(
           position: animation.drive(tween),
@@ -114,14 +110,12 @@ class _SplashScreenState extends State<SplashScreen>
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
                           colors: [Color(0xFF1FA9A7), Color(0xFF10B981)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
                         ),
                         borderRadius: BorderRadius.circular(32),
                         boxShadow: [
                           BoxShadow(
-                            color:
-                                const Color(0xFF1FA9A7).withValues(alpha: 0.3),
+                            color: const Color(0xFF1FA9A7)
+                                .withValues(alpha: 0.3),
                             blurRadius: 40,
                           ),
                         ],
@@ -130,7 +124,6 @@ class _SplashScreenState extends State<SplashScreen>
                         "assets/images/ecoscrap_logo.png",
                         width: 80,
                         height: 80,
-                        fit: BoxFit.contain,
                       ),
                     ),
                   ),
