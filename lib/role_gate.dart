@@ -1,3 +1,4 @@
+import 'package:ecoscrap_app/Collector/collectors_dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,8 +7,8 @@ import 'admin/admin_users_dashboard.dart';
 import 'auth/login_page.dart';
 import 'household/household_dashboard.dart';
 import 'junkshop/junkshop_dashboard.dart';
-
 import 'package:cloud_functions/cloud_functions.dart';
+import 'Collector/collectors_dashboard.dart';
 
 Future<void> grantMeAdminClaimIfOwner(User user) async {
   if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
@@ -120,7 +121,7 @@ if (role == 'admin') {
   );
 }
 
-        if (role == 'collector') return const DashboardPage();
+        if (role == 'collector') return const  CollectorsDashboardPage();
         if (role == 'user') return const DashboardPage();
 
         if (role == 'junkshop') {
