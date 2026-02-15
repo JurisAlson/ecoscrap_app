@@ -2,6 +2,8 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+enum TransactionType { buy, sell }
+
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
 
@@ -17,6 +19,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   final TextEditingController _customerCtrl = TextEditingController();
   final List<_ReceiptItem> _items = [];
+
+  TransactionType _type = TransactionType.buy;
+
+  bool _saving = false;
 
   double get _totalAmount {
     double total = 0;
@@ -42,7 +48,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     super.dispose();
   }
 
-  // ✅ Inventory picker (this was missing in your pasted version)
+  // ✅ Inventory picker
   Future<void> _pickInventoryItem(_ReceiptItem item) async {
     final picked = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -62,6 +68,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   Future<void> _saveReceipt() async {
+    if (_saving) return;
+
     if (_items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Add at least 1 item.")),
@@ -72,10 +80,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     final itemsPayload = <Map<String, dynamic>>[];
 
     for (final it in _items) {
-      // ✅ Require picking from inventory
       if (it.inventoryDocId == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please select an inventory item for each line.")),
+          const SnackBar(
+              content: Text("Please select an inventory item for each line.")),
         );
         return;
       }
@@ -86,7 +94,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
       if (weightKg <= 0 || subtotal <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Weight and subtotal must be greater than 0.")),
+          const SnackBar(
+              content: Text("Weight and subtotal must be greater than 0.")),
         );
         return;
       }
@@ -103,27 +112,70 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     final customerName = _customerCtrl.text.trim();
 
+    setState(() => _saving = true);
+
     try {
-      await FirebaseFirestore.instance
-          .collection('Junkshop')
-          .doc(widget.shopID)
-          .collection('transaction')
-          .add({
-        'customerName': customerName,
-        'items': itemsPayload, // ✅ LIST
-        'totalAmount': _totalAmount,
-        'transactionDate': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
+      final db = FirebaseFirestore.instance;
+      final shopRef = db.collection('Junkshop').doc(widget.shopID);
+      final txRef = shopRef.collection('transaction').doc(); // create id first
+
+      await db.runTransaction((trx) async {
+        // 1) Update inventory first (all must succeed)
+        for (final item in itemsPayload) {
+          final invId = (item['inventoryDocId'] ?? '').toString();
+          final weightKg = (item['weightKg'] as num).toDouble();
+
+          final delta = _type == TransactionType.buy ? weightKg : -weightKg;
+
+          final invRef = shopRef.collection('inventory').doc(invId);
+          final invSnap = await trx.get(invRef);
+
+          if (!invSnap.exists) {
+            throw Exception("Inventory item not found: ${item['itemName']}");
+          }
+
+          final currentKg =
+              (invSnap.data()?['unitsKg'] as num?)?.toDouble() ?? 0.0;
+          final nextKg = currentKg + delta;
+
+          if (nextKg < 0) {
+            throw Exception(
+                "Not enough stock for ${item['itemName']} (current: $currentKg kg)");
+          }
+
+          trx.update(invRef, {
+            'unitsKg': nextKg,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+
+        // 2) Write the transaction ONLY if inventory updates succeeded
+        trx.set(txRef, {
+          'type': _type.name, // "buy" or "sell"
+          'customerName': customerName,
+          'items': itemsPayload,
+          'totalAmount': _totalAmount,
+          'transactionDate': FieldValue.serverTimestamp(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'inventoryDeducted': true,
+          'inventoryDeductedAt': FieldValue.serverTimestamp(),
+        });
       });
 
       if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Saved (${_type.name.toUpperCase()}) ✅")),
+      );
       Navigator.pop(context);
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Save failed: $e")),
       );
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-  } // ✅ IMPORTANT: closes _saveReceipt()
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -139,6 +191,32 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ✅ BUY/SELL toggle
+            _glassCard(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _typeChip(
+                      label: "BUY (adds stock)",
+                      active: _type == TransactionType.buy,
+                      onTap: () => setState(() => _type = TransactionType.buy),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _typeChip(
+                      label: "SELL (minus stock)",
+                      active: _type == TransactionType.sell,
+                      onTap: () =>
+                          setState(() => _type = TransactionType.sell),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
             _glassCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -153,7 +231,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 ],
               ),
             ),
+
             const SizedBox(height: 16),
+
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -168,10 +248,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 TextButton.icon(
                   onPressed: _addItem,
                   icon: const Icon(Icons.add, color: Colors.green),
-                  label: const Text("Add Item", style: TextStyle(color: Colors.green)),
+                  label: const Text("Add Item",
+                      style: TextStyle(color: Colors.green)),
                 ),
               ],
             ),
+
             const SizedBox(height: 8),
 
             ..._items.asMap().entries.map((entry) {
@@ -199,19 +281,25 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                   width: double.infinity,
                                   child: OutlinedButton.icon(
                                     onPressed: () => _pickInventoryItem(item),
-                                    icon: const Icon(Icons.inventory_2, color: Colors.white),
+                                    icon: const Icon(Icons.inventory_2,
+                                        color: Colors.white),
                                     label: Text(
                                       pickedLabel,
-                                      style: const TextStyle(color: Colors.white),
+                                      style:
+                                          const TextStyle(color: Colors.white),
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                     style: OutlinedButton.styleFrom(
-                                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                                      side: BorderSide(
+                                          color: Colors.white.withOpacity(0.2)),
                                       shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14),
+                                        borderRadius:
+                                            BorderRadius.circular(14),
                                       ),
-                                      backgroundColor: Colors.black.withOpacity(0.2),
-                                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                                      backgroundColor:
+                                          Colors.black.withOpacity(0.2),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14, horizontal: 12),
                                     ),
                                   ),
                                 ),
@@ -232,7 +320,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                               controller: item.weightCtrl,
                               label: "Weight (kg)",
                               hint: "0.0",
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
                               onChanged: (_) => setState(() {}),
                             ),
                           ),
@@ -242,7 +332,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                               controller: item.subtotalCtrl,
                               label: "Subtotal (₱)",
                               hint: "0.00",
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
                               onChanged: (_) => setState(() {}),
                             ),
                           ),
@@ -262,7 +354,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 children: [
                   const Text(
                     "Total Amount",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                   Text(
                     "₱${_totalAmount.toStringAsFixed(2)}",
@@ -282,20 +375,22 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               width: double.infinity,
               height: 56,
               child: ElevatedButton(
-                onPressed: _saveReceipt,
+                onPressed: _saving ? null : _saveReceipt,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primaryColor,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18)),
                 ),
-                child: const Text(
-                  "SAVE RECEIPT",
-                  style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                child: Text(
+                  _saving ? "SAVING..." : "SAVE RECEIPT",
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
               ),
             ),
 
             const SizedBox(height: 12),
-            Center(
+            const Center(
               child: Text(
                 "Transaction Date is saved automatically",
                 style: TextStyle(color: Colors.grey, fontSize: 11),
@@ -308,6 +403,40 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   // ===== UI HELPERS =====
+
+  Widget _typeChip({
+    required String label,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+        decoration: BoxDecoration(
+          color:
+              active ? primaryColor.withOpacity(0.22) : Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: active
+                ? primaryColor.withOpacity(0.65)
+                : Colors.white.withOpacity(0.08),
+          ),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: active ? Colors.white : Colors.white70,
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _glassCard({required Widget child}) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
