@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -115,6 +116,61 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   double get _earned => _distanceKm * _ratePerKm;
 
+  Future<void> requestPickupWithConfirm({
+    required LatLng pickupLatLng,
+    required String? pickupAddress,
+  }) async {
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Confirm Pickup Request"),
+        content: Text(
+          "Send pickup request?\n\n"
+          "Address: ${pickupAddress ?? "Unknown"}"
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Confirm"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('pickupRequests').add({
+        'householdId': user.uid,
+        'collectorId': null,
+        'status': 'pending',
+        'pickupLocation': GeoPoint(pickupLatLng.latitude, pickupLatLng.longitude),
+        'pickupAddress': pickupAddress ?? '',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint("✅ pickupRequests created: ${doc.id}");
+    } catch (e, st) {
+      debugPrint("❌ pickupRequests add failed: $e");
+      debugPrint("$st");
+      if (mounted) _snack("Pickup failed: $e", bg: Colors.red);
+      return;
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Pickup request sent!")),
+    );
+  }
   @override
   void initState() {
     super.initState();
@@ -379,10 +435,21 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
   Future<void> _startPickup() async {
+    if (!_locationReady || _currentPosition == null) {
+      _snack("Still getting your location. Please wait...", bg: Colors.black87);
+      return;
+    }
+
+    await requestPickupWithConfirm(
+      pickupLatLng: _originLatLng,
+      pickupAddress:
+        "${_originLatLng.latitude.toStringAsFixed(5)}, ${_originLatLng.longitude.toStringAsFixed(5)}",
+    );
+
     setState(() => _tripStage = TripStage.pickup);
     await _buildRoute();
     if (!mounted) return;
-    _snack("Pickup started — routing...", bg: _accent);
+    _snack("Pickup request sent — waiting for collector.", bg: _accent);
   }
 
   Future<void> _arrivedDeliver() async {
