@@ -4,6 +4,7 @@ import 'receipt_screen.dart';
 
 class TransactionScreen extends StatelessWidget {
   final String shopID;
+
   const TransactionScreen({super.key, required this.shopID});
 
   @override
@@ -13,22 +14,31 @@ class TransactionScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AppBar(
-        backgroundColor: bgColor,
-        title: const Text("Transactions"),
-        elevation: 0,
+          backgroundColor: bgColor,
+          elevation: 0,
+          title: const Text(
+            "Transactions",
+            style: TextStyle(color: Colors.white),
+        ),
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => ReceiptScreen(shopID: shopID)),
+            MaterialPageRoute(
+              builder: (_) => ReceiptScreen(shopID: shopID),
+            ),
           );
         },
         backgroundColor: Colors.greenAccent,
         icon: const Icon(Icons.add, color: Colors.black),
-        label: const Text("NEW RECEIPT", style: TextStyle(color: Colors.black)),
+        label: const Text(
+          "NEW RECEIPT",
+          style: TextStyle(color: Colors.black),
+        ),
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection('Junkshop')
             .doc(shopID)
@@ -41,37 +51,33 @@ class TransactionScreen extends StatelessWidget {
           }
 
           final docs = snapshot.data?.docs ?? [];
+
           if (docs.isEmpty) {
             return const Center(
-              child: Text("No transactions yet", style: TextStyle(color: Colors.grey)),
+              child: Text(
+                "No transactions yet",
+                style: TextStyle(color: Colors.grey),
+              ),
             );
           }
 
           return ListView.builder(
             itemCount: docs.length,
             itemBuilder: (context, index) {
-              final data = docs[index].data();
+              final data = docs[index].data() as Map<String, dynamic>;
 
-              final type = (data['type'] ?? '').toString();
-              final customerName = (data['customerNameDisplay'] ??
-                      data['customerName'] ??
-                      '')
-                  .toString();
-
-              final total = (data['totalAmountDisplay'] as num?)?.toDouble() ??
-                  (data['totalAmount'] as num?)?.toDouble() ??
-                  0.0;
-
+              final customerName = (data['customerNameDisplay'] ?? data['customerName'] ?? '') as String;
+              final total = (data['totalAmount'] as num?)?.toDouble() ?? 0.0;
               final ts = data['transactionDate'] as Timestamp?;
               final date = ts?.toDate();
 
               return ListTile(
                 title: Text(
-                  customerName.trim().isEmpty ? "Walk-in customer" : customerName,
+                  customerName.isEmpty ? "Walk-in customer" : customerName,
                   style: const TextStyle(color: Colors.white),
                 ),
                 subtitle: Text(
-                  "${type.toUpperCase()} • ${date != null ? date.toString() : ''}",
+                  date != null ? date.toString() : '',
                   style: const TextStyle(color: Colors.grey),
                 ),
                 trailing: Text(
