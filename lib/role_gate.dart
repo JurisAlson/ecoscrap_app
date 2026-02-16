@@ -11,7 +11,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'Collector/collectors_dashboard.dart';
 
 Future<void> grantMeAdminClaimIfOwner(User user) async {
-  if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
+if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
 
   final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
       .httpsCallable("setAdminClaim");
