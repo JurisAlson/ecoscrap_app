@@ -44,7 +44,7 @@ class _InventoryFormScreenState
       _name.text = data['name'] ?? '';
       _category = data['category'] ?? _category;
       _sub.text = data['subCategory'] ?? '';
-      _qty.text = data['unitsKg']?.toString() ?? '';
+      _qty.text = data['quantityKg']?.toString() ?? '';
       _notes.text = data['notes'] ?? '';
     }
   }
@@ -147,9 +147,9 @@ class _InventoryFormScreenState
       'name': _name.text.trim(),
       'category': _category,
       'subCategory': _sub.text.trim(),
-      'unitsKg': double.parse(_qty.text), 
+      'quantityKg': double.parse(_qty.text),
       'notes': _notes.text.trim(),
-};
+    };
 
     if (!mounted) return;
     Navigator.pop(context, payload);
