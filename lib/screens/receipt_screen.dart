@@ -137,6 +137,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     final itemsPayload = <Map<String, dynamic>>[];
 
+    double totalWeightKg = 0.0;
+    for (final it in _items) {
+      final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+      totalWeightKg += weightKg;
+    }
+
     for (final it in _items) {
       final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
       final subtotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
@@ -194,16 +200,17 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     try {
       await FirebaseFirestore.instance
-          .collection('Junkshop')
-          .doc(widget.shopID)
-          .collection('transaction')
-          .add({
-        'transactionType': _txType,
-        'customerName': partyName,
-        'items': itemsPayload,
-        'totalAmount': _totalAmount,
-        'transactionDate': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
+        .collection('Junkshop')
+        .doc(widget.shopID)
+        .collection('transaction')
+        .add({
+      'transactionType': _txType,
+      'customerName': partyName,
+      'items': itemsPayload,
+      'totalAmount': _totalAmount,
+      'totalWeightKg': totalWeightKg, // ✅ ADD THIS
+      'transactionDate': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
       });
 
       if (!mounted) return;
