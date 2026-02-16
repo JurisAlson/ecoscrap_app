@@ -47,11 +47,11 @@ Future<void> _captureImageWithCamera() async {
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
 
-    final score = await TFLiteService.runModel(_image!.path);
+   final score = await TFLiteService.runModel(_image!.path);
 
-    final isRecyclable = score >= 0.5;
-    final confidence = isRecyclable ? score : (1.0 - score);
-
+const double threshold = 0.75; // ✅ recommended from your test results
+final isRecyclable = score >= threshold;
+final confidence = isRecyclable ? score : (1.0 - score);
 
     Navigator.push(
       context,
@@ -60,7 +60,7 @@ Future<void> _captureImageWithCamera() async {
           isRecyclable: isRecyclable,
           itemName: isRecyclable
               ? "Recyclable Plastic"
-              : "Non-Recyclable Plastic",
+              : "Non-Recyclable Item",
           confidence: confidence,
         ),
       ),
