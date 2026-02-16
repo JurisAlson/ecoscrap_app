@@ -4,7 +4,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'forgot_password.dart';
-import 'AccountCreation.dart';
+import 'UserAccountCreation.dart';
 import '../role_gate.dart';
 
 class LoginPage extends StatefulWidget {
@@ -333,7 +333,7 @@ class _LoginPageState extends State<LoginPage> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                                builder: (_) => const AccountCreationPage()),
+                                builder: (_) => const UserAccountCreationPage()),
                           );
                         },
                         child: const Text(
