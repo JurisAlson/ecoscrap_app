@@ -1,7 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../screens/inventory_screen.dart';
 import '../screens/transaction_screen.dart';
@@ -150,28 +149,6 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           ),
         ),
       ),
-    );
-  }
-
-  // ================== HOME TAB STREAM ==================
-  Widget _homeTabStream() {
-    // ✅ Use widget.shopID
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('Junkshop')
-          .doc(widget.shopID)
-          .collection('recycleLogs')
-          .orderBy('timestamp', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        // keep your existing home UI logic here...
-        return const Center(
-          child: Text("Home Tab", style: TextStyle(color: Colors.white)),
-        );
-      },
     );
   }
 
