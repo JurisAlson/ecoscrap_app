@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -61,14 +62,12 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   // Default camera center (only used before GPS is ready)
   final LatLng _paloAltoCenter = const LatLng(14.18695, 121.11299);
 
-  // Destination
-  final Destination _mores = const Destination(
+  // Fallback destination if Firestore list is empty
+  final Destination _moresFallback = const Destination(
     name: "Mores Scrap Trading",
     subtitle: "Junkshop • Drop-off",
-    latLng: LatLng(14.198490, 121.117035),
+    latLng: LatLng(14.0000, 121.0000),
   );
-
-  late Destination _selectedDestination;
 
   // If user taps map -> pin a custom drop-off
   LatLng? _customDestinationLatLng;
@@ -90,13 +89,27 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   // Earnings model (demo)
   double get _ratePerKm => 12.0;
 
+  // ----- Junkshops from Firestore -----
+  Destination? _selectedJunkshop;
+  List<Destination> _junkshops = [];
+
+  // ----- Available collectors dropdown -----
+  String? _selectedCollectorId;
+  String? _selectedCollectorName;
+  List<Map<String, String>> _availableCollectors = []; // [{uid,name}]
+
   LatLng get _originLatLng {
     final p = _currentPosition;
     if (p == null) return _paloAltoCenter; // fallback only
     return LatLng(p.latitude, p.longitude);
   }
 
-  LatLng get _destLatLng => _customDestinationLatLng ?? _selectedDestination.latLng;
+  LatLng get _destLatLng {
+    // priority: pinned custom > selected junkshop > fallback
+    if (_customDestinationLatLng != null) return _customDestinationLatLng!;
+    if (_selectedJunkshop != null) return _selectedJunkshop!.latLng;
+    return _moresFallback.latLng;
+  }
 
   double get _distanceKm {
     final meters = Geolocator.distanceBetween(
@@ -108,7 +121,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     return meters / 1000.0;
   }
 
-  // ✅ Simple consistent ETA (no fast/normal toggle)
+  // ✅ Simple consistent ETA
   int get _etaMinutes {
     final base = (_distanceKm * 4.0).round();
     return base.clamp(3, 999);
@@ -116,65 +129,23 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   double get _earned => _distanceKm * _ratePerKm;
 
-  Future<void> requestPickupWithConfirm({
-    required LatLng pickupLatLng,
-    required String? pickupAddress,
-  }) async {
-
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Confirm Pickup Request"),
-        content: Text(
-          "Send pickup request?\n\n"
-          "Address: ${pickupAddress ?? "Unknown"}"
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text("Confirm"),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    try {
-      final doc = await FirebaseFirestore.instance.collection('pickupRequests').add({
-        'householdId': user.uid,
-        'collectorId': null,
-        'status': 'pending',
-        'pickupLocation': GeoPoint(pickupLatLng.latitude, pickupLatLng.longitude),
-        'pickupAddress': pickupAddress ?? '',
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-
-      debugPrint("✅ pickupRequests created: ${doc.id}");
-    } catch (e, st) {
-      debugPrint("❌ pickupRequests add failed: $e");
-      debugPrint("$st");
-      if (mounted) _snack("Pickup failed: $e", bg: Colors.red);
-      return;
-    }
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Pickup request sent!")),
-    );
+  String get _destinationTitle {
+    if (_customDestinationLatLng != null) return "Pinned Drop-off";
+    if (_selectedJunkshop != null) return _selectedJunkshop!.name;
+    return "Choose junkshop"; // ✅ not Mores
   }
+
+  String get _destinationSubtitle {
+    if (_customDestinationLatLng != null) return "Custom location";
+    if (_selectedJunkshop != null) return _selectedJunkshop!.subtitle;
+    return "Select a drop-off";
+  }
+
   @override
   void initState() {
     super.initState();
-    _selectedDestination = _mores;
+      debugPrint("✅ GeoMappingPage initState called");
+      _listenJunkshops();
 
     _timeString = _formatTime(DateTime.now());
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -183,6 +154,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     });
 
     _initLocation();
+    _listenJunkshops();
+    _listenAvailableCollectors();
   }
 
   @override
@@ -270,23 +243,104 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     );
   }
 
+  void _listenJunkshops() {
+    FirebaseFirestore.instance
+        .collection('Junkshop')
+        .where('verified', isEqualTo: true)
+        .where('role', isEqualTo: 'junkshop')
+        .snapshots()
+        .listen(
+      (snap) {
+        debugPrint("✅ JUNKSHOP DOCS FOUND: ${snap.docs.length}");
+
+        final list = <Destination>[];
+        for (final d in snap.docs) {
+          final data = d.data();
+          final gp = data['location'];
+          debugPrint("📦 doc=${d.id} shopName=${data['shopName']} locationType=${gp.runtimeType}");
+
+          if (gp is! GeoPoint) continue;
+
+          list.add(Destination(
+            name: (data['shopName'] ?? 'Junkshop').toString(),
+            subtitle: (data['address'] ?? 'Drop-off').toString(),
+            latLng: LatLng(gp.latitude, gp.longitude),
+          ));
+        }
+
+        debugPrint("✅ Parsed junkshops list size: ${list.length}");
+
+        if (!mounted) return;
+        setState(() {
+          _junkshops = list;
+          if (_customDestinationLatLng == null && _selectedJunkshop == null && _junkshops.isNotEmpty) {
+            _selectedJunkshop = _junkshops.first;
+          }
+        });
+
+        _buildRoute();
+      },
+      onError: (e) {
+        debugPrint("❌ Junkshop stream error: $e");
+        if (mounted) _snack("Junkshop stream error: $e", bg: Colors.red);
+      },
+    );
+  }
+
+  void _listenAvailableCollectors() {
+    FirebaseFirestore.instance
+        .collection('Users')
+        .where('Roles', isEqualTo: 'collector')
+        .where('isOnline', isEqualTo: true)
+        .snapshots()
+        .listen((snap) {
+      final list = <Map<String, String>>[];
+      debugPrint("✅ collectors found: ${snap.docs.length}");
+
+      for (final d in snap.docs) {
+        final data = d.data();
+
+        final uid = d.id; // or data['UserID']
+        final name = (data['Name'] ?? data['displayName'] ?? "Collector").toString();
+
+        list.add({
+          'uid': uid,
+          'name': name,
+        });
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _availableCollectors = list;
+
+        // keep selected if still available, otherwise reset
+        final stillThere = _selectedCollectorId != null &&
+            _availableCollectors.any((c) => c['uid'] == _selectedCollectorId);
+
+        if (!stillThere) {
+          _selectedCollectorId = null;
+          _selectedCollectorName = null;
+        }
+      });
+      
+    });
+  }
+
   Set<Marker> _buildMarkers() {
     final markers = <Marker>{};
 
-    // Destination marker
     markers.add(
       Marker(
         markerId: const MarkerId("selected_destination"),
         position: _destLatLng,
         infoWindow: InfoWindow(
-          title: _customDestinationLatLng != null ? "Pinned Drop-off" : _selectedDestination.name,
-          snippet: _customDestinationLatLng != null ? "Custom location" : _selectedDestination.subtitle,
+          title: _customDestinationLatLng != null ? "Pinned Drop-off" : (_selectedJunkshop?.name ?? "Destination"),
+          snippet: _customDestinationLatLng != null ? "Custom location" : (_selectedJunkshop?.subtitle ?? ""),
         ),
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
       ),
     );
 
-    // User marker (optional)
     final p = _currentPosition;
     if (p != null) {
       markers.add(
@@ -326,8 +380,11 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
   Future<void> _openDestinationPicker() async {
+    // Build destination list from Firestore, fallback to Mores if empty
+    final fireList = _junkshops.isNotEmpty; 
+
     final destinations = <Destination>[
-      _mores,
+      ..._junkshops,
       if (_customDestinationLatLng != null)
         Destination(
           name: "Pinned Drop-off",
@@ -335,7 +392,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
           latLng: _customDestinationLatLng!,
         ),
     ];
-
+    
     final picked = await showModalBottomSheet<Destination>(
       context: context,
       backgroundColor: _sheet,
@@ -373,43 +430,57 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                ...destinations.map((d) {
-                  final isPinned = d.name == "Pinned Drop-off";
-                  final selected = isPinned ? (_customDestinationLatLng != null) : (_customDestinationLatLng == null);
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: destinations.length,
+                    itemBuilder: (_, i) {
+                      final d = destinations[i];
+                      final isPinned = d.name == "Pinned Drop-off";
 
-                  return ListTile(
-                    onTap: () => Navigator.pop(context, d),
-                    leading: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: selected ? _accent.o(0.18) : Colors.white.o(0.06),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: selected ? _accent.o(0.55) : Colors.white.o(0.08),
+                      final bool selected = isPinned
+                          ? (_customDestinationLatLng != null)
+                          : (_customDestinationLatLng == null &&
+                              _selectedJunkshop?.name == d.name &&
+                              _selectedJunkshop?.latLng == d.latLng);
+
+                      return ListTile(
+                        onTap: () => Navigator.pop(context, d),
+                        leading: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: selected ? _accent.o(0.18) : Colors.white.o(0.06),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: selected ? _accent.o(0.55) : Colors.white.o(0.08),
+                            ),
+                          ),
+                          child: Icon(
+                            isPinned ? Icons.push_pin : Icons.store_mall_directory,
+                            color: _accent,
+                          ),
                         ),
-                      ),
-                      child: Icon(
-                        isPinned ? Icons.push_pin : Icons.store_mall_directory,
-                        color: _accent,
-                      ),
-                    ),
-                    title: Text(
-                      d.name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: _textPrimary,
-                      ),
-                    ),
-                    subtitle: Text(
-                      d.subtitle,
-                      style: const TextStyle(color: _textSecondary),
-                    ),
-                    trailing: selected
-                        ? const Icon(Icons.check_circle, color: _accent)
-                        : const Icon(Icons.chevron_right, color: _textMuted),
-                  );
-                }),
+                        title: Text(
+                          d.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            color: _textPrimary,
+                          ),
+                        ),
+                        subtitle: Text(
+                          d.subtitle,
+                          style: const TextStyle(color: _textSecondary),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: selected
+                            ? const Icon(Icons.check_circle, color: _accent)
+                            : const Icon(Icons.chevron_right, color: _textMuted),
+                      );
+                    },
+                  ),
+                ),
               ],
             ),
           ),
@@ -425,7 +496,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       if (picked.name == "Pinned Drop-off") {
         // keep pin
       } else {
-        _selectedDestination = picked;
+        _selectedJunkshop = picked;
         _customDestinationLatLng = null;
       }
     });
@@ -434,44 +505,110 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(picked.latLng, 16));
   }
 
-  Future<void> _startPickup() async {
-    if (!_locationReady || _currentPosition == null) {
-      _snack("Still getting your location. Please wait...", bg: Colors.black87);
+  Future<void> _startDirectionsToJunkshop() async {
+    if (_selectedJunkshop == null && _customDestinationLatLng == null) {
+      _snack("Choose a destination first.", bg: Colors.black87);
       return;
     }
 
-    await requestPickupWithConfirm(
-      pickupLatLng: _originLatLng,
-      pickupAddress:
-        "${_originLatLng.latitude.toStringAsFixed(5)}, ${_originLatLng.longitude.toStringAsFixed(5)}",
-    );
-
-    setState(() => _tripStage = TripStage.pickup);
-    await _buildRoute();
-    if (!mounted) return;
-    _snack("Pickup request sent — waiting for collector.", bg: _accent);
-  }
-
-  Future<void> _arrivedDeliver() async {
     setState(() => _tripStage = TripStage.delivering);
     await _buildRoute();
+
+    _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_destLatLng, 15));
+    _snack("Showing directions to destination.", bg: _sheet);
+  }
+
+  Future<void> requestPickupWithConfirm({
+    required LatLng pickupLatLng,
+    required String? pickupAddress,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    if (_selectedCollectorId == null) {
+      _snack("Please choose an available collector first.", bg: Colors.red);
+      return;
+    }
+
+    final householdName = await _getUserName(user.uid, fallback: user.email ?? "Household");
+    final collectorName = _selectedCollectorName ??
+        await _getUserName(_selectedCollectorId!, fallback: "Collector");
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Confirm Pickup Request"),
+        content: Text(
+          "Send pickup request?\n\n"
+          "Address: ${pickupAddress ?? "Unknown"}\n"
+          "Collector: $collectorName\n"
+          "Destination: ${_destinationTitle}",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Confirm"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('pickupRequests').add({
+        'householdId': user.uid,
+        'householdName': householdName,
+
+        'collectorId': _selectedCollectorId,
+        'collectorName': collectorName,
+
+        'status': 'pending',
+
+        'pickupLocation': GeoPoint(pickupLatLng.latitude, pickupLatLng.longitude),
+        'pickupAddress': pickupAddress ?? '',
+
+        'junkshopName': _selectedJunkshop?.name ?? '',
+        'junkshopLocation': _selectedJunkshop == null
+            ? null
+            : GeoPoint(_selectedJunkshop!.latLng.latitude, _selectedJunkshop!.latLng.longitude),
+
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e, st) {
+      debugPrint("❌ pickupRequests add failed: $e");
+      debugPrint("$st");
+      if (mounted) _snack("Pickup failed: $e", bg: Colors.red);
+      return;
+    }
+
     if (!mounted) return;
-    _snack("Deliver mode — confirm drop-off.", bg: _sheet);
+    _snack("Pickup request sent!", bg: _accent);
   }
 
-  void _finishDelivery() {
-    setState(() => _tripStage = TripStage.planning);
-    _snack("Delivered — trip complete.", bg: _sheet);
-  }
-
-  void _cancelPickup() {
-    setState(() => _tripStage = TripStage.planning);
-    _snack("Pickup canceled.", bg: _sheet);
+  Future<String> _getUserName(String uid, {String fallback = "Unknown"}) async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('Users').doc(uid).get();
+      final data = doc.data() ?? {};
+      final name = (data['displayName'] ?? data['name'] ?? data['email'] ?? '').toString().trim();
+      return name.isEmpty ? fallback : name;
+    } catch (_) {
+      return fallback;
+    }
   }
 
   Future<void> _buildRoute() async {
-    // ✅ Only skip if user didn't replace the key
     if (_googleDirectionsApiKey.isEmpty || _googleDirectionsApiKey == "API_KEY_HERE") {
+      if (mounted) setState(() => _routePoints = []);
+      return;
+    }
+
+    if (_currentPosition == null) {
       if (mounted) setState(() => _routePoints = []);
       return;
     }
@@ -546,15 +683,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   @override
   Widget build(BuildContext context) {
-    final destinationTitle = _customDestinationLatLng != null ? "Pinned Drop-off" : _selectedDestination.name;
-
-    final String primaryButtonLabel = _tripStage == TripStage.planning
-        ? "START PICKUP"
-        : _tripStage == TripStage.pickup
-            ? "ARRIVED / DELIVER"
-            : "FINISH DELIVERY";
-
-    final bool showCancel = _tripStage == TripStage.pickup;
+    final bool hasCollectors = _availableCollectors.isNotEmpty;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -667,7 +796,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              destinationTitle.isEmpty ? "Where to drop off?" : destinationTitle,
+                              _destinationTitle.isEmpty ? "Where to drop off?" : _destinationTitle,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 color: _textPrimary,
@@ -689,9 +818,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
           // Bottom sheet
           DraggableScrollableSheet(
-            initialChildSize: 0.44,
+            initialChildSize: 0.46,
             minChildSize: 0.22,
-            maxChildSize: 0.80,
+            maxChildSize: 0.82,
             builder: (context, scrollController) {
               return Container(
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
@@ -732,7 +861,82 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Address card
+                    // ===== Collectors =====
+                    const Text(
+                      "AVAILABLE COLLECTORS",
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: _textMuted,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.o(0.06),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white.o(0.10)),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _selectedCollectorId,
+                          dropdownColor: _sheet,
+                          hint: Text(
+                            hasCollectors ? "Choose a driver" : "No collectors online",
+                            style: const TextStyle(color: _textSecondary),
+                          ),
+                          iconEnabledColor: _textSecondary,
+                          items: _availableCollectors.map((c) {
+                            final uid = c['uid']!;
+                            final name = c['name']!;
+
+                            return DropdownMenuItem<String>(
+                              value: uid,
+                              child: Row(
+                                children: [
+                                  // 🟢 Online indicator
+                                  Container(
+                                    width: 10,
+                                    height: 10,
+                                    decoration: const BoxDecoration(
+                                      color: Colors.green,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+
+                                  Expanded(
+                                    child: Text(
+                                      name,
+                                      style: const TextStyle(color: _textPrimary),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: hasCollectors
+                              ? (uid) {
+                                  if (uid == null) return;
+                                  final found = _availableCollectors.firstWhere((c) => c['uid'] == uid);
+                                  setState(() {
+                                    _selectedCollectorId = uid;
+                                    _selectedCollectorName = found['name'];
+                                  });
+                                }
+                              : null,
+                        ),
+                      ),
+                    ),
+
+                    // ✅ FIX: add spacing so it DOESN’T visually overlap
+                    const SizedBox(height: 12),
+
+                    // ===== Location + Destination card =====
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -764,14 +968,15 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                   ),
                                 ),
                                 const SizedBox(height: 4),
+                                // YOUR LOCATION VALUE
                                 Text(
                                   _locationReady && _currentPosition != null
                                       ? "${_currentPosition!.latitude.toStringAsFixed(5)}, ${_currentPosition!.longitude.toStringAsFixed(5)}"
                                       : "Locating...",
                                   style: const TextStyle(
                                     fontSize: 14,
-                                    color: _textPrimary,
-                                    fontWeight: FontWeight.w700,
+                                    color: _textSecondary,   // 👈 softer than white
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
                                 const SizedBox(height: 14),
@@ -785,12 +990,13 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                   ),
                                 ),
                                 const SizedBox(height: 4),
+                                // DESTINATION VALUE
                                 Text(
-                                  destinationTitle,
+                                  _destinationTitle,
                                   style: const TextStyle(
-                                    fontSize: 14,
-                                    color: _textPrimary,
-                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                    color: _accent,   // 👈 makes destination stand out
+                                    fontWeight: FontWeight.w800,
                                   ),
                                 ),
                                 if (_customDestinationLatLng != null) ...[
@@ -807,7 +1013,10 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                               ],
                             ),
                           ),
-                          const Icon(Icons.chevron_right, color: _textMuted),
+                          InkWell(
+                            onTap: _openDestinationPicker,
+                            child: const Icon(Icons.chevron_right, color: _textMuted),
+                          ),
                         ],
                       ),
                     ),
@@ -843,43 +1052,58 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
                     const SizedBox(height: 18),
 
-                    // Primary button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 60,
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          if (_tripStage == TripStage.planning) {
-                            await _startPickup();
-                          } else if (_tripStage == TripStage.pickup) {
-                            await _arrivedDeliver();
-                          } else {
-                            _finishDelivery();
-                          }
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _tripStage == TripStage.pickup ? Colors.white : _accent,
-                          foregroundColor: _bg,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                          elevation: 0,
+                    // Buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 56,
+                            child: ElevatedButton.icon(
+                              onPressed: _startDirectionsToJunkshop,
+                              icon: const Icon(Icons.directions),
+                              label: const Text("DIRECTIONS"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: _bg,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                                elevation: 0,
+                              ),
+                            ),
+                          ),
                         ),
-                        child: Text(
-                          primaryButtonLabel,
-                          style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SizedBox(
+                            height: 56,
+                            child: ElevatedButton.icon(
+                              onPressed: () async {
+                                if (!hasCollectors) {
+                                  _snack("No available collectors right now.", bg: Colors.black87);
+                                  return;
+                                }
+                                if (!_locationReady || _currentPosition == null) {
+                                  _snack("Still getting your location. Please wait...", bg: Colors.black87);
+                                  return;
+                                }
+                                await requestPickupWithConfirm(
+                                  pickupLatLng: _originLatLng,
+                                  pickupAddress:
+                                      "${_originLatLng.latitude.toStringAsFixed(5)}, ${_originLatLng.longitude.toStringAsFixed(5)}",
+                                );
+                              },
+                              icon: const Icon(Icons.local_shipping),
+                              label: const Text("PICKUP"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _accent,
+                                foregroundColor: _bg,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                                elevation: 0,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-
-                    if (showCancel) ...[
-                      const SizedBox(height: 10),
-                      TextButton(
-                        onPressed: _cancelPickup,
-                        child: const Text(
-                          "Cancel pickup",
-                          style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ],
 
                     const SizedBox(height: 10),
 
@@ -898,7 +1122,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         ],
       ),
 
-      // ✅ Clean UI: no bottom navbar
       bottomNavigationBar: null,
     );
   }

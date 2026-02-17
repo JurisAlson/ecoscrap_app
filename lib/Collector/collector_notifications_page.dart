@@ -106,7 +106,7 @@ class CollectorNotificationsPage extends StatelessWidget {
         stream: FirebaseFirestore.instance
             .collection('pickupRequests')
             .where('status', isEqualTo: 'pending')
-            .where('collectorId', isNull: true)
+            .where('collectorId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
             // ✅ IMPORTANT: do NOT orderBy createdAt unless you're sure every doc has it
             .snapshots(),
         builder: (context, snap) {

@@ -1,17 +1,67 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import 'collector_notifications_page.dart';
 import 'collector_messages_page.dart';
-import 'collector_pickup_map_page.dart'; // new separate map page file
+import 'collector_pickup_map_page.dart';
 
-class CollectorsDashboardPage extends StatelessWidget {
+class CollectorsDashboardPage extends StatefulWidget {
   const CollectorsDashboardPage({super.key});
 
+  @override
+  State<CollectorsDashboardPage> createState() => _CollectorsDashboardPageState();
+}
 
-
+class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
+    with WidgetsBindingObserver {
   // Theme
   static const Color primaryColor = Color(0xFF1FA9A7);
   static const Color bgColor = Color(0xFF0F172A);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _setOnline(true);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _setOnline(false);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // foreground = online, background = offline
+    if (state == AppLifecycleState.resumed) {
+      _setOnline(true);
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _setOnline(false);
+    }
+  }
+
+  Future<void> _setOnline(bool online) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('Users')
+          .doc(user.uid) // ✅ assumes Users docId == auth.uid
+          .set({
+        'isOnline': online,
+        'lastSeen': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("❌ setOnline failed: $e");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -44,7 +94,6 @@ class CollectorsDashboardPage extends StatelessWidget {
                         ),
                       ),
 
-                      // ✅ Pickup/Map (separate page)
                       _iconButton(
                         Icons.map_outlined,
                         onTap: () {
@@ -55,7 +104,6 @@ class CollectorsDashboardPage extends StatelessWidget {
                       ),
                       const SizedBox(width: 10),
 
-                      // ✅ Messages (separate page)
                       _iconButton(
                         Icons.chat_bubble_outline,
                         onTap: () {
@@ -67,7 +115,6 @@ class CollectorsDashboardPage extends StatelessWidget {
                       ),
                       const SizedBox(width: 10),
 
-                      // ✅ Notifications (kept in this same file)
                       _iconButton(
                         Icons.notifications_none,
                         onTap: () {
@@ -77,11 +124,14 @@ class CollectorsDashboardPage extends StatelessWidget {
                           );
                         },
                       ),
+                      _iconButton(
+                        Icons.person_outline,
+                        onTap: () => _showProfileSheet(context),
+                      ),
                     ],
                   ),
                 ),
 
-                // ✅ Logs stay on dashboard
                 const Expanded(child: _CollectorLogsHome()),
               ],
             ),
@@ -90,7 +140,6 @@ class CollectorsDashboardPage extends StatelessWidget {
       ),
     );
   }
-  
 
   // ================== UI HELPERS ==================
   static Widget _logoBox() {
@@ -128,30 +177,87 @@ class CollectorsDashboardPage extends StatelessWidget {
       ),
     );
   }
-}
-class CollectorNotificationsPage extends StatelessWidget {
-  const CollectorNotificationsPage({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F172A),
-        title: const Text("Notifications"),
+  void _showProfileSheet(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF111928),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      body: const Center(
-        child: Text(
-          "Pickup Requests / Notifications here",
-          style: TextStyle(color: Colors.white, fontSize: 18),
-        ),
-      ),
+      builder: (_) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                const Icon(Icons.person, size: 64, color: Colors.white54),
+                const SizedBox(height: 10),
+
+                Text(
+                  user?.displayName ?? "Collector",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+
+                Text(
+                  user?.email ?? "No email",
+                  style: const TextStyle(color: Colors.white70),
+                ),
+
+                const SizedBox(height: 18),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: () async {
+                      // ✅ mark offline before sign out
+                      await _setOnline(false);
+
+                      await FirebaseAuth.instance.signOut();
+                      if (!context.mounted) return;
+
+                      Navigator.pop(context);
+                      Navigator.pushReplacementNamed(context, '/login');
+                    },
+                    icon: const Icon(Icons.logout),
+                    label: const Text("Logout"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryColor,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
-// =====================================================
-// HOME TAB = LOGS (shown on dashboard)
-// =====================================================
+
 class _CollectorLogsHome extends StatelessWidget {
   const _CollectorLogsHome();
 
