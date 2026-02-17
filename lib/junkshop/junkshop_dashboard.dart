@@ -6,6 +6,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../screens/inventory_screen.dart';
 import '../screens/transaction_screen.dart';
 
+import '../screens/analytics_home_tab.dart';
+
 class JunkshopDashboardPage extends StatefulWidget {
   final String shopID;
 
@@ -22,7 +24,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   final Color bgColor = const Color(0xFF0F172A);
 
   List<Widget> _tabScreens() => [
-        _homeTabStream(),
+        AnalyticsHomeTab(shopID: widget.shopID),
 
         // Inventory tab
         InventoryScreen(shopID: widget.shopID),

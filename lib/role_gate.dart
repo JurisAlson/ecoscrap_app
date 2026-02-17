@@ -8,7 +8,7 @@ import 'auth/login_page.dart';
 import 'household/household_dashboard.dart';
 import 'junkshop/junkshop_dashboard.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'Collector/collectors_dashboard.dart';
+//import 'Collector/collectors_dashboard.dart';
 
 Future<void> grantMeAdminClaimIfOwner(User user) async {
 if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
