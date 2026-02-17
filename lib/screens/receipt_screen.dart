@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../constants/categories.dart';
 
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
@@ -20,22 +21,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   final TextEditingController _customerCtrl = TextEditingController();
   final List<_ReceiptItem> _items = [];
 
-  static const List<String> kBuyCategories = [
-    "PP WHITE",
-    "HDPE",
-    "BLACK",
-    "PP COLORED",
-    "PET",
-  ];
-
-  static const List<String> kBuySubCategories = [
-    "PLASTIC BOTTLE",
-    "TUPPERWARE",
-    "WATER GALLON",
-    "MIXED PLASTICS",
-    "CONTAINERS",
-  ];
-
   double get _totalAmount {
     double total = 0;
     for (final i in _items) {
@@ -44,12 +29,42 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     return total;
   }
 
+  // ===================== FIXED PRICE HELPERS =====================
+  void _recalcBuyItem(_ReceiptItem it) {
+    if (_txType != "buy") return;
+
+    final cat = (it.categoryValue ?? kMajorCategories.first).trim();
+    final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+
+    final costPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+    it.buyCostPerKg = costPerKg;
+
+    final totalCost = kg * costPerKg;
+    it.subtotalCtrl.text = totalCost.toStringAsFixed(2);
+  }
+
+  void _recalcSaleItem(_ReceiptItem it) {
+    if (_txType != "sale") return;
+
+    final cat = (it.categoryValue ?? kMajorCategories.first).trim();
+    final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+
+    final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
+    it.sellPricePerKg = sellPerKg;
+
+    final sellTotal = kg * sellPerKg;
+    it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
+  }
+
   void _addItem() => setState(() {
         final it = _ReceiptItem();
+
         if (_txType == "buy") {
-          it.categoryValue = kBuyCategories.first;
+          it.categoryValue = kMajorCategories.first;
           it.subCategoryValue = kBuySubCategories.first;
+          _recalcBuyItem(it);
         }
+
         _items.add(it);
       });
 
@@ -82,6 +97,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       item.salePickedName = (picked['name'] ?? '').toString();
       item.categoryValue = (picked['category'] ?? '').toString();
       item.subCategoryValue = (picked['subCategory'] ?? '').toString();
+
+      // after picking inventory, compute fixed sell based on category
+      _recalcSaleItem(item);
     });
   }
 
@@ -90,7 +108,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     setState(() {
       _txType = next;
-
       for (final i in _items) {
         i.dispose();
       }
@@ -139,17 +156,16 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     double totalWeightKg = 0.0;
     for (final it in _items) {
-      final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-      totalWeightKg += weightKg;
+      totalWeightKg += (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0);
     }
 
     for (final it in _items) {
       final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-      final subtotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
+      final computedTotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
 
-      if (weightKg <= 0 || subtotal <= 0) {
+      if (weightKg <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Weight and amount must be greater than 0.")),
+          const SnackBar(content: Text("Weight must be greater than 0.")),
         );
         return;
       }
@@ -157,41 +173,51 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       if (isSale) {
         if (it.inventoryDocId == null) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Please select an inventory item for each line.")),
+            const SnackBar(content: Text("Please select an inventory item for each SALE line.")),
           );
           return;
         }
 
-        final name = (it.salePickedName ?? "").trim();
+        final cat = (it.categoryValue ?? "").trim();
+        final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
+        final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+
+        final sellTotal = weightKg * sellPerKg;
+        final costTotal = weightKg * buyCostPerKg;
+        final profit = sellTotal - costTotal;
 
         itemsPayload.add({
           'inventoryDocId': it.inventoryDocId,
-          'itemName': name,
-          'category': it.categoryValue ?? '',
+          'itemName': (it.salePickedName ?? "").trim(),
+          'category': cat,
           'subCategory': it.subCategoryValue ?? '',
           'weightKg': weightKg,
-          'subtotal': subtotal,
+
+          'sellPricePerKg': sellPerKg,
+          'sellTotal': sellTotal,
+
+          'costPerKg': buyCostPerKg,
+          'costTotal': costTotal,
+          'profit': profit,
         });
       } else {
-        // ✅ BUY payload (this is what you lost in your current code)
         final cat = (it.categoryValue ?? "").trim();
         final sub = (it.subCategoryValue ?? "").trim();
 
-        if (cat.isEmpty || sub.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Select category and sub-category for BUY.")),
-          );
-          return;
-        }
-
-        final derivedName = "$cat • $sub";
+        final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+        final costTotal = weightKg * buyCostPerKg;
 
         itemsPayload.add({
-          'itemName': derivedName,
+          'itemName': "$cat • $sub",
           'category': cat,
           'subCategory': sub,
           'weightKg': weightKg,
-          'subtotal': subtotal,
+
+          'costPerKg': buyCostPerKg,
+          'costTotal': costTotal,
+
+          // keep old field name for compatibility
+          'subtotal': computedTotal,
         });
       }
     }
@@ -200,17 +226,17 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     try {
       await FirebaseFirestore.instance
-        .collection('Junkshop')
-        .doc(widget.shopID)
-        .collection('transaction')
-        .add({
-      'transactionType': _txType,
-      'customerName': partyName,
-      'items': itemsPayload,
-      'totalAmount': _totalAmount,
-      'totalWeightKg': totalWeightKg, // ✅ ADD THIS
-      'transactionDate': FieldValue.serverTimestamp(),
-      'createdAt': FieldValue.serverTimestamp(),
+          .collection('Junkshop')
+          .doc(widget.shopID)
+          .collection('transaction')
+          .add({
+        'transactionType': _txType,
+        'customerName': partyName,
+        'items': itemsPayload,
+        'totalAmount': _totalAmount,
+        'totalWeightKg': totalWeightKg,
+        'transactionDate': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
       if (!mounted) return;
@@ -280,11 +306,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               children: [
                 const Text(
                   "Items",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 TextButton.icon(
                   onPressed: _addItem,
@@ -341,11 +363,14 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
                                 if (!isSale) ...[
                                   DropdownButtonFormField<String>(
-                                    value: item.categoryValue ?? kBuyCategories.first,
-                                    items: kBuyCategories
+                                    value: item.categoryValue ?? kMajorCategories.first,
+                                    items: kMajorCategories
                                         .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                                         .toList(),
-                                    onChanged: (v) => setState(() => item.categoryValue = v),
+                                    onChanged: (v) => setState(() {
+                                      item.categoryValue = v;
+                                      _recalcBuyItem(item);
+                                    }),
                                     dropdownColor: const Color(0xFF0F172A),
                                     style: const TextStyle(color: Colors.white),
                                     decoration: _dropdownDecoration("Category"),
@@ -382,7 +407,13 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                               label: "Weight (kg)",
                               hint: "0.0",
                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              onChanged: (_) => setState(() {}),
+                              onChanged: (_) => setState(() {
+                                if (isSale) {
+                                  _recalcSaleItem(item);
+                                } else {
+                                  _recalcBuyItem(item);
+                                }
+                              }),
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -391,8 +422,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                               controller: item.subtotalCtrl,
                               label: isSale ? "Subtotal (₱)" : "Cost (₱)",
                               hint: "0.00",
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              onChanged: (_) => setState(() {}),
+                              readOnly: true, // ✅ FIXED
                             ),
                           ),
                         ],
@@ -415,11 +445,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                   ),
                   Text(
                     "₱${_totalAmount.toStringAsFixed(2)}",
-                    style: TextStyle(
-                      color: primaryColor,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(color: primaryColor, fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -438,11 +464,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 ),
                 child: Text(
                   isSale ? "SAVE SALE RECEIPT" : "SAVE BUY RECEIPT",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
-                  ),
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
               ),
             ),
@@ -494,6 +516,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     required TextEditingController controller,
     required String label,
     required String hint,
+    bool readOnly = false,
     TextInputType keyboardType = TextInputType.text,
     Function(String)? onChanged,
   }) {
@@ -504,6 +527,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         const SizedBox(height: 6),
         TextField(
           controller: controller,
+          readOnly: readOnly,
           keyboardType: keyboardType,
           onChanged: onChanged,
           style: const TextStyle(color: Colors.white),
@@ -550,6 +574,9 @@ class _ReceiptItem {
   String? categoryValue;
   String? subCategoryValue;
 
+  double? buyCostPerKg;   // fixed buy cost/kg
+  double? sellPricePerKg; // fixed sell price/kg
+
   double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
 
   void dispose() {
@@ -558,6 +585,7 @@ class _ReceiptItem {
   }
 }
 
+// ===================== INVENTORY PICKER =====================
 class _InventoryPickerSheet extends StatefulWidget {
   final String shopID;
 

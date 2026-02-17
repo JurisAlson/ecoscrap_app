@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../constants/categories.dart';
 
 enum FormMode { create, edit }
 
@@ -13,12 +15,10 @@ class InventoryFormScreen extends StatefulWidget {
   });
 
   @override
-  State<InventoryFormScreen> createState() =>
-      _InventoryFormScreenState();
+  State<InventoryFormScreen> createState() => _InventoryFormScreenState();
 }
 
-class _InventoryFormScreenState
-    extends State<InventoryFormScreen> {
+class _InventoryFormScreenState extends State<InventoryFormScreen> {
   final _formKey = GlobalKey<FormState>();
 
   final _name = TextEditingController();
@@ -26,26 +26,22 @@ class _InventoryFormScreenState
   final _qty = TextEditingController();
   final _notes = TextEditingController();
 
-  String _category = "PP Color";
+  String _category = kMajorCategories.first;
   bool _saving = false;
-
-  final _categories = const [
-    "PP Color",
-    "PP White",
-    "HD",
-    "Black"
-  ];
 
   @override
   void initState() {
     super.initState();
     final data = widget.initial;
     if (data != null) {
-      _name.text = data['name'] ?? '';
-      _category = data['category'] ?? _category;
-      _sub.text = data['subCategory'] ?? '';
-      _qty.text = data['quantityKg']?.toString() ?? '';
-      _notes.text = data['notes'] ?? '';
+      _name.text = (data['name'] ?? '').toString();
+      _category = (data['category'] ?? _category).toString();
+      _sub.text = (data['subCategory'] ?? '').toString();
+
+      // ✅ FIX: read unitsKg (same field you save)
+      _qty.text = ((data['unitsKg'] ?? 0).toString());
+
+      _notes.text = (data['notes'] ?? '').toString();
     }
   }
 
@@ -63,8 +59,7 @@ class _InventoryFormScreenState
     final isEdit = widget.mode == FormMode.edit;
 
     return Scaffold(
-      appBar:
-          AppBar(title: Text(isEdit ? "Edit Item" : "Add Item")),
+      appBar: AppBar(title: Text(isEdit ? "Edit Item" : "Add Item")),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
@@ -73,45 +68,37 @@ class _InventoryFormScreenState
             children: [
               TextFormField(
                 controller: _name,
-                decoration:
-                    const InputDecoration(labelText: "Item name"),
+                decoration: const InputDecoration(labelText: "Item name"),
                 validator: (v) =>
-                    v == null || v.trim().isEmpty
-                        ? "Required"
-                        : null,
+                    v == null || v.trim().isEmpty ? "Required" : null,
               ),
               const SizedBox(height: 10),
 
               DropdownButtonFormField<String>(
-                initialValue: _category,
-                items: _categories
-                    .map((c) =>
-                        DropdownMenuItem(value: c, child: Text(c)))
+                value: _category,
+                items: kMajorCategories
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                     .toList(),
                 onChanged: (v) =>
-                    setState(() => _category = v!),
-                decoration:
-                    const InputDecoration(labelText: "Category"),
+                    setState(() => _category = v ?? kMajorCategories.first),
+                decoration: const InputDecoration(labelText: "Category"),
               ),
               const SizedBox(height: 10),
 
               TextFormField(
                 controller: _sub,
-                decoration: const InputDecoration(
-                    labelText: "Sub-category (optional)"),
+                decoration:
+                    const InputDecoration(labelText: "Sub-category (optional)"),
               ),
               const SizedBox(height: 10),
 
               TextFormField(
                 controller: _qty,
-                keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: "Quantity (kg)"),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: "Quantity (kg)"),
                 validator: (v) {
                   final n = double.tryParse(v ?? "");
-                  if (n == null || n < 0) {
-                    return "Enter a valid number";
-                  }
+                  if (n == null || n < 0) return "Enter a valid number";
                   return null;
                 },
               ),
@@ -119,17 +106,14 @@ class _InventoryFormScreenState
 
               TextFormField(
                 controller: _notes,
-                decoration:
-                    const InputDecoration(labelText: "Notes (optional)"),
+                decoration: const InputDecoration(labelText: "Notes (optional)"),
                 maxLines: 3,
               ),
               const SizedBox(height: 18),
 
               ElevatedButton(
                 onPressed: _saving ? null : _save,
-                child: Text(_saving
-                    ? "Saving..."
-                    : (isEdit ? "Update" : "Create")),
+                child: Text(_saving ? "Saving..." : (isEdit ? "Update" : "Create")),
               ),
             ],
           ),
@@ -145,10 +129,11 @@ class _InventoryFormScreenState
 
     final payload = {
       'name': _name.text.trim(),
-      'category': _category,
+      'category': _category.trim(),
       'subCategory': _sub.text.trim(),
-      'quantityKg': double.parse(_qty.text),
+      'unitsKg': double.tryParse(_qty.text.trim()) ?? 0.0,
       'notes': _notes.text.trim(),
+      'createdAt': FieldValue.serverTimestamp(),
     };
 
     if (!mounted) return;
