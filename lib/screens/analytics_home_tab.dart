@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+// ✅ ADD: charts package
+import 'package:fl_chart/fl_chart.dart';
+
 import '../constants/categories.dart';
 
 class AnalyticsHomeTab extends StatefulWidget {
@@ -43,6 +46,11 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     return DateTime(now.year, month + 1, 1);
   }
 
+  int _daysInMonth(DateTime start) {
+    final end = DateTime(start.year, start.month + 1, 1);
+    return end.subtract(const Duration(days: 1)).day;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -72,6 +80,81 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
         _buildMonthSelector(),
         const SizedBox(height: 16),
+
+        // ✅ ADD: CHARTS BETWEEN MONTH SELECTOR AND MONTHLY PROJECTION
+        StreamBuilder<QuerySnapshot>(
+          stream: txStream,
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return _card(
+                child: const SizedBox(
+                  height: 220,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              );
+            }
+
+            if (snap.hasError) {
+              return _card(
+                child: Text(
+                  "Chart error: ${snap.error}",
+                  style: const TextStyle(color: Colors.redAccent),
+                ),
+              );
+            }
+
+            // ---- Compute Daily Revenue + Revenue by Category (sale only) ----
+            final days = _daysInMonth(start);
+
+            // day -> revenue
+            final dailyRevenue = <int, double>{};
+            for (int d = 1; d <= days; d++) {
+              dailyRevenue[d] = 0.0;
+            }
+
+            final revByCat = {for (final c in kMajorCategories) c: 0.0};
+
+            for (final doc in snap.data!.docs) {
+              final data = doc.data() as Map<String, dynamic>;
+              final type = (data['transactionType'] ?? '').toString();
+              if (type != 'sale') continue;
+
+              final ts = data['transactionDate'] as Timestamp?;
+              final dt = ts?.toDate();
+              if (dt == null) continue;
+
+              final items = (data['items'] as List<dynamic>?) ?? [];
+              double txRevenue = 0.0;
+
+              for (final raw in items) {
+                final it = raw as Map<String, dynamic>;
+                final cat = (it['category'] ?? '').toString();
+                final sellTotal = (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
+
+                txRevenue += sellTotal;
+
+                if (revByCat.containsKey(cat)) {
+                  revByCat[cat] = revByCat[cat]! + sellTotal;
+                }
+              }
+
+              // group by day
+              final day = dt.day;
+              if (dailyRevenue.containsKey(day)) {
+                dailyRevenue[day] = (dailyRevenue[day] ?? 0.0) + txRevenue;
+              }
+            }
+
+            return _chartsBlock(
+              start: start,
+              dailyRevenue: dailyRevenue,
+              revByCat: revByCat,
+            );
+          },
+        ),
+
+        const SizedBox(height: 16),
+
         _sectionTitle("MONTHLY PROJECTION"),
 
         StreamBuilder<QuerySnapshot>(
@@ -204,6 +287,267 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     );
   }
 
+  // ===================== ADD: Charts Block =====================
+  Widget _chartsBlock({
+  required DateTime start,
+  required Map<int, double> dailyRevenue,
+  required Map<String, double> revByCat,
+}) {
+  return _card(
+    child: SizedBox(
+      height: 200, // ✅ smaller overall height
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "Analytics Overview",
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          Expanded(
+            child: PageView(
+              children: [
+                // 🔹 Slide 1: Daily Revenue Line
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Daily Revenue",
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: _dailyRevenueLineChart(
+                        start: start,
+                        dailyRevenue: dailyRevenue,
+                      ),
+                    ),
+                  ],
+                ),
+
+                // 🔹 Slide 2: Revenue by Category Bar
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Revenue by Category",
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: _revenueByCategoryBarChart(revByCat),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+  Widget _dailyRevenueLineChart({
+    required DateTime start,
+    required Map<int, double> dailyRevenue,
+  }) {
+    final days = _daysInMonth(start);
+
+    // spots: x=day, y=revenue
+    final spots = <FlSpot>[];
+    double maxY = 0.0;
+    for (int d = 1; d <= days; d++) {
+      final y = (dailyRevenue[d] ?? 0.0);
+      if (y > maxY) maxY = y;
+      spots.add(FlSpot(d.toDouble(), y));
+    }
+
+    if (maxY <= 0) {
+      return const Center(
+        child: Text(
+          "No sales data for this month.",
+          style: TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    return LineChart(
+      LineChartData(
+        minX: 1,
+        maxX: days.toDouble(),
+        minY: 0,
+        maxY: maxY * 1.15,
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (v) => FlLine(
+            color: Colors.white.withOpacity(0.06),
+            strokeWidth: 1,
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 42,
+              interval: maxY <= 0 ? 1 : (maxY / 3),
+              getTitlesWidget: (value, meta) {
+                // keep it short (k = thousand)
+                String label;
+                if (value >= 1000) {
+                  label = "${(value / 1000).toStringAsFixed(1)}k";
+                } else {
+                  label = value.toStringAsFixed(0);
+                }
+                return Text(label,
+                    style: const TextStyle(color: Colors.white54, fontSize: 10));
+              },
+            ),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              interval: 5, // show every 5 days
+              getTitlesWidget: (value, meta) {
+                final day = value.toInt();
+                if (day < 1 || day > days) return const SizedBox.shrink();
+                return Text("$day",
+                    style: const TextStyle(color: Colors.white54, fontSize: 10));
+              },
+            ),
+          ),
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            color: primaryColor,
+            barWidth: 3,
+            dotData: FlDotData(show: false),
+            belowBarData: BarAreaData(
+              show: true,
+              color: primaryColor.withOpacity(0.12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _revenueByCategoryBarChart(Map<String, double> revByCat) {
+    // Keep only categories with values > 0, sorted descending
+    final entries = revByCat.entries
+        .where((e) => e.value > 0)
+        .toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    if (entries.isEmpty) {
+      return const Center(
+        child: Text(
+          "No category revenue yet.",
+          style: TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    double maxY = entries.first.value;
+    if (maxY <= 0) maxY = 1;
+
+    final groups = <BarChartGroupData>[];
+    for (int i = 0; i < entries.length; i++) {
+      final v = entries[i].value;
+      groups.add(
+        BarChartGroupData(
+          x: i,
+          barRods: [
+            BarChartRodData(
+              toY: v,
+              width: 18,
+              borderRadius: BorderRadius.circular(6),
+              color: primaryColor,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return BarChart(
+      BarChartData(
+        minY: 0,
+        maxY: maxY * 1.2,
+        borderData: FlBorderData(show: false),
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (v) => FlLine(
+            color: Colors.white.withOpacity(0.06),
+            strokeWidth: 1,
+          ),
+        ),
+        titlesData: FlTitlesData(
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 42,
+              interval: maxY <= 0 ? 1 : (maxY / 3),
+              getTitlesWidget: (value, meta) {
+                String label;
+                if (value >= 1000) {
+                  label = "${(value / 1000).toStringAsFixed(1)}k";
+                } else {
+                  label = value.toStringAsFixed(0);
+                }
+                return Text(label,
+                    style: const TextStyle(color: Colors.white54, fontSize: 10));
+              },
+            ),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (value, meta) {
+                final i = value.toInt();
+                if (i < 0 || i >= entries.length) return const SizedBox.shrink();
+
+                // short label (first 3 letters) to avoid crowding
+                final name = entries[i].key;
+                final short = name.length <= 3 ? name : name.substring(0, 3);
+
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    short.toUpperCase(),
+                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        barGroups: groups,
+      ),
+    );
+  }
+
+  // ===================== Your Existing UI =====================
   Widget _homeHeader() {
     return Row(
       children: [
