@@ -11,8 +11,6 @@ import '../auth/JunkshopAccountCreation.dart';
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
 
-  
-
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
@@ -24,26 +22,18 @@ class _DashboardPageState extends State<DashboardPage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  
-
   // ===== TOP SLIDER STATE =====
   final PageController _promoController = PageController();
   int _promoIndex = 0;
   Timer? _promoTimer;
 
-  // ===== BOTTOM BAR AUTO-HIDE =====
-  bool _bottomBarHidden = false;
-  Timer? _bottomBarTimer;
-
-  static const double _bottomBarHeight = 140; // your current height
-  static const double _bottomBarPeek = 12;    // small grabber area visible when hidden
-
+  // ✅ FIXED bottom bar height (nav + room for camera action bar)
+  static const double _bottomBarHeight = 140;
 
   // ===== CAMERA BAR STATE =====
   bool _cameraBarOpen = false;
 
   // ================= TAB SCREENS =================
-  // Order: Home, History, Collectors, Chat (Camera is middle button, not a tab)
   List<Widget> get _tabScreens => [
         _householdHome(),
         _historyScreen(),
@@ -72,26 +62,6 @@ class _DashboardPageState extends State<DashboardPage> {
     });
   }
 
-  void _startBottomBarAutoHide() {
-  _bottomBarTimer?.cancel();
-  _bottomBarTimer = Timer(const Duration(seconds: 3), () {
-    if (!mounted) return;
-    setState(() => _bottomBarHidden = true);
-  });
-}
-
-void _showBottomBar() {
-  if (!mounted) return;
-  setState(() => _bottomBarHidden = false);
-  _startBottomBarAutoHide();
-}
-
-void _hideBottomBar() {
-  if (!mounted) return;
-  setState(() => _bottomBarHidden = true);
-}
-
-
   @override
   void dispose() {
     _promoTimer?.cancel();
@@ -106,7 +76,6 @@ void _hideBottomBar() {
   }
 
   // ================= CAMERA =================
-
   Future<void> _openLens(BuildContext context) async {
     var status = await Permission.camera.status;
     if (status.isDenied) {
@@ -125,7 +94,6 @@ void _hideBottomBar() {
   }
 
   // ================= BUILD =================
-
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -164,11 +132,11 @@ void _hideBottomBar() {
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                     child: Row(
                       children: [
-                        // ✅ LEFT PROFILE ICON (same size & gradient as leaf)
+                        // ✅ LEFT PROFILE ICON
                         GestureDetector(
                           onTap: () {
                             _closeCameraBar();
-                            _scaffoldKey.currentState?.openDrawer(); // LEFT slide = profile
+                            _scaffoldKey.currentState?.openDrawer();
                           },
                           child: Container(
                             width: 45,
@@ -177,16 +145,13 @@ void _hideBottomBar() {
                               gradient: LinearGradient(colors: [primaryColor, Colors.green]),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: const Icon(
-                              Icons.person, // replaced leaf
-                              color: Colors.white,
-                            ),
+                            child: const Icon(Icons.person, color: Colors.white),
                           ),
                         ),
 
                         const SizedBox(width: 12),
 
-                        // ✅ USERNAME ONLY (no extra profile icon)
+                        // ✅ USERNAME
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -217,13 +182,12 @@ void _hideBottomBar() {
                           badge: true,
                           onTap: () {
                             _closeCameraBar();
-                            _scaffoldKey.currentState?.openEndDrawer(); // RIGHT slide = notifications
+                            _scaffoldKey.currentState?.openEndDrawer();
                           },
                         ),
                       ],
                     ),
                   ),
-
 
                   // ===== TAB CONTENT =====
                   Expanded(
@@ -241,175 +205,113 @@ void _hideBottomBar() {
           ],
         ),
 
-        // ===== BOTTOM: CAMERA SLIDE BAR + NAV =====
-          bottomNavigationBar: SizedBox(
-            height: _bottomBarHeight,
-            child: Stack(
-              children: [
-                // ✅ The whole bottom UI slides down/up
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOut,
-                  left: 0,
-                  right: 0,
-                  bottom: _bottomBarHidden ? -(_bottomBarHeight - _bottomBarPeek) : 0,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _showBottomBar,
-                    onVerticalDragUpdate: (details) {
-                      // swipe up to show, swipe down to hide
-                      if (details.delta.dy < -6) _showBottomBar();
-                      if (details.delta.dy > 6) _hideBottomBar();
-                    },
-                    child: SizedBox(
-                      height: _bottomBarHeight,
-                      child: Stack(
-                        clipBehavior: Clip.none,
+        // ✅ FIXED BOTTOM NAV (NO DROPDOWN / NO AUTO-HIDE)
+        bottomNavigationBar: SizedBox(
+          height: _bottomBarHeight,
+          child: Stack(
+            children: [
+              // ===== BOTTOM NAV BAR (FIXED) =====
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  height: 90,
+                  decoration: BoxDecoration(
+                    color: bgColor.withOpacity(0.86),
+                    border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
+                  ),
+                  child: ClipRRect(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
-                          // ===== BOTTOM NAV BAR =====
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              height: 90,
-                              decoration: BoxDecoration(
-                                color: bgColor.withOpacity(0.86),
-                                border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
-                              ),
-                              child: ClipRRect(
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                                    children: [
-                                      _navItem(0, Icons.home_outlined, "Home"),
-                                      _navItem(1, Icons.history, "History"),
-
-                                      const SizedBox(width: 62),
-
-                                      _navItem(2, Icons.group_outlined, "Collectors"),
-                                      _navItem(3, Icons.message_outlined, "Chat"),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          // ===== CENTER CAMERA BUTTON =====
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            bottom: 8,
-                            child: Center(
-                              child: GestureDetector(
-                                onTap: () {
-                                  _showBottomBar(); // keep bar visible when used
-                                  _toggleCameraBar();
-                                },
-                                child: Container(
-                                  width: 64,
-                                  height: 64,
-                                  decoration: BoxDecoration(
-                                    color: primaryColor,
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.35),
-                                        blurRadius: 14,
-                                        offset: const Offset(0, 8),
-                                      ),
-                                    ],
-                                    border: Border.all(color: bgColor, width: 5),
-                                  ),
-                                  child: Icon(
-                                    _cameraBarOpen ? Icons.close : Icons.camera_alt,
-                                    color: const Color(0xFF0F172A),
-                                    size: 28,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          // ===== SLIDING CAMERA BAR =====
-                          AnimatedPositioned(
-                            duration: const Duration(milliseconds: 260),
-                            curve: Curves.easeOut,
-                            left: 16,
-                            right: 16,
-                            bottom: _cameraBarOpen ? 94 : 40,
-                            child: IgnorePointer(
-                              ignoring: !_cameraBarOpen,
-                              child: AnimatedOpacity(
-                                duration: const Duration(milliseconds: 200),
-                                opacity: _cameraBarOpen ? 1 : 0,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                                  decoration: BoxDecoration(
-                                    color: bgColor.withOpacity(0.92),
-                                    borderRadius: BorderRadius.circular(18),
-                                    border: Border.all(color: Colors.white.withOpacity(0.08)),
-                                  ),
-                                  child: _cameraAction(
-                                    icon: Icons.camera_alt,
-                                    title: "Scan",
-                                    subtitle: "Use camera",
-                                    onTap: () async {
-                                      _closeCameraBar();
-                                      await _openLens(context);
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
+                          _navItem(0, Icons.home_outlined, "Home"),
+                          _navItem(1, Icons.history, "History"),
+                          const SizedBox(width: 62),
+                          _navItem(2, Icons.group_outlined, "Collectors"),
+                          _navItem(3, Icons.message_outlined, "Chat"),
                         ],
                       ),
                     ),
                   ),
                 ),
+              ),
 
-                // ✅ Grabber visible when hidden — swipe up to reveal
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 6,
-                  child: IgnorePointer(
-                    ignoring: !_bottomBarHidden,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 200),
-                      opacity: _bottomBarHidden ? 1 : 0,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onVerticalDragUpdate: (details) {
-                          if (details.delta.dy < -6) _showBottomBar();
-                        },
-                        onTap: _showBottomBar,
-                        child: Center(
-                          child: Container(
-                            width: 44,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: Colors.white24,
-                              borderRadius: BorderRadius.circular(99),
-                            ),
+              // ===== CENTER CAMERA BUTTON (FIXED) =====
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 8,
+                child: Center(
+                  child: GestureDetector(
+                    onTap: _toggleCameraBar,
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: primaryColor,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.35),
+                            blurRadius: 14,
+                            offset: const Offset(0, 8),
                           ),
-                        ),
+                        ],
+                        border: Border.all(color: bgColor, width: 5),
+                      ),
+                      child: Icon(
+                        _cameraBarOpen ? Icons.close : Icons.camera_alt,
+                        color: const Color(0xFF0F172A),
+                        size: 28,
                       ),
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+
+              // ===== SLIDING CAMERA BAR (ONLY THIS SLIDES) =====
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOut,
+                left: 16,
+                right: 16,
+                bottom: _cameraBarOpen ? 94 : 40,
+                child: IgnorePointer(
+                  ignoring: !_cameraBarOpen,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 200),
+                    opacity: _cameraBarOpen ? 1 : 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: bgColor.withOpacity(0.92),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                      ),
+                      child: _cameraAction(
+                        icon: Icons.camera_alt,
+                        title: "Scan",
+                        subtitle: "Use camera",
+                        onTap: () async {
+                          _closeCameraBar();
+                          await _openLens(context);
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
+        ),
       ),
     );
   }
 
   // ================= HOME TAB =================
-
   Widget _householdHome() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -430,8 +332,8 @@ void _hideBottomBar() {
                 gradient: LinearGradient(colors: [primaryColor, Colors.green]),
                 borderRadius: BorderRadius.circular(24),
               ),
-              child: Row(
-                children: const [
+              child: const Row(
+                children: [
                   Icon(Icons.camera_alt, color: Colors.white, size: 36),
                   SizedBox(width: 16),
                   Expanded(
@@ -488,7 +390,6 @@ void _hideBottomBar() {
   }
 
   // ================= TOP SLIDER =================
-
   Widget _topSlider() {
     final slides = [
       _promoSlide(
@@ -595,7 +496,6 @@ void _hideBottomBar() {
   }
 
   // ================= HISTORY TAB =================
-
   Widget _historyScreen() {
     return const Center(
       child: Text(
@@ -606,7 +506,6 @@ void _hideBottomBar() {
   }
 
   // ================= COLLECTORS TAB =================
-  // ✅ simple clickable tab screen text
   Widget _collectorsTab() {
     return const Center(
       child: Text(
@@ -617,7 +516,6 @@ void _hideBottomBar() {
   }
 
   // ================= NOTIFICATIONS DRAWER (RIGHT) =================
-
   Widget _notificationsDrawer() {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -692,7 +590,6 @@ void _hideBottomBar() {
   }
 
   // ================= PROFILE DRAWER (LEFT) =================
-
   Widget _profileDrawer() {
     final user = FirebaseAuth.instance.currentUser;
 
@@ -797,7 +694,6 @@ void _hideBottomBar() {
   }
 
   // ================= HOW TO USE CARD =================
-
   Widget _howToUseCard() {
     return Container(
       width: double.infinity,
@@ -806,9 +702,9 @@ void _hideBottomBar() {
         color: Colors.white.withOpacity(0.05),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Column(
+      child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
+        children: [
           Text(
             "How to Use",
             style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
@@ -827,7 +723,6 @@ void _hideBottomBar() {
   }
 
   // ================= HELPERS =================
-
   Widget _navItem(int index, IconData icon, String label) {
     final isActive = _activeTabIndex == index;
     return GestureDetector(
@@ -913,28 +808,6 @@ void _hideBottomBar() {
       ),
     );
   }
-
-Widget _logoBox() {
-  return GestureDetector(
-    onTap: () {
-      _closeCameraBar();
-      _scaffoldKey.currentState?.openDrawer(); // LEFT slide = profile
-    },
-    child: Container(
-      width: 45,
-      height: 45,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [primaryColor, Colors.green]),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Icon(
-        Icons.person, // ✅ replaced eco with person
-        color: Colors.white,
-      ),
-    ),
-  );
-}
-
 
   Widget _iconButton(IconData icon, {bool badge = false, required VoidCallback onTap}) {
     return Stack(

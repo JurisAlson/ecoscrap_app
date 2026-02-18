@@ -1,11 +1,13 @@
 import 'dart:ui';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../screens/analytics_home_tab.dart';
 import '../screens/inventory_screen.dart';
 import '../screens/transaction_screen.dart';
+
+
 
 class JunkshopDashboardPage extends StatefulWidget {
   final String shopID;
@@ -31,8 +33,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
   late final PageController _pageController = PageController(initialPage: 0);
 
-  bool _navVisible = false;
-  double _dragAccum = 0;
+  static const double _bottomNavHeight = 96;
 
   late final List<Widget> _tabs = [
     AnalyticsHomeTab(
@@ -52,16 +53,27 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   ];
 
   void _goToTab(int index) {
-    setState(() {
-      _activeTabIndex = index;
-      _navVisible = false;
-    });
+    setState(() => _activeTabIndex = index);
 
     _pageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 280),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  Future<void> _setCollectorRequestStatus(DocumentReference ref, bool approve) async {
+    await ref.update({
+      "approved": approve,
+      "status": approve ? "approved" : "rejected",
+      "reviewedAt": FieldValue.serverTimestamp(),
+      "reviewedBy": FirebaseAuth.instance.currentUser?.uid,
+    });
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -85,13 +97,12 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           child: SafeArea(child: _notificationsDrawer()),
         ),
 
+        bottomNavigationBar: _fixedBottomNav(),
+
         body: Stack(
           children: [
-            _blurCircle(primaryColor.withOpacity(0.15), 300,
-                top: -100, right: -100),
-            _blurCircle(Colors.green.withOpacity(0.1), 350,
-                bottom: 100, left: -100),
-
+            _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
+            _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
             SafeArea(
               child: PageView(
                 controller: _pageController,
@@ -100,16 +111,166 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                 children: _tabs,
               ),
             ),
-
-            _bottomSwipeNav(),
           ],
         ),
       ),
     );
   }
 
-  // ================= DRAWERS (RESTORED) =================
+  // ================= FIXED BOTTOM NAV =================
+  Widget _fixedBottomNav() {
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          height: _bottomNavHeight,
+          decoration: BoxDecoration(
+            color: bgColor.withOpacity(0.86),
+            border: Border(
+              top: BorderSide(color: Colors.white.withOpacity(0.08)),
+            ),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _navItem(0, Icons.storefront_outlined, "Home"),
+                  _navItem(1, Icons.inventory_2_outlined, "Inventory"),
+                  _navItem(2, Icons.receipt_long_outlined, "Transactions"),
+                  _navItem(3, Icons.map_outlined, "Map"),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
+  // ================= COLLECTOR REQUESTS SECTION =================
+  Widget _collectorRequestsSection() {
+    final stream = FirebaseFirestore.instance
+        .collection("collectorRequests")
+        .where("shopID", isEqualTo: widget.shopID)
+        .where("approved", isEqualTo: false)
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: stream,
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Text(
+            "Collector requests error: ${snap.error}",
+            style: const TextStyle(color: Colors.redAccent),
+          );
+        }
+        if (!snap.hasData) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+
+        final docs = snap.data!.docs;
+
+        if (docs.isEmpty) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withOpacity(0.06)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 22),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "No pending collector requests.",
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Column(
+          children: docs.map((d) {
+            final data = d.data();
+            final name = (data["name"] ?? "Collector").toString();
+            final email = (data["email"] ?? "").toString();
+            final uid = (data["uid"] ?? d.id).toString();
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (email.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                    ),
+                  const SizedBox(height: 6),
+                  Text("UID: $uid", style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Text("pending", style: TextStyle(color: Colors.orangeAccent)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () async {
+                          try {
+                            await _setCollectorRequestStatus(d.reference, true);
+                            _toast("Approved collector: $name");
+                          } catch (e) {
+                            _toast("Approve failed: $e");
+                          }
+                        },
+                        child: const Text("Approve"),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          try {
+                            await _setCollectorRequestStatus(d.reference, false);
+                            _toast("Rejected collector: $name");
+                          } catch (e) {
+                            _toast("Reject failed: $e");
+                          }
+                        },
+                        child: const Text("Reject"),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  // ================= DRAWERS =================
   Widget _notificationsDrawer() {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -143,8 +304,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           _notificationTile(
             icon: Icons.location_city_outlined,
             title: "SDG 11 Impact",
-            subtitle:
-                "Your junkshop supports cleaner, safer communities through recycling.",
+            subtitle: "Your junkshop supports cleaner, safer communities through recycling.",
           ),
           const SizedBox(height: 12),
           _notificationTile(
@@ -239,6 +399,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             style: const TextStyle(color: Colors.white70, fontSize: 13),
           ),
           const SizedBox(height: 18),
+
+          // Impact card
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(18),
@@ -266,7 +428,37 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               ],
             ),
           ),
+
+          const SizedBox(height: 18),
+
+          // Collector Requests card
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withOpacity(0.06)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Collector Requests",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _collectorRequestsSection(),
+              ],
+            ),
+          ),
+
           const SizedBox(height: 22),
+
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -292,95 +484,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
-  // ================= BOTTOM NAV (UNCHANGED) =================
-
-  Widget _bottomSwipeNav() {
-    const double navHeight = 96;
-    const double swipeZoneHeight = 10;
-
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onVerticalDragStart: (_) => _dragAccum = 0,
-        onVerticalDragUpdate: (d) {
-          _dragAccum += d.delta.dy;
-
-          if (_dragAccum < -18 && !_navVisible) {
-            setState(() => _navVisible = true);
-            _dragAccum = 0;
-          }
-          if (_dragAccum > 18 && _navVisible) {
-            setState(() => _navVisible = false);
-            _dragAccum = 0;
-          }
-        },
-        child: Stack(
-          children: [
-            SizedBox(height: _navVisible ? navHeight : swipeZoneHeight),
-            AnimatedSlide(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              offset: _navVisible ? Offset.zero : const Offset(0, 1.2),
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 160),
-                opacity: _navVisible ? 1 : 0,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: ClipRRect(
-                    borderRadius:
-                        const BorderRadius.vertical(top: Radius.circular(22)),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                      child: Container(
-                        height: navHeight,
-                        decoration: BoxDecoration(
-                          color: bgColor.withOpacity(0.86),
-                          border: Border(
-                            top: BorderSide(
-                                color: Colors.white.withOpacity(0.08)),
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            const SizedBox(height: 10),
-                            Container(
-                              width: 42,
-                              height: 4,
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.18),
-                                borderRadius: BorderRadius.circular(99),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
-                              children: [
-                                _navItem(
-                                    0, Icons.storefront_outlined, "Home"),
-                                _navItem(1, Icons.inventory_2_outlined,
-                                    "Inventory"),
-                                _navItem(2, Icons.receipt_long_outlined,
-                                    "Transactions"),
-                                _navItem(3, Icons.map_outlined, "Map"),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
+  // ================= NAV ITEM =================
   Widget _navItem(int index, IconData icon, String label) {
     final isActive = _activeTabIndex == index;
 
@@ -407,6 +511,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
+  // ================= BACKGROUND BLUR =================
   Widget _blurCircle(
     Color color,
     double size, {
