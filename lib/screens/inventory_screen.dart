@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'dart:ui';
+
 
 class InventoryScreen extends StatefulWidget {
   final String shopID;
@@ -19,48 +21,98 @@ class _InventoryScreenState extends State<InventoryScreen> {
     _searchController.dispose();
     super.dispose();
   }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            _buildSearchField(),
-            const SizedBox(height: 12),
-            Expanded(child: _buildInventoryList()),
-          ],
-        ),
+Widget _blurCircle(
+  Color color,
+  double size, {
+  double? top,
+  double? bottom,
+  double? left,
+  double? right,
+}) {
+  return Positioned(
+    top: top,
+    bottom: bottom,
+    left: left,
+    right: right,
+    child: Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
       ),
-    );
-  }
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+        child: Container(color: Colors.transparent),
+      ),
+    ),
+  );
+}
+
+@override
+Widget build(BuildContext context) {
+  const Color primaryColor = Color(0xFF1FA9A7);
+  const Color bgColor = Color(0xFF0F172A);
+
+  return Scaffold(
+    backgroundColor: bgColor,
+    body: Stack(
+      children: [
+
+        // ✅ SAME glow as Transaction
+        _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
+        _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
+
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: Column(
+              children: [
+                const SizedBox(height: 18),
+
+                _buildSearchField(),
+                const SizedBox(height: 12),
+
+                Expanded(child: _buildInventoryList()),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 
   /// 🔎 SEARCH FIELD (Stable — not inside StreamBuilder)
-  Widget _buildSearchField() {
-    return TextField(
-      controller: _searchController,
-      cursorColor: Colors.greenAccent,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        hintText: "Search inventory...",
-        hintStyle: TextStyle(color: Colors.grey.shade500),
-        prefixIcon: const Icon(Icons.search, color: Colors.white70),
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.06),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.white24),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Colors.greenAccent),
-        ),
+Widget _buildSearchField() {
+  return TextField(
+    controller: _searchController,
+    cursorColor: Colors.white,
+    style: const TextStyle(color: Colors.white),
+    decoration: InputDecoration(
+      hintText: "Search inventory...",
+      hintStyle: const TextStyle(
+        color: Color(0xFF64748B),
       ),
-      onChanged: (v) => setState(() => _query = v.trim()),
-    );
-  }
+      prefixIcon: const Icon(
+        Icons.search,
+        color: Colors.white70,
+      ),
+      filled: true,
+      fillColor: Colors.black.withOpacity(0.25),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: 14,
+        vertical: 14,
+      ),
+    ),
+    onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+  );
+}
 
   /// 📦 INVENTORY LIST (Only this rebuilds)
   Widget _buildInventoryList() {
@@ -125,17 +177,35 @@ class _InventoryScreenState extends State<InventoryScreen> {
             final unitsKg =
                 (data['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
-            return ListTile(
-              tileColor: Colors.white.withOpacity(0.06),
+            return Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05), // ✅ same tone as Dashboard/Transaction
+              borderRadius: BorderRadius.circular(16), // ✅ rounded
+              border: Border.all(color: Colors.white.withOpacity(0.06)), // ✅ soft border
+            ),
+            child: ListTile(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16), // ✅ prevents hard edge ripple
+              ),
               title: Text(
                 name,
-                style: const TextStyle(color: Colors.white),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              subtitle: Text(
-                "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
-                style: TextStyle(color: Colors.grey.shade400),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  subCategory.toString().trim().isEmpty
+                      ? "$category • ${unitsKg.toStringAsFixed(2)} kg"
+                      : "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
+                  style: const TextStyle(color: Colors.white54),
+                ),
               ),
-            );
+            ),
+          );
+
           },
         );
       },

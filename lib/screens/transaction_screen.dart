@@ -2,7 +2,6 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'receipt_screen.dart';
-
 import 'TransactionDetailScreen.dart';
 
 class TransactionScreen extends StatefulWidget {
@@ -14,28 +13,53 @@ class TransactionScreen extends StatefulWidget {
 }
 
 class _TransactionScreenState extends State<TransactionScreen> {
-  static const Color bgColor = Color(0xFF0F172A);
-  static const Color primaryColor = Color(0xFF1FA9A7);
+  final Color primaryColor = const Color(0xFF1FA9A7);
+  final Color bgColor = const Color(0xFF0F172A);
 
-  String _txType = "sale"; // "sale" | "buy"
-  String _q = ""; // search query (name only)
+  String _txType = "sale";
+  String _q = "";
 
   void _switchType(String next) {
     if (_txType == next) return;
     setState(() => _txType = next);
   }
 
-  Widget _glassCard({required Widget child}) {
+  Widget _blurCircle(
+    Color color,
+    double size, {
+    double? top,
+    double? bottom,
+    double? left,
+    double? right,
+  }) {
+    return Positioned(
+      top: top,
+      bottom: bottom,
+      left: left,
+      right: right,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+          child: Container(color: Colors.transparent),
+        ),
+      ),
+    );
+  }
+
+  Widget _glassCard({required Widget child, EdgeInsets? padding}) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
         child: Container(
-          padding: const EdgeInsets.all(14),
+          padding: padding ?? const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
+            color: Colors.white.withOpacity(0.05),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.white.withOpacity(0.08)),
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
           ),
           child: child,
         ),
@@ -44,7 +68,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
   }
 
   Widget _buildTypeButton(String label) {
-    final value = label.toLowerCase(); // "sale" | "buy"
+    final value = label.toLowerCase();
     final isSelected = _txType == value;
 
     return Expanded(
@@ -52,11 +76,11 @@ class _TransactionScreenState extends State<TransactionScreen> {
         onTap: () => _switchType(value),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            color: isSelected ? primaryColor.withOpacity(0.25) : Colors.transparent,
+            color: isSelected ? primaryColor.withOpacity(0.18) : Colors.transparent,
           ),
-          alignment: Alignment.center,
           child: Text(
             label,
             style: TextStyle(
@@ -71,12 +95,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
   }
 
   String _formatDate(DateTime d) {
-    final y = d.year.toString().padLeft(4, '0');
-    final m = d.month.toString().padLeft(2, '0');
-    final day = d.day.toString().padLeft(2, '0');
-    final hh = d.hour.toString().padLeft(2, '0');
-    final mm = d.minute.toString().padLeft(2, '0');
-    return "$y-$m-$day  $hh:$mm";
+    return "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}  "
+        "${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
   }
 
   InputDecoration _searchDecoration() {
@@ -85,11 +105,12 @@ class _TransactionScreenState extends State<TransactionScreen> {
       hintStyle: const TextStyle(color: Color(0xFF64748B)),
       prefixIcon: const Icon(Icons.search, color: Colors.white70),
       filled: true,
-      fillColor: Colors.black.withOpacity(0.20),
+      fillColor: Colors.black.withOpacity(0.25),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide.none,
       ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     );
   }
 
@@ -97,7 +118,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
   Widget build(BuildContext context) {
     final isSale = _txType == "sale";
 
-    // ✅ No composite index needed: orderBy only
     final txStream = FirebaseFirestore.instance
         .collection('Junkshop')
         .doc(widget.shopID)
@@ -107,192 +127,151 @@ class _TransactionScreenState extends State<TransactionScreen> {
 
     return Scaffold(
       backgroundColor: bgColor,
-      appBar: AppBar(
-        backgroundColor: bgColor,
-        elevation: 0,
-        title: const Text("Transactions", style: TextStyle(color: Colors.white)),
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
+
       floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: primaryColor,
+        elevation: 0,
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: const Text(
+          "NEW RECEIPT",
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
         onPressed: () {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => ReceiptScreen(shopID: widget.shopID)),
+            MaterialPageRoute(
+              builder: (_) => ReceiptScreen(shopID: widget.shopID),
+            ),
           );
         },
-        backgroundColor: Colors.greenAccent,
-        icon: const Icon(Icons.add, color: Colors.black),
-        label: const Text("NEW RECEIPT", style: TextStyle(color: Colors.black)),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            // ✅ SALE / BUY toggle
-            _glassCard(
-              child: Container(
-                height: 48,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  color: Colors.black.withOpacity(0.25),
-                ),
-                child: Row(
-                  children: [
-                    _buildTypeButton("SALE"),
-                    _buildTypeButton("BUY"),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
 
-            // ✅ Search bar (name only)
-            _glassCard(
-              child: TextField(
-                style: const TextStyle(color: Colors.white),
-                decoration: _searchDecoration(),
-                onChanged: (v) => setState(() => _q = v.trim().toLowerCase()),
-              ),
-            ),
-            const SizedBox(height: 14),
+      body: Stack(
+        children: [
+          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
+          _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
 
-            Expanded(
-              child: StreamBuilder<QuerySnapshot>(
-                stream: txStream,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+              child: Column(
+                children: [
+                  const SizedBox(height: 18),
 
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Text(
-                        "Error: ${snapshot.error}",
-                        style: const TextStyle(color: Colors.redAccent),
-                      ),
-                    );
-                  }
+                  // ✅ Search bar (top)
+                  _glassCard(
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white),
+                      decoration: _searchDecoration(),
+                      onChanged: (v) => setState(() => _q = v.trim().toLowerCase()),
+                    ),
+                  ),
 
-                  final allDocs = snapshot.data?.docs ?? [];
+                  const SizedBox(height: 12),
 
-                  // ✅ Filter by type + name (client-side)
-                  final docs = allDocs.where((d) {
-                    final data = d.data() as Map<String, dynamic>;
-
-                    final t = (data['transactionType'] ?? '').toString().toLowerCase();
-                    if (t != _txType) return false;
-
-                    if (_q.isEmpty) return true;
-
-                    final name = (data['customerNameDisplay'] ??
-                            data['customerName'] ??
-                            '')
-                        .toString()
-                        .toLowerCase();
-
-                    return name.contains(_q);
-                  }).toList();
-
-                  if (docs.isEmpty) {
-                    return Center(
-                      child: Text(
-                        _q.isNotEmpty
-                            ? "No matching results"
-                            : (isSale ? "No sale transactions yet" : "No buy transactions yet"),
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                    );
-                  }
-
-                  return ListView.separated(
-                    itemCount: docs.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final data = docs[index].data() as Map<String, dynamic>;
-
-                      final partyName = (data['customerNameDisplay'] ??
-                              data['customerName'] ??
-                              '')
-                          .toString()
-                          .trim();
-
-                      final total = (data['totalAmount'] as num?)?.toDouble() ?? 0.0;
-
-                      final ts = data['transactionDate'] as Timestamp?;
-                      final date = ts?.toDate();
-
-                      // ✅ Total KG (use stored totalWeightKg, fallback to summing items)
-                      double totalKg = (data['totalWeightKg'] as num?)?.toDouble() ?? -1;
-                      if (totalKg < 0) {
-                        final items = (data['items'] as List<dynamic>?) ?? [];
-                        totalKg = 0.0;
-                        for (final item in items) {
-                          final m = item as Map<String, dynamic>;
-                          totalKg += (m['weightKg'] as num?)?.toDouble() ?? 0.0;
-                        }
-                      }
-
-                      return InkWell(
+                  // ✅ Toggle
+                  _glassCard(
+                    child: Container(
+                      height: 48,
+                      decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(14),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => TransactionDetailScreen(
-                                transactionData: data,
-                              ),
+                        color: Colors.black.withOpacity(0.25),
+                      ),
+                      child: Row(
+                        children: [
+                          _buildTypeButton("SALE"),
+                          _buildTypeButton("BUY"),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  Expanded(
+                    child: StreamBuilder<QuerySnapshot>(
+                      stream: txStream,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+
+                        final docs = (snapshot.data?.docs ?? []).where((d) {
+                          final data = d.data() as Map<String, dynamic>;
+
+                          final type = (data['transactionType'] ?? '')
+                              .toString()
+                              .toLowerCase();
+                          if (type != _txType) return false;
+
+                          if (_q.isEmpty) return true;
+
+                          final name = (data['customerNameDisplay'] ??
+                                  data['customerName'] ??
+                                  '')
+                              .toString()
+                              .toLowerCase();
+
+                          return name.contains(_q);
+                        }).toList();
+
+                        if (docs.isEmpty) {
+                          return const Center(
+                            child: Text(
+                              "No transactions found",
+                              style: TextStyle(color: Colors.grey),
                             ),
                           );
-                        },
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.06),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.white.withOpacity(0.08)),
-                          ),
-                          child: ListTile(
-                            title: Text(
-                              partyName.isEmpty
-                                  ? (isSale
-                                      ? "Walk-in customer"
-                                      : "Unknown supplier/source")
-                                  : partyName,
-                              style: const TextStyle(color: Colors.white),
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  date != null ? _formatDate(date) : '',
-                                  style: const TextStyle(color: Colors.grey),
+                        }
+
+                        return ListView.separated(
+                          itemCount: docs.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final data = docs[index].data() as Map<String, dynamic>;
+
+                            final name = (data['customerNameDisplay'] ??
+                                    data['customerName'] ??
+                                    "Unknown")
+                                .toString();
+
+                            final total =
+                                (data['totalAmount'] as num?)?.toDouble() ?? 0.0;
+
+                            final ts = data['transactionDate'] as Timestamp?;
+                            final date = ts?.toDate();
+
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.white.withOpacity(0.06)),
+                              ),
+                              child: ListTile(
+                                title: Text(name, style: const TextStyle(color: Colors.white)),
+                                subtitle: Text(
+                                  date != null ? _formatDate(date) : "",
+                                  style: const TextStyle(color: Colors.white54),
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  "${totalKg.toStringAsFixed(2)} kg ${isSale ? "sold" : "bought"}",
+                                trailing: Text(
+                                  "₱${total.toStringAsFixed(2)}",
                                   style: TextStyle(
                                     color: isSale ? Colors.greenAccent : Colors.orangeAccent,
-                                    fontWeight: FontWeight.w600,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                              ],
-                            ),
-                            trailing: Text(
-                              "₱${total.toStringAsFixed(2)}",
-                              style: TextStyle(
-                                color: isSale ? Colors.greenAccent : Colors.orangeAccent,
-                                fontWeight: FontWeight.bold,
                               ),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
