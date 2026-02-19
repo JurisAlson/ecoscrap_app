@@ -15,9 +15,12 @@ class CollectorAccountCreation extends StatefulWidget {
 class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
-  File? _idImage;
 
+  File? _idImage;
   bool _loading = false;
+
+  String? _preferredShopId;
+  String? _preferredShopName;
 
   @override
   void dispose() {
@@ -32,7 +35,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     setState(() => _idImage = File(picked.path));
   }
 
-  // ✅ FIXED: uploads to /permits/{uid}/... (matches your Storage rules)
+  // uploads to /permits/{uid}/...
   Future<String?> _uploadId(String uid) async {
     if (_idImage == null) return null;
 
@@ -42,49 +45,71 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
         .child(uid)
         .child('collector_id_${DateTime.now().millisecondsSinceEpoch}.jpg');
 
-    await ref.putFile(
-      _idImage!,
-      SettableMetadata(contentType: 'image/jpeg'),
-    );
-
+    await ref.putFile(_idImage!, SettableMetadata(contentType: 'image/jpeg'));
     return await ref.getDownloadURL();
   }
 
-  Future<void> _submitPendingCollector() async {
+  Future<void> _submitCollector() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     if (!_formKey.currentState!.validate()) return;
+
+    // ✅ require preferred junkshop (recommended)
+    if (_preferredShopId == null || _preferredShopId!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a preferred junkshop.")),
+      );
+      return;
+    }
 
     setState(() => _loading = true);
 
     try {
       final idUrl = await _uploadId(user.uid);
 
-      await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+      final batch = FirebaseFirestore.instance.batch();
+
+      // 1) Users/{uid} -> NO IMAGE here
+      final userRef = FirebaseFirestore.instance.collection("Users").doc(user.uid);
+      batch.set(userRef, {
         "UserID": user.uid,
         "Email": user.email ?? "",
         "Name": _name.text.trim(),
         "Roles": "collector",
 
-        // ✅ pending + verified boolean (you can keep Status too)
-        "Status": "pending",
-        "verified": false,
+        // routing
+        "preferredJunkshopId": _preferredShopId,
+        "preferredJunkshopName": _preferredShopName ?? "",
+
+        // 2-step approvals
+        "adminVerified": false,
+        "adminStatus": "pending",
+        "junkshopVerified": false,
+        "junkshopStatus": "pending",
+        "collectorActive": false,
 
         "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
         "isOnline": false,
         "lastSeen": FieldValue.serverTimestamp(),
-
-        // ✅ store for admin viewing
-        if (idUrl != null) "permitUrl": idUrl,
-
-        // (optional) keep your old field too if you want backward compatibility
-        if (idUrl != null) "idImageUrl": idUrl,
       }, SetOptions(merge: true));
+
+      // 2) collectorKYC/{uid} -> IMAGE URL here (ADMIN reads this)
+      if (idUrl != null) {
+        final kycRef = FirebaseFirestore.instance.collection("collectorKYC").doc(user.uid);
+        batch.set(kycRef, {
+          "collectorUid": user.uid,
+          "permitUrl": idUrl,
+          "createdAt": FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      await batch.commit();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Submitted! Collector account is now pending.")),
+        const SnackBar(content: Text("Submitted! Collector application is now pending admin review.")),
       );
       Navigator.pop(context);
     } catch (e) {
@@ -95,6 +120,14 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  // Load verified junkshops for dropdown
+  Stream<QuerySnapshot<Map<String, dynamic>>> _junkshopsStream() {
+    return FirebaseFirestore.instance
+        .collection("Junkshop")
+        .where("verified", isEqualTo: true)
+        .snapshots();
   }
 
   @override
@@ -117,6 +150,62 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
               ),
               const SizedBox(height: 12),
 
+              // ✅ Preferred Junkshop dropdown
+              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _junkshopsStream(),
+                builder: (context, snap) {
+                  if (snap.hasError) {
+                    return Text("Junkshop load error: ${snap.error}");
+                  }
+                  if (!snap.hasData) {
+                    return const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: EdgeInsets.only(top: 8, bottom: 8),
+                        child: CircularProgressIndicator(),
+                      ),
+                    );
+                  }
+
+                  final docs = snap.data!.docs;
+
+                  if (docs.isEmpty) {
+                    return const Text("No verified junkshops available yet.");
+                  }
+
+                  return DropdownButtonFormField<String>(
+                    value: _preferredShopId,
+                    decoration: const InputDecoration(
+                      labelText: "Preferred Junkshop",
+                      border: OutlineInputBorder(),
+                    ),
+                    items: docs.map((d) {
+                      final data = d.data();
+                      final name = (data["shopName"] ?? d.id).toString();
+                      return DropdownMenuItem<String>(
+                        value: d.id,
+                        child: Text(name),
+                      );
+                    }).toList(),
+                    onChanged: _loading
+                        ? null
+                        : (val) {
+                            if (val == null) return;
+                            final chosen = docs.firstWhere((x) => x.id == val);
+                            final chosenName = (chosen.data()["shopName"] ?? chosen.id).toString();
+
+                            setState(() {
+                              _preferredShopId = val;
+                              _preferredShopName = chosenName;
+                            });
+                          },
+                    validator: (v) => (v == null || v.isEmpty) ? "Select a junkshop" : null,
+                  );
+                },
+              ),
+
+              const SizedBox(height: 12),
+
               Row(
                 children: [
                   Expanded(
@@ -135,7 +224,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton(
-                  onPressed: _loading ? null : _submitPendingCollector,
+                  onPressed: _loading ? null : _submitCollector,
                   child: Text(_loading ? "Submitting..." : "Submit (Pending)"),
                 ),
               ),
