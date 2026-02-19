@@ -120,18 +120,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     );
   }
 
-  void _showImageDialog(String url) {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        insetPadding: const EdgeInsets.all(12),
-        child: InteractiveViewer(
-          child: Image.network(url, fit: BoxFit.contain),
-        ),
-      ),
-    );
-  }
-
   // ---------- Requests helpers ----------
   Future<void> _setApproved(DocumentReference ref, bool value) async {
     await ref.update({'approved': value});
@@ -470,42 +458,57 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     );
   }
 
-  // ✅ Assumes collection name: collectorRequests
-  Widget _collectorRequestsSection() {
-  // ✅ Collectors are saved in Users collection (NOT collectorRequests)
-  final usersStream = FirebaseFirestore.instance.collection("Users").snapshots();
+ // ===================== ADMIN: COLLECTOR REQUESTS (CLEAN) =====================
+Widget _collectorRequestsSection() {
+  final appsStream = FirebaseFirestore.instance
+      .collection("collectorApplications")
+      .snapshots();
 
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      const Text("Collector Requests", style: TextStyle(color: Colors.white, fontSize: 18)),
+      const Text(
+        "Collector Requests",
+        style: TextStyle(color: Colors.white, fontSize: 18),
+      ),
       const SizedBox(height: 10),
+
       StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: usersStream,
+        stream: appsStream,
         builder: (context, snap) {
           if (snap.hasError) {
-            return Text("Collector Requests ERROR: ${snap.error}", style: const TextStyle(color: Colors.red));
+            return Text(
+              "Collector Requests ERROR: ${snap.error}",
+              style: const TextStyle(color: Colors.red),
+            );
           }
           if (!snap.hasData) {
-            return const Text("Loading Collector Requests...", style: TextStyle(color: Colors.white));
+            return const Text(
+              "Loading Collector Requests...",
+              style: TextStyle(color: Colors.white),
+            );
           }
 
-          final all = snap.data!.docs;
+          final docs = snap.data!.docs;
 
-          // ✅ pending collectors = role collector + verified false + status pending
-          final pending = all.where((d) {
+          // ✅ ONLY pending for admin step
+          final pending = docs.where((d) {
             final data = d.data();
-            final role = _normRole(data["Roles"] ?? data["roles"]);
-            final verified = data["verified"] == true;
-            final status = (data["Status"] ?? data["status"] ?? "pending")
+            final role = (data["role"] ?? data["Roles"] ?? "collector")
                 .toString()
                 .toLowerCase()
                 .trim();
 
-            return role == "collector" && !verified && status == "pending";
+            final adminVerified = data["adminVerified"] == true;
+            final adminStatus = (data["adminStatus"] ?? "pending")
+                .toString()
+                .toLowerCase()
+                .trim();
+
+            return role == "collector" && !adminVerified && adminStatus == "pending";
           }).toList();
 
-          // newest first if you have createdAt
+          // optional: newest first
           pending.sort((a, b) {
             final ta = a.data()["createdAt"];
             final tb = b.data()["createdAt"];
@@ -523,11 +526,14 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: Colors.white.withOpacity(0.06)),
               ),
-              child: Column(
-                children: const [
+              child: const Column(
+                children: [
                   Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 40),
                   SizedBox(height: 10),
-                  Text("No New Collector Requests", style: TextStyle(color: Colors.white, fontSize: 16)),
+                  Text(
+                    "No New Collector Requests",
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
                 ],
               ),
             );
@@ -538,15 +544,12 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
             physics: const NeverScrollableScrollPhysics(),
             itemCount: pending.length,
             itemBuilder: (context, i) {
-              final d = pending[i];
-              final uid = d.id;
-              final data = d.data();
+              final doc = pending[i];
+              final uid = doc.id;
+              final data = doc.data();
 
-              final name = (data["Name"] ?? data["name"] ?? "Unknown Collector").toString();
-              final email = (data["Email"] ?? data["email"] ?? "").toString();
-
-              // ✅ Your collector submission stores a DOWNLOAD URL (not a storage path)
-              final imgUrl = (data["permitUrl"] ?? data["idImageUrl"] ?? "").toString();
+              final name = (data["name"] ?? data["Name"] ?? "Collector").toString();
+              final email = (data["email"] ?? data["Email"] ?? "").toString();
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -559,23 +562,77 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    Text(
+                      name,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
                     if (email.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
                         child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
                       ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
+                    Text(
+                      "UID: $uid",
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    // ✅ ADMIN CAN VIEW ID IMAGE FROM collectorKYC/{uid}
+                    FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                      future: FirebaseFirestore.instance.collection("collectorKYC").doc(uid).get(),
+                      builder: (context, kycSnap) {
+                        if (kycSnap.connectionState == ConnectionState.waiting) {
+                          return const SizedBox(
+                            height: 160,
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                          );
+                        }
+
+                        final permitUrl = kycSnap.data?.data()?["permitUrl"]?.toString() ?? "";
+
+                        if (permitUrl.isEmpty) {
+                          return const Text(
+                            "No ID image uploaded.",
+                            style: TextStyle(color: Colors.white70),
+                          );
+                        }
+
+                        return GestureDetector(
+                          onTap: () => _showImageDialog(permitUrl),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.network(
+                              permitUrl,
+                              height: 160,
+                              width: double.infinity,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, e, __) => Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Text(
+                                  "Render error: $e",
+                                  style: const TextStyle(color: Colors.redAccent),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                    const SizedBox(height: 10),
 
                     Row(
                       children: [
                         const Text("pending", style: TextStyle(color: Colors.orangeAccent)),
                         const Spacer(),
+
                         TextButton(
                           onPressed: () async {
                             final ok = await _confirm<bool>(
                               title: "Approve collector?",
-                              body: "Approve $name as collector?",
+                              body: "Approve $name (Admin step)?",
                               yesValue: true,
                               yesLabel: "Approve",
                             );
@@ -583,12 +640,16 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
 
                             setState(() => _busy = true);
                             try {
-                              await FirebaseFirestore.instance.collection("Users").doc(uid).update({
-                                "verified": true,
-                                "Status": "approved",
-                                "updatedAt": FieldValue.serverTimestamp(),
-                              });
-                              _toast("Approved $name");
+                              await FirebaseFirestore.instance
+                                  .collection("collectorApplications")
+                                  .doc(uid)
+                                  .set({
+                                "adminVerified": true,
+                                "adminStatus": "approved",
+                                "adminReviewedAt": FieldValue.serverTimestamp(),
+                              }, SetOptions(merge: true));
+
+                              _toast("Admin approved $name");
                             } catch (e) {
                               _toast("Approve failed: $e");
                             } finally {
@@ -597,11 +658,12 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                           },
                           child: const Text("Approve"),
                         ),
+
                         TextButton(
                           onPressed: () async {
                             final ok = await _confirm<bool>(
                               title: "Reject collector?",
-                              body: "Reject $name collector request?",
+                              body: "Reject $name (Admin step)?",
                               yesValue: true,
                               yesLabel: "Reject",
                             );
@@ -609,12 +671,21 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
 
                             setState(() => _busy = true);
                             try {
-                              await FirebaseFirestore.instance.collection("Users").doc(uid).update({
-                                "verified": false,
-                                "Status": "rejected",
-                                "updatedAt": FieldValue.serverTimestamp(),
-                              });
-                              _toast("Rejected $name");
+                              await FirebaseFirestore.instance
+                                  .collection("collectorApplications")
+                                  .doc(uid)
+                                  .set({
+                                "adminVerified": false,
+                                "adminStatus": "rejected",
+                                "adminReviewedAt": FieldValue.serverTimestamp(),
+                              }, SetOptions(merge: true));
+
+                              // ensure not active
+                              await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+                                "collectorActive": false,
+                              }, SetOptions(merge: true));
+
+                              _toast("Admin rejected $name");
                             } catch (e) {
                               _toast("Reject failed: $e");
                             } finally {
@@ -625,29 +696,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                         ),
                       ],
                     ),
-
-                    const SizedBox(height: 10),
-
-                    // ✅ View uploaded ID image
-                    if (imgUrl.isEmpty)
-                      const Text("No ID image uploaded.", style: TextStyle(color: Colors.white))
-                    else
-                      GestureDetector(
-                        onTap: () => _showImageDialog(imgUrl),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.network(
-                            imgUrl,
-                            height: 180,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, e, __) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text("Render error: $e", style: const TextStyle(color: Colors.redAccent)),
-                            ),
-                          ),
-                        ),
-                      ),
                   ],
                 ),
               );
@@ -658,6 +706,54 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     ],
   );
 }
+
+// ===================== IMAGE DIALOG =====================
+void _showImageDialog(String url) {
+  showDialog(
+    context: context,
+    barrierColor: Colors.black.withOpacity(0.85),
+    builder: (_) => Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(16),
+      child: Stack(
+        children: [
+          Center(
+            child: InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 4,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, e, __) => Container(
+                    padding: const EdgeInsets.all(24),
+                    color: Colors.black,
+                    child: Text(
+                      "Image load error: $e",
+                      style: const TextStyle(color: Colors.redAccent),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Close button (top-right)
+          Positioned(
+            top: 10,
+            right: 10,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 28),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
   // ---------- Reusable request section ----------
   Widget _requestSection({
     required String title,

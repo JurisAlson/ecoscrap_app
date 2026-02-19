@@ -7,8 +7,6 @@ import '../screens/analytics_home_tab.dart';
 import '../screens/inventory_screen.dart';
 import '../screens/transaction_screen.dart';
 
-
-
 class JunkshopDashboardPage extends StatefulWidget {
   final String shopID;
   final String shopName;
@@ -54,7 +52,6 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
   void _goToTab(int index) {
     setState(() => _activeTabIndex = index);
-
     _pageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 280),
@@ -62,18 +59,28 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
-  Future<void> _setCollectorRequestStatus(DocumentReference ref, bool approve) async {
-    await ref.update({
-      "approved": approve,
-      "status": approve ? "approved" : "rejected",
-      "reviewedAt": FieldValue.serverTimestamp(),
-      "reviewedBy": FirebaseAuth.instance.currentUser?.uid,
-    });
-  }
-
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  // ✅ Junkshop updates collectorApplications only (NOT Users)
+  Future<void> _setCollectorRequestStatus({
+    required String collectorUid,
+    required bool approve,
+  }) async {
+    final ref = FirebaseFirestore.instance.collection("collectorApplications").doc(collectorUid);
+
+    await ref.set({
+      "collectorUid": collectorUid,
+      "preferredJunkshopId": widget.shopID, // keep for filtering
+      "junkshopVerified": approve,
+      "junkshopStatus": approve ? "approved" : "rejected",
+      "reviewedByJunkshopId": widget.shopID,
+      "reviewedAt": FieldValue.serverTimestamp(),
+      "reviewedByUid": FirebaseAuth.instance.currentUser?.uid,
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   @override
@@ -150,125 +157,130 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
-  // ================= COLLECTOR REQUESTS SECTION =================
+  // ================= COLLECTOR REQUESTS SECTION (NEW) =================
   Widget _collectorRequestsSection() {
-    final stream = FirebaseFirestore.instance
-        .collection("collectorRequests")
-        .where("shopID", isEqualTo: widget.shopID)
-        .where("approved", isEqualTo: false)
-        .snapshots();
+  final stream = FirebaseFirestore.instance
+      .collection("collectorApplications")
+      .where("preferredJunkshopId", isEqualTo: widget.shopID)
+      .where("adminVerified", isEqualTo: true)         // admin step done
+      .where("junkshopVerified", isEqualTo: false)     // still pending
+      .snapshots();
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: stream,
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Text(
-            "Collector requests error: ${snap.error}",
-            style: const TextStyle(color: Colors.redAccent),
-          );
-        }
-        if (!snap.hasData) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 10),
-            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-          );
-        }
+  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: stream,
+    builder: (context, snap) {
+      if (snap.hasError) {
+        return Text(
+          "Collector requests error: ${snap.error}",
+          style: const TextStyle(color: Colors.redAccent),
+        );
+      }
+      if (!snap.hasData) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        );
+      }
 
-        final docs = snap.data!.docs;
+      final docs = snap.data!.docs;
 
-        if (docs.isEmpty) {
+      if (docs.isEmpty) {
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 22),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "No pending collector requests.",
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      return Column(
+        children: docs.map((d) {
+          final data = d.data();
+
+          final name = (data["collectorName"] ?? "Collector").toString();
+          final email = (data["collectorEmail"] ?? "").toString();
+          final status = (data["junkshopStatus"] ?? "pending").toString();
+
           return Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: Colors.white.withOpacity(0.06)),
             ),
-            child: const Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 22),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    "No pending collector requests.",
-                    style: TextStyle(color: Colors.white70),
+                Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                if (email.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
                   ),
+                const SizedBox(height: 10),
+
+                Row(
+                  children: [
+                    Text(status, style: const TextStyle(color: Colors.orangeAccent)),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () async {
+                        try {
+                          await d.reference.update({
+                            "junkshopVerified": true,
+                            "junkshopStatus": "approved",
+                            "reviewedByJunkshopId": widget.shopID,
+                            "reviewedAt": FieldValue.serverTimestamp(),
+                          });
+                          _toast("Approved collector: $name");
+                        } catch (e) {
+                          _toast("Approve failed: $e");
+                        }
+                      },
+                      child: const Text("Approve"),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        try {
+                          await d.reference.update({
+                            "junkshopVerified": true,
+                            "junkshopStatus": "rejected",
+                            "reviewedByJunkshopId": widget.shopID,
+                            "reviewedAt": FieldValue.serverTimestamp(),
+                          });
+                          _toast("Rejected collector: $name");
+                        } catch (e) {
+                          _toast("Reject failed: $e");
+                        }
+                      },
+                      child: const Text("Reject"),
+                    ),
+                  ],
                 ),
               ],
             ),
           );
-        }
-
-        return Column(
-          children: docs.map((d) {
-            final data = d.data();
-            final name = (data["name"] ?? "Collector").toString();
-            final email = (data["email"] ?? "").toString();
-            final uid = (data["uid"] ?? d.id).toString();
-
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.06)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  if (email.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
-                    ),
-                  const SizedBox(height: 6),
-                  Text("UID: $uid", style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      const Text("pending", style: TextStyle(color: Colors.orangeAccent)),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await _setCollectorRequestStatus(d.reference, true);
-                            _toast("Approved collector: $name");
-                          } catch (e) {
-                            _toast("Approve failed: $e");
-                          }
-                        },
-                        child: const Text("Approve"),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await _setCollectorRequestStatus(d.reference, false);
-                            _toast("Rejected collector: $name");
-                          } catch (e) {
-                            _toast("Reject failed: $e");
-                          }
-                        },
-                        child: const Text("Reject"),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
-        );
-      },
-    );
-  }
+        }).toList(),
+      );
+    },
+  );
+}
 
   // ================= DRAWERS =================
   Widget _notificationsDrawer() {
@@ -431,7 +443,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
           const SizedBox(height: 18),
 
-          // Collector Requests card
+          // Collector Requests card (kept in same position)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(18),
