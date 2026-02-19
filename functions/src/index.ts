@@ -605,6 +605,8 @@ export const deductInventoryOnTransactionCreate = onDocumentCreated(
     }
 );
 
+
+
 export const addInventoryOnBuyCreate = onDocumentCreated(
   {
     document: "Junkshop/{shopId}/transaction/{txId}",
