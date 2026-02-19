@@ -63,83 +63,177 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: bgColor,
-      body: Stack(
-        children: [
-          Positioned(top: -120, right: -120, child: _blurCircle(primaryColor.withOpacity(0.15), 320)),
-          Positioned(bottom: 80, left: -120, child: _blurCircle(Colors.green.withOpacity(0.10), 360)),
-
-          SafeArea(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                  child: Row(
-                    children: [
-                      _logoBox(),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("Collector Dashboard", style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
-                            const Text(
-                              "Collector",
-                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      _iconButton(
-                        Icons.map_outlined,
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Open a pickup from Notifications first.")),
-                          );
-                        },
-                      ),
-                      const SizedBox(width: 10),
-
-                      _iconButton(
-                        Icons.chat_bubble_outline,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const CollectorMessagesPage()),
-                          );
-                        },
-                      ),
-                      const SizedBox(width: 10),
-
-                      _iconButton(
-                        Icons.notifications_none,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const CollectorNotificationsPage()),
-                          );
-                        },
-                      ),
-                      _iconButton(
-                        Icons.person_outline,
-                        onTap: () => _showProfileSheet(context),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const Expanded(child: _CollectorLogsHome()),
-              ],
+  Widget _pendingVerificationScreen() {
+  return SafeArea(
+    child: Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.hourglass_top, color: Colors.white70, size: 70),
+            const SizedBox(height: 16),
+            const Text(
+              "Collector account pending",
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            const Text(
+              "Your account is not verified yet.\nPlease wait for admin approval.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  await _setOnline(false);
+                  await FirebaseAuth.instance.signOut();
+                  if (!mounted) return;
+                  Navigator.pushReplacementNamed(context, '/login');
+                },
+                icon: const Icon(Icons.logout),
+                label: const Text("Logout"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+  @override
+@override
+Widget build(BuildContext context) {
+  final user = FirebaseAuth.instance.currentUser;
+
+  if (user == null) {
+    return const Scaffold(
+      backgroundColor: bgColor,
+      body: Center(
+        child: Text("Not logged in.", style: TextStyle(color: Colors.white)),
       ),
     );
   }
+
+  return StreamBuilder<DocumentSnapshot>(
+    stream: FirebaseFirestore.instance.collection('Users').doc(user.uid).snapshots(),
+    builder: (context, snap) {
+      if (snap.connectionState == ConnectionState.waiting) {
+        return const Scaffold(
+          backgroundColor: bgColor,
+          body: Center(child: CircularProgressIndicator()),
+        );
+      }
+
+      if (snap.hasError) {
+        return Scaffold(
+          backgroundColor: bgColor,
+          body: Center(
+            child: Text("Error: ${snap.error}", style: const TextStyle(color: Colors.white)),
+          ),
+        );
+      }
+
+      final data = snap.data?.data() as Map<String, dynamic>?;
+
+      // ✅ If missing, default to false
+      final bool verified = (data?['verified'] == true);
+
+      // ✅ Gate the dashboard
+      if (!verified) {
+        return Scaffold(
+          backgroundColor: bgColor,
+          body: _pendingVerificationScreen(),
+        );
+      }
+
+      return Scaffold(
+        backgroundColor: bgColor,
+        body: Stack(
+          children: [
+            Positioned(top: -120, right: -120, child: _blurCircle(primaryColor.withOpacity(0.15), 320)),
+            Positioned(bottom: 80, left: -120, child: _blurCircle(Colors.green.withOpacity(0.10), 360)),
+
+            SafeArea(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                    child: Row(
+                      children: [
+                        _logoBox(),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Collector Dashboard", style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+                              const Text(
+                                "Collector",
+                                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        _iconButton(
+                          Icons.map_outlined,
+                          onTap: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Open a pickup from Notifications first.")),
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 10),
+
+                        _iconButton(
+                          Icons.chat_bubble_outline,
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const CollectorMessagesPage()),
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 10),
+
+                        _iconButton(
+                          Icons.notifications_none,
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const CollectorNotificationsPage()),
+                            );
+                          },
+                        ),
+                        _iconButton(
+                          Icons.person_outline,
+                          onTap: () => _showProfileSheet(context),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const Expanded(child: _CollectorLogsHome()),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
 
   // ================== UI HELPERS ==================
   static Widget _logoBox() {

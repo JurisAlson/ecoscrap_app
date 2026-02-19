@@ -5,7 +5,6 @@ import '../constants/categories.dart';
 
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
-
   const ReceiptScreen({super.key, required this.shopID});
 
   @override
@@ -16,20 +15,22 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  String _txType = "sale"; // "sale" | "buy"
+  // ✅ consistent lower-case everywhere
+  String _txType = "sell"; // "sell" | "buy"
+
+  // ✅ SELL branch dropdown values
+  static const List<String> _sellBranches = [
+    "Cabuyao Branch",
+    "JMC Branch",
+  ];
+  String _selectedSellBranch = _sellBranches.first;
 
   final TextEditingController _customerCtrl = TextEditingController();
   final List<_ReceiptItem> _items = [];
 
-  double get _totalAmount {
-    double total = 0;
-    for (final i in _items) {
-      total += i.subtotal;
-    }
-    return total;
-  }
+  double get _totalAmount => _items.fold(0.0, (sum, it) => sum + it.subtotal);
 
-  // ===================== FIXED PRICE HELPERS =====================
+  // ===================== PRICE HELPERS =====================
   void _recalcBuyItem(_ReceiptItem it) {
     if (_txType != "buy") return;
 
@@ -43,8 +44,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     it.subtotalCtrl.text = totalCost.toStringAsFixed(2);
   }
 
-  void _recalcSaleItem(_ReceiptItem it) {
-    if (_txType != "sale") return;
+  void _recalcSellItem(_ReceiptItem it) {
+    if (_txType != "sell") return;
 
     final cat = (it.categoryValue ?? kMajorCategories.first).trim();
     final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
@@ -94,34 +95,40 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     setState(() {
       item.inventoryDocId = picked['id'] as String;
-      item.salePickedName = (picked['name'] ?? '').toString();
+      item.sellPickedName = (picked['name'] ?? '').toString();
       item.categoryValue = (picked['category'] ?? '').toString();
       item.subCategoryValue = (picked['subCategory'] ?? '').toString();
 
-      // after picking inventory, compute fixed sell based on category
-      _recalcSaleItem(item);
+      _recalcSellItem(item);
     });
   }
 
   void _switchType(String next) {
     if (_txType == next) return;
-
     setState(() {
       _txType = next;
+
+      // ✅ reset party field depending on type
+      if (_txType == "sell") {
+        _selectedSellBranch = _sellBranches.first;
+        _customerCtrl.clear();
+      } else {
+        _customerCtrl.clear();
+      }
+
       for (final i in _items) {
         i.dispose();
       }
       _items.clear();
-      _customerCtrl.clear();
     });
   }
 
-  Widget _buildTypeButton(String type) {
-    final isSelected = _txType == type.toLowerCase();
+  Widget _buildTypeButton(String label, String value) {
+    final isSelected = _txType == value;
 
     return Expanded(
       child: GestureDetector(
-        onTap: () => _switchType(type.toLowerCase()),
+        onTap: () => _switchType(value),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           decoration: BoxDecoration(
@@ -130,7 +137,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           ),
           alignment: Alignment.center,
           child: Text(
-            type,
+            label,
             style: TextStyle(
               color: isSelected ? primaryColor : Colors.white70,
               fontWeight: FontWeight.bold,
@@ -142,8 +149,24 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     );
   }
 
+  // ✅ find existing inventory doc for BUY (query OUTSIDE transaction)
+  Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('Junkshop')
+        .doc(widget.shopID)
+        .collection('inventory')
+        .where('category', isEqualTo: cat)
+        .where('subCategory', isEqualTo: sub)
+        .limit(1)
+        .get();
+
+    if (snap.docs.isEmpty) return null;
+    return snap.docs.first.id;
+  }
+
+  // ===================== SAVE (SELL deduct, BUY add) =====================
   Future<void> _saveReceipt() async {
-    final isSale = _txType == "sale";
+    final isSell = _txType == "sell";
 
     if (_items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -152,91 +175,151 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       return;
     }
 
-    final itemsPayload = <Map<String, dynamic>>[];
+    // ✅ party name:
+    // sell => dropdown branch
+    // buy  => text input
+    final partyName = isSell ? _selectedSellBranch : _customerCtrl.text.trim();
 
-    double totalWeightKg = 0.0;
-    for (final it in _items) {
-      totalWeightKg += (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0);
+    if (!isSell && partyName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Enter supplier/source.")),
+      );
+      return;
     }
 
+    // validate + compute total weight
+    double totalWeightKg = 0.0;
     for (final it in _items) {
-      final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-      final computedTotal = double.tryParse(it.subtotalCtrl.text.trim()) ?? 0.0;
-
-      if (weightKg <= 0) {
+      final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+      if (kg <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Weight must be greater than 0.")),
         );
         return;
       }
+      totalWeightKg += kg;
 
-      if (isSale) {
-        if (it.inventoryDocId == null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Please select an inventory item for each SALE line.")),
-          );
-          return;
-        }
-
-        final cat = (it.categoryValue ?? "").trim();
-        final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
-        final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
-
-        final sellTotal = weightKg * sellPerKg;
-        final costTotal = weightKg * buyCostPerKg;
-        final profit = sellTotal - costTotal;
-
-        itemsPayload.add({
-          'inventoryDocId': it.inventoryDocId,
-          'itemName': (it.salePickedName ?? "").trim(),
-          'category': cat,
-          'subCategory': it.subCategoryValue ?? '',
-          'weightKg': weightKg,
-
-          'sellPricePerKg': sellPerKg,
-          'sellTotal': sellTotal,
-
-          'costPerKg': buyCostPerKg,
-          'costTotal': costTotal,
-          'profit': profit,
-        });
-      } else {
-        final cat = (it.categoryValue ?? "").trim();
-        final sub = (it.subCategoryValue ?? "").trim();
-
-        final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
-        final costTotal = weightKg * buyCostPerKg;
-
-        itemsPayload.add({
-          'itemName': "$cat • $sub",
-          'category': cat,
-          'subCategory': sub,
-          'weightKg': weightKg,
-
-          'costPerKg': buyCostPerKg,
-          'costTotal': costTotal,
-
-          // keep old field name for compatibility
-          'subtotal': computedTotal,
-        });
+      if (isSell && it.inventoryDocId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Select an inventory item for each SELL line.")),
+        );
+        return;
       }
     }
 
-    final partyName = _customerCtrl.text.trim();
+    final db = FirebaseFirestore.instance;
+    final shopRef = db.collection('Junkshop').doc(widget.shopID);
+    final txCol = shopRef.collection('transaction');
+    final invCol = shopRef.collection('inventory');
+
+    // ✅ pre-fetch BUY merge targets outside transaction
+    final Map<_ReceiptItem, String?> buyTargets = {};
+    if (!isSell) {
+      for (final it in _items) {
+        final cat = (it.categoryValue ?? "").trim();
+        final sub = (it.subCategoryValue ?? "").trim();
+        buyTargets[it] = await _findInventoryDocIdForBuy(cat, sub);
+      }
+    }
 
     try {
-      await FirebaseFirestore.instance
-          .collection('Junkshop')
-          .doc(widget.shopID)
-          .collection('transaction')
-          .add({
-        'transactionType': _txType,
-        'customerName': partyName,
-        'items': itemsPayload,
-        'totalAmount': _totalAmount,
-        'totalWeightKg': totalWeightKg,
-        'transactionDate': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
+      await db.runTransaction((trx) async {
+        final txRef = txCol.doc();
+        final itemsPayload = <Map<String, dynamic>>[];
+
+        for (final it in _items) {
+          final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+          final cat = (it.categoryValue ?? "").trim();
+          final sub = (it.subCategoryValue ?? "").trim();
+
+          if (isSell) {
+            final invRef = invCol.doc(it.inventoryDocId);
+            final invSnap = await trx.get(invRef);
+
+            if (!invSnap.exists) throw Exception("Inventory item not found.");
+
+            final invData = invSnap.data() as Map<String, dynamic>;
+            final currentKg = (invData['unitsKg'] as num?)?.toDouble() ?? 0.0;
+
+            if (currentKg < weightKg) {
+              final itemName = (invData['name'] ?? "Item").toString();
+              throw Exception(
+                "Not enough stock for $itemName. Available: ${currentKg.toStringAsFixed(2)} kg",
+              );
+            }
+
+            // ✅ SELL: deduct inventory
+            trx.update(invRef, {
+              'unitsKg': FieldValue.increment(-weightKg),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+
+            final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
+            final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+
+            final sellTotal = weightKg * sellPerKg;
+            final costTotal = weightKg * buyCostPerKg;
+            final profit = sellTotal - costTotal;
+
+            itemsPayload.add({
+              'inventoryDocId': it.inventoryDocId,
+              'itemName': (it.sellPickedName ?? "").trim(),
+              'category': cat,
+              'subCategory': sub,
+              'weightKg': weightKg,
+              'sellPricePerKg': sellPerKg,
+              'sellTotal': sellTotal,
+              'costPerKg': buyCostPerKg,
+              'costTotal': costTotal,
+              'profit': profit,
+            });
+          } else {
+            // ✅ BUY: add inventory (merge if found, else create)
+            final targetId = buyTargets[it];
+
+            if (targetId != null) {
+              final existingRef = invCol.doc(targetId);
+              trx.update(existingRef, {
+                'unitsKg': FieldValue.increment(weightKg),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+            } else {
+              final newInvRef = invCol.doc();
+              trx.set(newInvRef, {
+                'name': "$cat • $sub",
+                'category': cat,
+                'subCategory': sub,
+                'unitsKg': weightKg,
+                'createdAt': FieldValue.serverTimestamp(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+            }
+
+            final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+            final costTotal = weightKg * buyCostPerKg;
+
+            itemsPayload.add({
+              'itemName': "$cat • $sub",
+              'category': cat,
+              'subCategory': sub,
+              'weightKg': weightKg,
+              'costPerKg': buyCostPerKg,
+              'costTotal': costTotal,
+              'subtotal': costTotal,
+            });
+          }
+        }
+
+        // ✅ SAVE TRANSACTION DOC
+        trx.set(txRef, {
+          'transactionType': _txType, // "sell" | "buy"
+          'customerName': partyName,  // ✅ branch dropdown on sell
+          'items': itemsPayload,
+          'totalAmount': _totalAmount,
+          'totalWeightKg': totalWeightKg,
+          'transactionDate': FieldValue.serverTimestamp(),
+          'createdAt': FieldValue.serverTimestamp(),
+        });
       });
 
       if (!mounted) return;
@@ -250,7 +333,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isSale = _txType == "sale";
+    final isSell = _txType == "sell";
 
     return Scaffold(
       backgroundColor: bgColor,
@@ -258,7 +341,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         backgroundColor: bgColor,
         elevation: 0,
         foregroundColor: Colors.white,
-        title: Text(isSale ? "New Sale Receipt" : "New Buy Receipt"),
+        title: Text(isSell ? "Sell Receipt" : "Buy Receipt"),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -274,27 +357,45 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 ),
                 child: Row(
                   children: [
-                    _buildTypeButton("SALE"),
-                    _buildTypeButton("BUY"),
+                    _buildTypeButton("SELL", "sell"),
+                    _buildTypeButton("BUY", "buy"),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 16),
 
+            // ✅ PARTY FIELD: Sell = dropdown, Buy = text input
             _glassCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _label(isSale ? "Customer Name" : "Supplier / Source"),
+                  _label(isSell ? "" : "Supplier / Source"),
                   const SizedBox(height: 8),
-                  TextField(
-                    controller: _customerCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: _inputDecoration(
-                      isSale ? "Enter customer name" : "Enter supplier/source",
+
+                  if (isSell)
+                    DropdownButtonFormField<String>(
+                      value: _selectedSellBranch,
+                      items: _sellBranches
+                          .map((b) => DropdownMenuItem(
+                                value: b,
+                                child: Text(b),
+                              ))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _selectedSellBranch = v);
+                      },
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: _dropdownDecoration("Customer Name"),
+                    )
+                  else
+                    TextField(
+                      controller: _customerCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: _inputDecoration("Enter Seller /Supplier / Collector Name"),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -306,7 +407,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               children: [
                 const Text(
                   "Items",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 TextButton.icon(
                   onPressed: _addItem,
@@ -323,7 +428,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
               final pickedLabel = item.inventoryDocId == null
                   ? "Select Item"
-                  : "${item.salePickedName ?? ''} • ${item.categoryValue ?? ''}";
+                  : "${item.sellPickedName ?? ''} • ${item.categoryValue ?? ''}";
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -339,7 +444,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                 _label("Item"),
                                 const SizedBox(height: 6),
 
-                                if (isSale)
+                                if (isSell)
                                   SizedBox(
                                     width: double.infinity,
                                     child: OutlinedButton.icon(
@@ -361,9 +466,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                     ),
                                   ),
 
-                                if (!isSale) ...[
+                                if (!isSell) ...[
                                   DropdownButtonFormField<String>(
-                                    value: item.categoryValue ?? kMajorCategories.first,
+                                    initialValue: item.categoryValue ?? kMajorCategories.first,
                                     items: kMajorCategories
                                         .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                                         .toList(),
@@ -377,7 +482,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                   ),
                                   const SizedBox(height: 10),
                                   DropdownButtonFormField<String>(
-                                    value: item.subCategoryValue ?? kBuySubCategories.first,
+                                    initialValue: item.subCategoryValue ?? kBuySubCategories.first,
                                     items: kBuySubCategories
                                         .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                                         .toList(),
@@ -396,7 +501,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                           ),
                         ],
                       ),
-
                       const SizedBox(height: 12),
 
                       Row(
@@ -408,8 +512,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                               hint: "0.0",
                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
                               onChanged: (_) => setState(() {
-                                if (isSale) {
-                                  _recalcSaleItem(item);
+                                if (isSell) {
+                                  _recalcSellItem(item);
                                 } else {
                                   _recalcBuyItem(item);
                                 }
@@ -420,9 +524,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                           Expanded(
                             child: _textField(
                               controller: item.subtotalCtrl,
-                              label: isSale ? "Subtotal (₱)" : "Cost (₱)",
+                              label: isSell ? "Subtotal (₱)" : "Cost (₱)",
                               hint: "0.00",
-                              readOnly: true, // ✅ FIXED
+                              readOnly: true,
                             ),
                           ),
                         ],
@@ -440,7 +544,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    isSale ? "Total Amount" : "Total Cost",
+                    isSell ? "Total Amount" : "Total Cost",
                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                   Text(
@@ -462,9 +566,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                   backgroundColor: primaryColor,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                 ),
-                child: Text(
-                  isSale ? "SAVE SALE RECEIPT" : "SAVE BUY RECEIPT",
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                child: const Text(
+                  "SAVE RECEIPT",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
               ),
             ),
@@ -473,7 +577,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             Center(
               child: Text(
                 "Transaction Date is saved automatically",
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                style: TextStyle(color: Colors.grey, fontSize: 11),
               ),
             ),
           ],
@@ -568,14 +672,14 @@ class _ReceiptItem {
   final TextEditingController weightCtrl = TextEditingController();
   final TextEditingController subtotalCtrl = TextEditingController();
 
-  String? inventoryDocId; // sale only
-  String? salePickedName;
+  String? inventoryDocId; // sell only
+  String? sellPickedName;
 
   String? categoryValue;
   String? subCategoryValue;
 
-  double? buyCostPerKg;   // fixed buy cost/kg
-  double? sellPricePerKg; // fixed sell price/kg
+  double? buyCostPerKg;
+  double? sellPricePerKg;
 
   double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
 
@@ -586,9 +690,9 @@ class _ReceiptItem {
 }
 
 // ===================== INVENTORY PICKER =====================
+// (same as your current picker - keep it as is)
 class _InventoryPickerSheet extends StatefulWidget {
   final String shopID;
-
   const _InventoryPickerSheet({required this.shopID});
 
   @override
@@ -629,7 +733,10 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
                 prefixIcon: const Icon(Icons.search),
                 filled: true,
                 fillColor: Colors.white.withOpacity(0.06),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
               ),
               onChanged: (v) => setState(() => q = v.trim().toLowerCase()),
             ),

@@ -155,7 +155,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
         const SizedBox(height: 16),
 
-        _sectionTitle("MONTHLY PROJECTION"),
+        _sectionTitle("MONTH-TO-DATE SUMMARY"),
 
         StreamBuilder<QuerySnapshot>(
           stream: txStream,
@@ -219,8 +219,11 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                   leftTitle: "Revenue",
                   leftValue: "₱${revenue.toStringAsFixed(2)}",
                   rightTitle: "Profit",
+                  //rightTitleColor: const Color(0xFF00E676),
                   rightValue: "₱${profit.toStringAsFixed(2)}",
+                  rightValueColor: const Color(0xFF00E676), // strong neon green
                 ),
+
                 const SizedBox(height: 10),
                 _metricRow(
                   leftTitle: "Cost",
@@ -234,7 +237,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        "By Category",
+                        "Category",
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -707,40 +710,68 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     required String leftValue,
     required String rightTitle,
     required String rightValue,
+    Color? leftValueColor,
+    Color? rightValueColor
   }) {
-    return Row(
-      children: [
-        Expanded(child: _metricBox(leftTitle, leftValue)),
-        const SizedBox(width: 10),
-        Expanded(child: _metricBox(rightTitle, rightValue)),
-      ],
-    );
-  }
-
-  Widget _metricBox(String title, String value) => _card(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title.toUpperCase(),
-              style: const TextStyle(
-                color: Color(0xFF94A3B8),
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
+  return Row(
+    children: [
+      Expanded(
+        child: _card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                leftTitle.toUpperCase(),
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              value,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+              const SizedBox(height: 8),
+              Text(
+                leftValue,
+                style: TextStyle(
+                  color: leftValueColor ?? Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      );
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                rightTitle.toUpperCase(),
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                rightValue,
+                style: TextStyle(
+                  color: rightValueColor ?? Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
 
   Widget _iconButton(IconData icon,
       {bool badge = false, required VoidCallback onTap}) {
