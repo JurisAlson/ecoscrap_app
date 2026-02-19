@@ -1,3 +1,4 @@
+// ===================== receipt_screen.dart (UPDATED: Walk-in works, no name required) =====================
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -25,10 +26,29 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   ];
   String _selectedSellBranch = _sellBranches.first;
 
+  // ✅ BUY source dropdown values (UPDATED: added Walk-in)
+  static const List<String> _buySources = [
+    "Walk-in",
+    "Resident",
+    "Collector",
+  ];
+  String _selectedBuySource = _buySources.first;
+
+  // ✅ BUY source name (resident/collector, optional for walk-in)
+  final TextEditingController _sourceNameCtrl = TextEditingController();
+
+  // (kept) for older uses, but BUY now uses _sourceNameCtrl for the label/name
   final TextEditingController _customerCtrl = TextEditingController();
+
   final List<_ReceiptItem> _items = [];
 
   double get _totalAmount => _items.fold(0.0, (sum, it) => sum + it.subtotal);
+
+  // ✅ robust walk-in check (handles "walk in", "walk-in", "walkin", etc.)
+  bool get _isWalkInBuy {
+    final v = _selectedBuySource.trim().toLowerCase();
+    return v == "walkin" || v == "walk-in" || v == "walk in" || v == "walk_in";
+  }
 
   // ===================== PRICE HELPERS =====================
   void _recalcBuyItem(_ReceiptItem it) {
@@ -77,6 +97,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   @override
   void dispose() {
     _customerCtrl.dispose();
+    _sourceNameCtrl.dispose();
     for (final i in _items) {
       i.dispose();
     }
@@ -112,8 +133,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       if (_txType == "sell") {
         _selectedSellBranch = _sellBranches.first;
         _customerCtrl.clear();
+        _selectedBuySource = _buySources.first;
+        _sourceNameCtrl.clear();
       } else {
         _customerCtrl.clear();
+        _selectedBuySource = _buySources.first;
+        _sourceNameCtrl.clear();
       }
 
       for (final i in _items) {
@@ -175,16 +200,26 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       return;
     }
 
-    // ✅ party name:
-    // sell => dropdown branch
-    // buy  => text input
-    final partyName = isSell ? _selectedSellBranch : _customerCtrl.text.trim();
+    // ✅ BUY supports Walk-in with NO name required
+    final isWalkIn = (!isSell && _isWalkInBuy);
 
-    if (!isSell && partyName.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Enter supplier/source.")),
-      );
-      return;
+    final sourceType = isSell
+        ? ""
+        : (isWalkIn ? "walkin" : _selectedBuySource.trim().toLowerCase()); // walkin|resident|collector
+
+    final sourceName = isSell ? "" : _sourceNameCtrl.text.trim(); // optional for walk-in
+
+    // ✅ compatibility field
+    final partyName = isSell ? _selectedSellBranch : (isWalkIn ? "Walk-in" : sourceName);
+
+    // ✅ only require name when NOT walk-in
+    if (!isSell && !isWalkIn) {
+      if (sourceName.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Enter the name of the Resident/Collector.")),
+        );
+        return;
+      }
     }
 
     // validate + compute total weight
@@ -272,6 +307,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               'costPerKg': buyCostPerKg,
               'costTotal': costTotal,
               'profit': profit,
+              'subtotal': sellTotal,
             });
           } else {
             // ✅ BUY: add inventory (merge if found, else create)
@@ -311,15 +347,22 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         }
 
         // ✅ SAVE TRANSACTION DOC
-        trx.set(txRef, {
+        final payload = <String, dynamic>{
           'transactionType': _txType, // "sell" | "buy"
-          'customerName': partyName,  // ✅ branch dropdown on sell
+          'customerName': partyName,  // SELL: branch, BUY: Walk-in or typed name
           'items': itemsPayload,
           'totalAmount': _totalAmount,
           'totalWeightKg': totalWeightKg,
           'transactionDate': FieldValue.serverTimestamp(),
           'createdAt': FieldValue.serverTimestamp(),
-        });
+        };
+
+        if (!isSell) {
+          payload['sourceType'] = sourceType; // walkin | resident | collector
+          payload['sourceName'] = sourceName; // empty allowed for walk-in
+        }
+
+        trx.set(txRef, payload);
       });
 
       if (!mounted) return;
@@ -365,22 +408,18 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             ),
             const SizedBox(height: 16),
 
-            // ✅ PARTY FIELD: Sell = dropdown, Buy = text input
             _glassCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _label(isSell ? "" : "Supplier / Source"),
+                  _label(isSell ? "Customer Name" : "Source"),
                   const SizedBox(height: 8),
 
                   if (isSell)
                     DropdownButtonFormField<String>(
                       value: _selectedSellBranch,
                       items: _sellBranches
-                          .map((b) => DropdownMenuItem(
-                                value: b,
-                                child: Text(b),
-                              ))
+                          .map((b) => DropdownMenuItem(value: b, child: Text(b)))
                           .toList(),
                       onChanged: (v) {
                         if (v == null) return;
@@ -388,14 +427,39 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                       },
                       dropdownColor: const Color(0xFF0F172A),
                       style: const TextStyle(color: Colors.white),
-                      decoration: _dropdownDecoration("Customer Name"),
+                      decoration: _dropdownDecoration(""),
                     )
-                  else
-                    TextField(
-                      controller: _customerCtrl,
+                  else ...[
+                    DropdownButtonFormField<String>(
+                      value: _selectedBuySource,
+                      items: _buySources
+                          .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() {
+                          _selectedBuySource = v;
+                          if (_isWalkInBuy) _sourceNameCtrl.clear();
+                        });
+                      },
+                      dropdownColor: const Color(0xFF0F172A),
                       style: const TextStyle(color: Colors.white),
-                      decoration: _inputDecoration("Enter Seller /Supplier / Collector Name"),
+                      decoration: _dropdownDecoration(""),
                     ),
+                    const SizedBox(height: 10),
+
+                    // ✅ Hide name input when Walk-in
+                    if (!_isWalkInBuy)
+                      TextField(
+                        controller: _sourceNameCtrl,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _inputDecoration(
+                          _selectedBuySource.trim().toLowerCase() == "resident"
+                              ? "Enter resident name"
+                              : "Enter collector name",
+                        ),
+                      ),
+                  ],
                 ],
               ),
             ),
@@ -468,7 +532,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
                                 if (!isSell) ...[
                                   DropdownButtonFormField<String>(
-                                    initialValue: item.categoryValue ?? kMajorCategories.first,
+                                    value: item.categoryValue ?? kMajorCategories.first,
                                     items: kMajorCategories
                                         .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                                         .toList(),
@@ -482,7 +546,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                   ),
                                   const SizedBox(height: 10),
                                   DropdownButtonFormField<String>(
-                                    initialValue: item.subCategoryValue ?? kBuySubCategories.first,
+                                    value: item.subCategoryValue ?? kBuySubCategories.first,
                                     items: kBuySubCategories
                                         .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                                         .toList(),
@@ -574,7 +638,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             ),
 
             const SizedBox(height: 12),
-            Center(
+            const Center(
               child: Text(
                 "Transaction Date is saved automatically",
                 style: TextStyle(color: Colors.grey, fontSize: 11),
@@ -690,7 +754,6 @@ class _ReceiptItem {
 }
 
 // ===================== INVENTORY PICKER =====================
-// (same as your current picker - keep it as is)
 class _InventoryPickerSheet extends StatefulWidget {
   final String shopID;
   const _InventoryPickerSheet({required this.shopID});
