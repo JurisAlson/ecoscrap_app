@@ -158,12 +158,12 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   }
 
   // ================= COLLECTOR REQUESTS SECTION (NEW) =================
-  Widget _collectorRequestsSection() {
+Widget _collectorRequestsSection() {
   final stream = FirebaseFirestore.instance
       .collection("collectorApplications")
       .where("preferredJunkshopId", isEqualTo: widget.shopID)
-      .where("adminVerified", isEqualTo: true)         // admin step done
-      .where("junkshopVerified", isEqualTo: false)     // still pending
+      .where("adminVerified", isEqualTo: true) // admin step done
+      .where("junkshopVerified", isEqualTo: false) // still pending
       .snapshots();
 
   return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -212,8 +212,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
         children: docs.map((d) {
           final data = d.data();
 
-          final name = (data["collectorName"] ?? "Collector").toString();
-          final email = (data["collectorEmail"] ?? "").toString();
+          final uid = d.id;
+
+          // ✅ use the new fields from CollectorAccountCreation
+          final name = (data["collectorName"] ?? data["name"] ?? data["Name"] ?? "Collector").toString();
+          final email = (data["collectorEmail"] ?? data["email"] ?? data["Email"] ?? "").toString();
           final status = (data["junkshopStatus"] ?? "pending").toString();
 
           return Container(
@@ -227,7 +230,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(
+                  name,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
                 if (email.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -239,15 +245,28 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                   children: [
                     Text(status, style: const TextStyle(color: Colors.orangeAccent)),
                     const Spacer(),
+
+                    // ✅ APPROVE
                     TextButton(
                       onPressed: () async {
                         try {
+                          // 1) update collectorApplications
                           await d.reference.update({
                             "junkshopVerified": true,
                             "junkshopStatus": "approved",
                             "reviewedByJunkshopId": widget.shopID,
                             "reviewedAt": FieldValue.serverTimestamp(),
+                            "updatedAt": FieldValue.serverTimestamp(),
                           });
+
+                          // 2) activate in Users
+                          await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+                            "collectorActive": true,
+                            "junkshopVerified": true,
+                            "junkshopStatus": "approved",
+                            "updatedAt": FieldValue.serverTimestamp(),
+                          }, SetOptions(merge: true));
+
                           _toast("Approved collector: $name");
                         } catch (e) {
                           _toast("Approve failed: $e");
@@ -255,15 +274,28 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                       },
                       child: const Text("Approve"),
                     ),
+
+                    // ✅ REJECT
                     TextButton(
                       onPressed: () async {
                         try {
+                          // 1) update collectorApplications
                           await d.reference.update({
                             "junkshopVerified": true,
                             "junkshopStatus": "rejected",
                             "reviewedByJunkshopId": widget.shopID,
                             "reviewedAt": FieldValue.serverTimestamp(),
+                            "updatedAt": FieldValue.serverTimestamp(),
                           });
+
+                          // 2) ensure inactive in Users
+                          await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+                            "collectorActive": false,
+                            "junkshopVerified": true,
+                            "junkshopStatus": "rejected",
+                            "updatedAt": FieldValue.serverTimestamp(),
+                          }, SetOptions(merge: true));
+
                           _toast("Rejected collector: $name");
                         } catch (e) {
                           _toast("Reject failed: $e");

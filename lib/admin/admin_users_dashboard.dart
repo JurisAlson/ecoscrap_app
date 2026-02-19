@@ -548,8 +548,8 @@ Widget _collectorRequestsSection() {
               final uid = doc.id;
               final data = doc.data();
 
-              final name = (data["name"] ?? data["Name"] ?? "Collector").toString();
-              final email = (data["email"] ?? data["Email"] ?? "").toString();
+              final name = (data["collectorName"] ?? data["name"] ?? data["Name"] ?? "Collector").toString();
+              final email = (data["collectorEmail"] ?? data["email"] ?? data["Email"] ?? "").toString();
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -629,35 +629,47 @@ Widget _collectorRequestsSection() {
                         const Spacer(),
 
                         TextButton(
-                          onPressed: () async {
-                            final ok = await _confirm<bool>(
-                              title: "Approve collector?",
-                              body: "Approve $name (Admin step)?",
-                              yesValue: true,
-                              yesLabel: "Approve",
-                            );
-                            if (ok != true) return;
+                        onPressed: () async {
+                          final ok = await _confirm<bool>(
+                            title: "Approve collector?",
+                            body: "Approve $name (Admin step)?",
+                            yesValue: true,
+                            yesLabel: "Approve",
+                          );
+                          if (ok != true) return;
 
-                            setState(() => _busy = true);
-                            try {
-                              await FirebaseFirestore.instance
-                                  .collection("collectorApplications")
-                                  .doc(uid)
-                                  .set({
-                                "adminVerified": true,
-                                "adminStatus": "approved",
-                                "adminReviewedAt": FieldValue.serverTimestamp(),
-                              }, SetOptions(merge: true));
+                          setState(() => _busy = true);
+                          try {
+                            // 1) ✅ Update collectorApplications (admin step)
+                            await FirebaseFirestore.instance
+                                .collection("collectorApplications")
+                                .doc(uid)
+                                .set({
+                              "adminVerified": true,
+                              "adminStatus": "approved",
+                              "adminReviewedAt": FieldValue.serverTimestamp(),
+                              "updatedAt": FieldValue.serverTimestamp(),
+                            }, SetOptions(merge: true));
 
-                              _toast("Admin approved $name");
-                            } catch (e) {
-                              _toast("Approve failed: $e");
-                            } finally {
-                              if (mounted) setState(() => _busy = false);
-                            }
-                          },
-                          child: const Text("Approve"),
-                        ),
+                            // 2) ✅ ALSO update Users/{uid} so collector dashboard can login
+                            await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+                              "adminVerified": true,
+                              "adminStatus": "approved",
+                              "adminReviewedAt": FieldValue.serverTimestamp(),
+                              "updatedAt": FieldValue.serverTimestamp(),
+                            }, SetOptions(merge: true));
+
+                            _toast("Admin approved $name");
+                          } catch (e) {
+                            _toast("Approve failed: $e");
+                          } finally {
+                            if (mounted) setState(() => _busy = false);
+                          }
+                        },
+                        child: const Text("Approve"),
+                      ),
+
+                        
 
                         TextButton(
                           onPressed: () async {
