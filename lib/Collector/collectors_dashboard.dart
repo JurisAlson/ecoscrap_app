@@ -146,15 +146,18 @@ Widget build(BuildContext context) {
       final data = snap.data?.data() as Map<String, dynamic>?;
 
       // ✅ If missing, default to false
-      final bool verified = (data?['verified'] == true);
+      final bool adminOk = (data?['adminVerified'] == true);
+      final bool junkshopOk = (data?['junkshopVerified'] == true);
+      final bool active = (data?['collectorActive'] == true);
 
-      // ✅ Gate the dashboard
-      if (!verified) {
+      // ✅ Gate the dashboard (must pass both approvals + active)
+      if (!(adminOk && junkshopOk && active)) {
         return Scaffold(
           backgroundColor: bgColor,
           body: _pendingVerificationScreen(),
         );
       }
+
 
       return Scaffold(
         backgroundColor: bgColor,
@@ -233,8 +236,6 @@ Widget build(BuildContext context) {
     },
   );
 }
-
-
   // ================== UI HELPERS ==================
   static Widget _logoBox() {
     return Container(

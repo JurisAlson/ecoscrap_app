@@ -155,49 +155,91 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
-        title: const Text("Collector Account Creation"),
-        backgroundColor: const Color(0xFF1FA9A7),
+        title: const Text("Collector Registration"),
+        backgroundColor: const Color(0xFF0F172A),
+        elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
         child: Form(
           key: _formKey,
           child: Column(
             children: [
-              TextFormField(
-                controller: _name,
-                decoration: const InputDecoration(labelText: "Full Name"),
-                validator: (v) => (v == null || v.trim().isEmpty) ? "Required" : null,
+              const Text(
+                "Collector Account",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 30),
 
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _loading ? null : _pickId,
-                      icon: const Icon(Icons.badge_outlined),
-                      label: Text(_idImage == null ? "Upload Valid ID (optional)" : "Change ID"),
-                    ),
-                  ),
-                ],
+              _buildTextField(_name, "Full Name", Icons.person),
+              const SizedBox(height: 30),
+
+              ElevatedButton.icon(
+                onPressed: _loading ? null : _pickId,
+                icon: Icon(_idImage == null ? Icons.badge_outlined : Icons.check_circle),
+                label: Text(
+                  _idImage == null
+                      ? "Upload Valid ID (optional)"
+                      : "ID Selected (Tap to Change)",
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white10,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                ),
               ),
 
-              const Spacer(),
+              const SizedBox(height: 40),
 
               SizedBox(
                 width: double.infinity,
-                height: 48,
+                height: 50,
                 child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1FA9A7),
+                  ),
                   onPressed: _loading ? null : _submitCollector,
-                  child: Text(_loading ? "Submitting..." : "Submit (Pending)"),
+                  child: _loading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text(
+                          "Submit (Pending)",
+                          style: TextStyle(color: Colors.white),
+                        ),
                 ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildTextField(
+    TextEditingController controller,
+    String label,
+    IconData icon,
+  ) {
+    return TextFormField(
+      controller: controller,
+      style: const TextStyle(color: Colors.white),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white70),
+        prefixIcon: Icon(icon, color: const Color(0xFF1FA9A7)),
+        enabledBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Color(0xFF1FA9A7)),
+        ),
+        focusedBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Color(0xFF1FA9A7), width: 2),
+        ),
+      ),
+      validator: (v) => (v == null || v.trim().isEmpty) ? "Required" : null,
     );
   }
 }
