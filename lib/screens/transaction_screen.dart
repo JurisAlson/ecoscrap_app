@@ -2,7 +2,6 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'receipt_screen.dart';
-import 'TransactionDetailScreen.dart';
 
 class TransactionScreen extends StatefulWidget {
   final String shopID;
@@ -16,7 +15,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  String _txType = "sale";
+  String _txType = "Sell"; 
   String _q = "";
 
   void _switchType(String next) {
@@ -116,7 +115,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isSale = _txType == "sale";
+    final isSale = _txType == "Sell";
 
     final txStream = FirebaseFirestore.instance
         .collection('Junkshop')
@@ -179,7 +178,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                       ),
                       child: Row(
                         children: [
-                          _buildTypeButton("SALE"),
+                          _buildTypeButton("SELL"),
                           _buildTypeButton("BUY"),
                         ],
                       ),

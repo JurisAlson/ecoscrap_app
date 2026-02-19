@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 
 class TransactionDetailScreen extends StatelessWidget {
   final Map<String, dynamic> transactionData;
@@ -23,29 +23,25 @@ class TransactionDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isSale =
-        (transactionData['transactionType'] ?? '').toString() == 'sale';
+    // ✅ Firestore: "sell" or "buy"
+    final txType = (transactionData['transactionType'] ?? '').toString().toLowerCase();
+    final isSale = txType == 'sell';
 
-    // ✅ Proper name handling (works for both SALE and BUY)
-    final partyName = (
-      transactionData['customerNameDisplay'] ??
-      transactionData['customerName'] ??
-      ''
-    ).toString().trim();
+    final partyName = (transactionData['customerNameDisplay'] ??
+            transactionData['customerName'] ??
+            '')
+        .toString()
+        .trim();
 
-    final total =
-        (transactionData['totalAmount'] as num?)?.toDouble() ?? 0.0;
+    final total = (transactionData['totalAmount'] as num?)?.toDouble() ?? 0.0;
 
     final ts = transactionData['transactionDate'] as Timestamp?;
     final date = ts?.toDate();
 
-    final items =
-        (transactionData['items'] as List<dynamic>?) ?? [];
+    final items = (transactionData['items'] as List<dynamic>?) ?? [];
 
-    // ✅ Total KG (fallback supported)
-    double totalKg =
-        (transactionData['totalWeightKg'] as num?)?.toDouble() ?? -1;
-
+    // ✅ total KG (supports fallback)
+    double totalKg = (transactionData['totalWeightKg'] as num?)?.toDouble() ?? -1;
     if (totalKg < 0) {
       totalKg = 0.0;
       for (final it in items) {
@@ -60,7 +56,7 @@ class TransactionDetailScreen extends StatelessWidget {
         backgroundColor: bgColor,
         elevation: 0,
         foregroundColor: Colors.white,
-        title: Text(isSale ? "Sale Receipt" : "Buy Receipt"),
+        title: Text(isSale ? "Sell Receipt" : "Buy Receipt"),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -77,12 +73,9 @@ class TransactionDetailScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ✅ Always show name
                   Text(
                     partyName.isEmpty
-                        ? (isSale
-                            ? "Walk-in customer"
-                            : "Unknown supplier/source")
+                        ? (isSale ? "Walk-in customer" : "Unknown supplier/source")
                         : partyName,
                     style: const TextStyle(
                       color: Colors.white,
@@ -90,22 +83,17 @@ class TransactionDetailScreen extends StatelessWidget {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-
                   const SizedBox(height: 6),
-
                   if (date != null)
                     Text(
                       _formatDate(date),
                       style: const TextStyle(color: Colors.grey),
                     ),
-
                   const SizedBox(height: 10),
-
                   Text(
                     "${totalKg.toStringAsFixed(2)} kg ${isSale ? "sold" : "bought"}",
                     style: TextStyle(
-                      color:
-                          isSale ? Colors.greenAccent : Colors.orangeAccent,
+                      color: isSale ? Colors.greenAccent : Colors.orangeAccent,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -119,47 +107,32 @@ class TransactionDetailScreen extends StatelessWidget {
             Expanded(
               child: ListView.separated(
                 itemCount: items.length,
-                separatorBuilder: (_, __) =>
-                    const SizedBox(height: 10),
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
                 itemBuilder: (context, index) {
-                  final item =
-                      items[index] as Map<String, dynamic>;
+                  final item = items[index] as Map<String, dynamic>;
 
-                  final name =
-                      (item['itemName'] ?? '').toString();
-
-                  final weight =
-                      (item['weightKg'] as num?)?.toDouble() ?? 0.0;
-
-                  final subtotal =
-                      (item['subtotal'] as num?)?.toDouble() ?? 0.0;
+                  final name = (item['itemName'] ?? '').toString();
+                  final weight = (item['weightKg'] as num?)?.toDouble() ?? 0.0;
+                  final subtotal = (item['subtotal'] as num?)?.toDouble() ?? 0.0;
 
                   return Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.06),
-                      borderRadius:
-                          BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(14),
                     ),
                     child: Row(
-                      mainAxisAlignment:
-                          MainAxisAlignment.spaceBetween,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Expanded(
                           child: Column(
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                name,
-                                style: const TextStyle(
-                                    color: Colors.white),
-                              ),
+                              Text(name, style: const TextStyle(color: Colors.white)),
                               const SizedBox(height: 4),
                               Text(
                                 "${weight.toStringAsFixed(2)} kg",
-                                style: const TextStyle(
-                                    color: Colors.grey),
+                                style: const TextStyle(color: Colors.grey),
                               ),
                             ],
                           ),
@@ -167,9 +140,7 @@ class TransactionDetailScreen extends StatelessWidget {
                         Text(
                           "₱${subtotal.toStringAsFixed(2)}",
                           style: TextStyle(
-                            color: isSale
-                                ? Colors.greenAccent
-                                : Colors.orangeAccent,
+                            color: isSale ? Colors.greenAccent : Colors.orangeAccent,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -190,21 +161,19 @@ class TransactionDetailScreen extends StatelessWidget {
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
-                mainAxisAlignment:
-                    MainAxisAlignment.spaceBetween,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
                     "TOTAL",
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold),
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                   Text(
                     "₱${total.toStringAsFixed(2)}",
                     style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold),
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ],
               ),
