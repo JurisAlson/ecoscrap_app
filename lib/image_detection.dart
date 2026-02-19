@@ -49,7 +49,7 @@ Future<void> _captureImageWithCamera() async {
 
    final score = await TFLiteService.runModel(_image!.path);
 
-const double threshold = 0.75; // ✅ recommended from your test results
+const double threshold = 0.80; // ✅ recommended from your test results
 final isRecyclable = score >= threshold;
 final confidence = isRecyclable ? score : (1.0 - score);
 
