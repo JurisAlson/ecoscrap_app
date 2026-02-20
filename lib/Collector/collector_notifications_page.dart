@@ -23,10 +23,10 @@ class CollectorNotificationsPage extends StatelessWidget {
 
     try {
       await doc.reference.update({
-        'collectorId': user.uid,
         'status': 'accepted',
         'updatedAt': FieldValue.serverTimestamp(),
       });
+
 
       if (!context.mounted) return;
 
@@ -103,12 +103,12 @@ class CollectorNotificationsPage extends StatelessWidget {
         title: const Text("Notifications"),
       ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('pickupRequests')
-            .where('status', isEqualTo: 'pending')
-            .where('collectorId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
-            // ✅ IMPORTANT: do NOT orderBy createdAt unless you're sure every doc has it
-            .snapshots(),
+      stream: FirebaseFirestore.instance
+        .collection('pickupRequests')
+        .where('collectorId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
+        .where('status', whereIn: ['pending', 'scheduled'])
+        .snapshots(),
+
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
