@@ -51,7 +51,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   static const Color _textPrimary = Color(0xFFF8FAFC);
   static const Color _textSecondary = Color(0xFFCBD5E1);
   static const Color _textMuted = Color(0xFF94A3B8);
-
+  
   // Time
   late String _timeString;
   late Timer _timer;
@@ -141,11 +141,122 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     return "Select a drop-off";
   }
 
+    // ===== Pickup scheduling state =====
+  String _pickupType = "now"; // "now" | "window"
+  DateTime _scheduleDate = DateTime.now(); // date used for window pickups
+  DateTime? _windowStart;
+  DateTime? _windowEnd;
+
+  // Window label options
+  static const List<Map<String, dynamic>> _windowOptions = [
+    {"label": "8–10 AM", "startHour": 8, "endHour": 10},
+    {"label": "10–12 NN", "startHour": 10, "endHour": 12},
+    {"label": "1–3 PM", "startHour": 13, "endHour": 15},
+    {"label": "3–5 PM", "startHour": 15, "endHour": 17},
+    {"label": "5–8 PM", "startHour": 17, "endHour": 20},
+  ];
+
+  String get _scheduleSummary {
+    if (_pickupType == "now") return "Pickup: Now (ASAP)";
+    if (_windowStart == null || _windowEnd == null) return "Pickup: Choose a time window";
+    final d = _scheduleDate;
+    final dateStr = "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
+    final start = _formatHm(_windowStart!);
+    final end = _formatHm(_windowEnd!);
+    return "Pickup: $dateStr • $start–$end";
+  }
+
+  String _formatHm(DateTime dt) {
+    final h = dt.hour;
+    final m = dt.minute.toString().padLeft(2, '0');
+    final suffix = h >= 12 ? "PM" : "AM";
+    final hh = ((h + 11) % 12) + 1; // 0->12, 13->1
+    return "$hh:$m $suffix";
+  }
+
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  Future<void> _pickScheduleDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _scheduleDate.isBefore(now) ? now : _scheduleDate,
+      firstDate: _dateOnly(now),
+      lastDate: _dateOnly(now.add(const Duration(days: 30))),
+    );
+    if (picked == null) return;
+
+    setState(() {
+      _scheduleDate = picked;
+
+      // If a window is already selected, re-apply it to the new date
+      if (_windowStart != null && _windowEnd != null) {
+        final startHour = _windowStart!.hour;
+        final endHour = _windowEnd!.hour;
+        _windowStart = DateTime(picked.year, picked.month, picked.day, startHour, 0);
+        _windowEnd = DateTime(picked.year, picked.month, picked.day, endHour, 0);
+      }
+    });
+  }
+
+  void _selectNow() {
+    setState(() {
+      _pickupType = "now";
+      _windowStart = null;
+      _windowEnd = null;
+      _scheduleDate = DateTime.now();
+    });
+  }
+  final nowTs = Timestamp.fromDate(DateTime.now());
+
+
+  String formatCountdown(DateTime target) {
+    final diff = target.difference(DateTime.now());
+    if (diff.isNegative) return "Started";
+    final h = diff.inHours;
+    final m = diff.inMinutes % 60;
+    if (h > 0) return "Starts in ${h}h ${m}m";
+    return "Starts in ${diff.inMinutes}m";
+  }
+
+  bool isActiveWindow(DateTime start, DateTime end) {
+    final now = DateTime.now();
+    return now.isAfter(start) && now.isBefore(end);
+  }
+
+
+  void _selectWindow(int startHour, int endHour) {
+    final d = _scheduleDate;
+    final start = DateTime(d.year, d.month, d.day, startHour, 0);
+    final end = DateTime(d.year, d.month, d.day, endHour, 0);
+
+    final now = DateTime.now();
+
+    // Don’t allow windows that already ended
+    if (end.isBefore(now)) {
+      _snack("That time window already ended. Choose a later window.", bg: Colors.red);
+      return;
+    }
+
+    // If window starts too soon (e.g., less than 10 minutes from now), block it
+    if (start.isBefore(now.add(const Duration(minutes: 10))) && _dateOnly(d) == _dateOnly(now)) {
+      _snack("Please choose a window at least 10 minutes from now.", bg: Colors.red);
+      return;
+    }
+
+    setState(() {
+      _pickupType = "window";
+      _windowStart = start;
+      _windowEnd = end;
+    });
+  }
+
+
+
   @override
   void initState() {
     super.initState();
       debugPrint("✅ GeoMappingPage initState called");
-      _listenJunkshops();
 
     _timeString = _formatTime(DateTime.now());
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -438,6 +549,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                       final d = destinations[i];
                       final isPinned = d.name == "Pinned Drop-off";
 
+
                       final bool selected = isPinned
                           ? (_customDestinationLatLng != null)
                           : (_customDestinationLatLng == null &&
@@ -521,7 +633,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   Future<void> requestPickupWithConfirm({
     required LatLng pickupLatLng,
     required String? pickupAddress,
+
   }) async {
+    final bool isWindow = _pickupType == "window";
+    if (isWindow && (_windowStart == null || _windowEnd == null)) {
+      _snack("Please select a time window.", bg: Colors.red);
+      return;
+    }
+    
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -536,13 +655,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AlertDialog(  
         title: const Text("Confirm Pickup Request"),
         content: Text(
           "Send pickup request?\n\n"
           "Address: ${pickupAddress ?? "Unknown"}\n"
           "Collector: $collectorName\n"
-          "Destination: ${_destinationTitle}",
+          "Destination: ${_destinationTitle}\n"
+          "$_scheduleSummary",
         ),
         actions: [
           TextButton(
@@ -567,7 +687,13 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         'collectorId': _selectedCollectorId,
         'collectorName': collectorName,
 
-        'status': 'pending',
+        'pickupType': _pickupType, // "now" | "window"
+        'windowStart': _windowStart == null ? null : Timestamp.fromDate(_windowStart!),
+        'windowEnd': _windowEnd == null ? null : Timestamp.fromDate(_windowEnd!),
+
+        'scheduledAt': _windowStart == null ? null : Timestamp.fromDate(_windowStart!),
+
+        'status': (_pickupType == "now") ? 'pending' : 'scheduled',
 
         'pickupLocation': GeoPoint(pickupLatLng.latitude, pickupLatLng.longitude),
         'pickupAddress': pickupAddress ?? '',
@@ -579,6 +705,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+
       });
     } catch (e, st) {
       debugPrint("❌ pickupRequests add failed: $e");
@@ -595,8 +722,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     try {
       final doc = await FirebaseFirestore.instance.collection('Users').doc(uid).get();
       final data = doc.data() ?? {};
-      final name = (data['displayName'] ?? data['name'] ?? data['email'] ?? '').toString().trim();
-      return name.isEmpty ? fallback : name;
+      final name = (data['Name'] ?? data['displayName'] ?? data['name'] ?? '').toString().trim();
+
+      if (name.isNotEmpty) return name;
+
+      final email = (data['email'] ?? '').toString().trim();
+      if (email.isNotEmpty) return email;
+
+      return fallback;
     } catch (_) {
       return fallback;
     }
@@ -1021,8 +1154,10 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                       ),
                     ),
 
+                    const SizedBox(height: 12),
+                    _pickupScheduleSection(),
                     const SizedBox(height: 18),
-
+                    
                     // Stats
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1061,7 +1196,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                             child: ElevatedButton.icon(
                               onPressed: _startDirectionsToJunkshop,
                               icon: const Icon(Icons.directions),
-                              label: const Text("DIRECTIONS"),
+                              label: const Text("DROP-OFF"),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.white,
                                 foregroundColor: _bg,
@@ -1173,6 +1308,164 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       width: 4,
       height: 4,
       decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
+    );
+  }
+  Widget _pickupScheduleSection() {
+    final bool isWindow = _pickupType == "window";
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.o(0.06),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.o(0.10)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "PICKUP SCHEDULE",
+            style: TextStyle(
+              fontSize: 10,
+              color: _textMuted,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.0,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Summary line
+          Text(
+            _scheduleSummary,
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Now / Schedule toggle
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              ChoiceChip(
+                label: const Text("Now (ASAP)"),
+                selected: _pickupType == "now",
+                onSelected: (_) => _selectNow(),
+                selectedColor: _accent.o(0.22),
+                backgroundColor: Colors.white.o(0.06),
+                labelStyle: TextStyle(
+                  color: _pickupType == "now" ? _textPrimary : _textSecondary,
+                  fontWeight: FontWeight.w800,
+                ),
+                side: BorderSide(color: _pickupType == "now" ? _accent.o(0.55) : Colors.white.o(0.10)),
+              ),
+              ChoiceChip(
+                label: const Text("Schedule (Window)"),
+                selected: isWindow,
+                onSelected: (_) {
+                  // If switching to window, require choosing a window
+                  setState(() => _pickupType = "window");
+                },
+                selectedColor: _accent.o(0.22),
+                backgroundColor: Colors.white.o(0.06),
+                labelStyle: TextStyle(
+                  color: isWindow ? _textPrimary : _textSecondary,
+                  fontWeight: FontWeight.w800,
+                ),
+                side: BorderSide(color: isWindow ? _accent.o(0.55) : Colors.white.o(0.10)),
+              ),
+            ],
+          ),
+
+          // Window options
+          if (isWindow) ...[
+            const SizedBox(height: 12),
+
+            // Date picker row
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickScheduleDate,
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.black.o(0.20),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white.o(0.10)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.calendar_today, size: 16, color: _textSecondary),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "${_scheduleDate.year}-${_scheduleDate.month.toString().padLeft(2, '0')}-${_scheduleDate.day.toString().padLeft(2, '0')}",
+                              style: const TextStyle(
+                                color: _textPrimary,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const Icon(Icons.chevron_right, color: _textMuted),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+
+            // Window chips
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: _windowOptions.map((w) {
+                final label = w["label"] as String;
+                final startHour = w["startHour"] as int;
+                final endHour = w["endHour"] as int;
+
+                final selected = _windowStart != null &&
+                    _windowEnd != null &&
+                    _windowStart!.hour == startHour &&
+                    _windowEnd!.hour == endHour;
+
+                return ChoiceChip(
+                  label: Text(label),
+                  selected: selected,
+                  onSelected: (_) => _selectWindow(startHour, endHour),
+                  selectedColor: _accent.o(0.22),
+                  backgroundColor: Colors.white.o(0.06),
+                  labelStyle: TextStyle(
+                    color: selected ? _textPrimary : _textSecondary,
+                    fontWeight: FontWeight.w800,
+                  ),
+                  side: BorderSide(color: selected ? _accent.o(0.55) : Colors.white.o(0.10)),
+                );
+              }).toList(),
+            ),
+
+            // Hint if no window selected
+            if (_windowStart == null || _windowEnd == null) ...[
+              const SizedBox(height: 10),
+              const Text(
+                "Select a time window so the collector can arrive anytime within that range.",
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
     );
   }
 }
