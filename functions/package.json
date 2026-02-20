@@ -13,7 +13,7 @@
   "engines": {
     "node": "20"
   },
-  "main": "lib/index.js",
+  "main": "index.js",
   "dependencies": {
     "@google-cloud/kms": "^5.3.0",
     "firebase-admin": "^13.6.0",

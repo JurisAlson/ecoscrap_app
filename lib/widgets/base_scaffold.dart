@@ -6,11 +6,11 @@ class BaseScaffold extends StatelessWidget {
   final bool showBackButton;
 
   const BaseScaffold({
-    Key? key,
+    super.key,
     required this.title,
     required this.body,
     this.showBackButton = true,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
