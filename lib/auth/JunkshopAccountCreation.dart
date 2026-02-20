@@ -1,10 +1,10 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
-
 
 class JunkshopAccountCreationPage extends StatefulWidget {
   const JunkshopAccountCreationPage({super.key});
@@ -17,8 +17,6 @@ class JunkshopAccountCreationPage extends StatefulWidget {
 class _JunkshopAccountCreationPageState
     extends State<JunkshopAccountCreationPage> {
   final TextEditingController _shopNameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
 
   PlatformFile? _pickedFile;
   bool _isLoading = false;
@@ -38,16 +36,30 @@ class _JunkshopAccountCreationPageState
   }
 
   Future<void> _registerJunkshop() async {
-    if (_pickedFile == null ||
-        _pickedFile!.path == null ||
-        _emailController.text.trim().isEmpty ||
-        _shopNameController.text.trim().isEmpty ||
-        _passwordController.text.isEmpty) {
-      _showToast("Please fill all fields and upload a permit", isError: true);
+    final user = _auth.currentUser;
+    if (user == null) {
+      _showToast("Please login first to apply as junkshop.", isError: true);
       return;
     }
 
-    // 10MB client-side limit (Storage rules should enforce too)
+    final uid = user.uid;
+    final email = user.email ?? "";
+    final shopName = _shopNameController.text.trim();
+
+    if (email.isEmpty) {
+      _showToast(
+        "Your account has no email. Please login with email/password.",
+        isError: true,
+      );
+      return;
+    }
+
+    if (_pickedFile == null || _pickedFile!.path == null || shopName.isEmpty) {
+      _showToast("Please enter shop name and upload a permit", isError: true);
+      return;
+    }
+
+    // 10MB client-side limit (still enforce in Storage rules)
     if (_pickedFile!.size > 10 * 1024 * 1024) {
       _showToast("File too large (Max 10MB)", isError: true);
       return;
@@ -64,68 +76,59 @@ class _JunkshopAccountCreationPageState
     Reference? storageRef;
 
     try {
-      // 1) Create Auth user
-      final userCredential = await _auth.createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-      final user = userCredential.user!;
-      await user.getIdToken(true); 
-      final uid = user.uid;
-
-      // 2) Upload file to Storage (private folder)
+      // 1) Upload permit to Storage (private folder)
       final fileName = "${DateTime.now().millisecondsSinceEpoch}.$ext";
       final storagePath = 'permits/$uid/$fileName';
       storageRef = FirebaseStorage.instance.ref(storagePath);
 
-      final file = File(_pickedFile!.path!);
-
       await storageRef.putFile(
-        file,
+        File(_pickedFile!.path!),
         SettableMetadata(contentType: _guessContentType(ext)),
       );
 
-      // 3) Create permit request doc
-      final requestRef = _firestore.collection('permitRequests').doc();
+      // 2) Create/merge permit request doc (doc id = uid prevents duplicates)
+      final requestRef = _firestore.collection('permitRequests').doc(uid);
       await requestRef.set({
         'uid': uid,
-        'shopName': _shopNameController.text.trim(),
-        'email': _emailController.text.trim(),
+        'shopName': shopName,
+        'emailDisplay': email, // ✅ always from Auth
         'approved': false,
+        'status': 'pending',
         'submittedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
         'permitPath': storagePath,
         'originalFileName': _pickedFile!.name,
-      });
+      }, SetOptions(merge: true));
 
-      // 4) Create junkshop profile doc
-      await _firestore.collection('Junkshop').doc(uid).set({
+      // 3) Create/merge Users profile doc (junkshop data lives here)
+      await _firestore.collection('Users').doc(uid).set({
         'uid': uid,
-        'shopName': _shopNameController.text.trim(),
-        'email': _emailController.text.trim(),
+        'shopName': shopName,
+        'emailDisplay': email, // optional for admin/UI display
+
+        // RBAC role
+        'Roles': 'junkshop',
         'role': 'junkshop',
-        'verified': false, // ✅ MUST BE verified
+
+        // verification gate
+        'verified': false,
+        'junkshopStatus': 'pending',
         'activePermitRequestId': requestRef.id,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
       if (!mounted) return;
       _showToast("Submitted! Admin will verify your permit.");
-      await _auth.signOut();
       Navigator.pop(context);
-    } on FirebaseAuthException catch (e) {
-      // If auth succeeded but something later failed, you may want to
-      // delete the user account as well (optional, requires re-auth).
-      _showToast(e.message ?? "Auth Error", isError: true);
     } catch (e) {
-      // Rollback uploaded file if Firestore write fails after upload
+      // rollback uploaded file if any
       if (storageRef != null) {
         try {
           await storageRef.delete();
-        } catch (_) {
-          // ignore rollback errors
-        }
+        } catch (_) {}
       }
-      _showToast("Error: ${e.toString()}", isError: true);
+      _showToast("Error: $e", isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -146,6 +149,7 @@ class _JunkshopAccountCreationPageState
   }
 
   void _showToast(String message, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -157,17 +161,17 @@ class _JunkshopAccountCreationPageState
   @override
   void dispose() {
     _shopNameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final authEmail = FirebaseAuth.instance.currentUser?.email ?? "";
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
-        title: const Text("Junkshop Registration"),
+        title: const Text("Junkshop Application"),
         backgroundColor: const Color(0xFF0F172A),
         elevation: 0,
       ),
@@ -176,7 +180,7 @@ class _JunkshopAccountCreationPageState
         child: Column(
           children: [
             const Text(
-              "Business Account",
+              "Apply as Junkshop",
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 24,
@@ -184,39 +188,47 @@ class _JunkshopAccountCreationPageState
               ),
             ),
             const SizedBox(height: 30),
+
             _buildTextField(_shopNameController, "Shop Name", Icons.store),
             const SizedBox(height: 16),
-            _buildTextField(_emailController, "Business Email", Icons.email),
-            const SizedBox(height: 16),
-            _buildTextField(_passwordController, "Password", Icons.lock,
-                isPass: true),
+
+            // ✅ shows the account email that will be used
+            _buildReadOnlyField(authEmail, "Account Email", Icons.email),
             const SizedBox(height: 30),
+
             ElevatedButton.icon(
-              onPressed: _pickFile,
-              icon: Icon(_pickedFile == null
-                  ? Icons.upload_file
-                  : Icons.check_circle),
-              label: Text(_pickedFile == null
-                  ? "Upload Business Permit (PDF/Image)"
-                  : "Selected: ${_pickedFile!.name}"),
+              onPressed: _isLoading ? null : _pickFile,
+              icon: Icon(
+                _pickedFile == null ? Icons.upload_file : Icons.check_circle,
+              ),
+              label: Text(
+                _pickedFile == null
+                    ? "Upload Business Permit (PDF/Image)"
+                    : "Selected: ${_pickedFile!.name}",
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white10,
                 foregroundColor: Colors.white,
                 minimumSize: const Size(double.infinity, 50),
               ),
             ),
+
             const SizedBox(height: 40),
+
             SizedBox(
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1FA9A7)),
+                  backgroundColor: const Color(0xFF1FA9A7),
+                ),
                 onPressed: _isLoading ? null : _registerJunkshop,
                 child: _isLoading
                     ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text("Register Business",
-                        style: TextStyle(color: Colors.white)),
+                    : const Text(
+                        "Submit Application",
+                        style: TextStyle(color: Colors.white),
+                      ),
               ),
             ),
           ],
@@ -228,18 +240,38 @@ class _JunkshopAccountCreationPageState
   Widget _buildTextField(
     TextEditingController controller,
     String label,
-    IconData icon, {
-    bool isPass = false,
-  }) {
+    IconData icon,
+  ) {
     return TextField(
       controller: controller,
-      obscureText: isPass,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(color: Colors.white70),
         prefixIcon: Icon(icon, color: const Color(0xFF1FA9A7)),
         enabledBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Color(0xFF1FA9A7)),
+        ),
+        focusedBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Color(0xFF1FA9A7)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReadOnlyField(String value, String label, IconData icon) {
+    return TextField(
+      readOnly: true,
+      controller: TextEditingController(text: value),
+      style: const TextStyle(color: Colors.white),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white70),
+        prefixIcon: Icon(icon, color: const Color(0xFF1FA9A7)),
+        enabledBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Color(0xFF1FA9A7)),
+        ),
+        focusedBorder: const UnderlineInputBorder(
           borderSide: BorderSide(color: Color(0xFF1FA9A7)),
         ),
       ),

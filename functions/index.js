@@ -1,21 +1,13 @@
-/**
- * functions/index.js
- * UPDATED to fix:
- * 1) ✅ Duplicate exports.adminDeleteUser (removed duplicate and added a proper admin-claim function)
- * 2) ✅ Transactions showing "Walk-in customer" + ₱0.00 due to encryption deleting fields
- *    - customerName is deleted, BUT we keep customerNameDisplay for UI
- *    - totalAmount/totalPrice are NOT deleted (UI keeps working)
- *    - items[].subtotal is NOT deleted (UI keeps working)
- *
- * NOTE: Your inventory deduction logic is unchanged.
- */
-
 const admin = require("firebase-admin");
 const { logger } = require("firebase-functions/v2");
 const crypto = require("crypto");
 
 const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
-const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
+const {
+  onDocumentCreated,
+  onDocumentUpdated,
+  onDocumentWritten,
+} = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 admin.initializeApp();
@@ -25,9 +17,7 @@ admin.initializeApp();
 ==================================================== */
 exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
-  }
+  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = request.data?.uid;
   let role = String(request.data?.role || "").trim().toLowerCase();
@@ -39,12 +29,8 @@ exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
   if (role === "junkshops") role = "junkshop";
 
   const allowed = ["user", "collector", "junkshop", "admin"];
-  if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid required");
-  }
-  if (!allowed.includes(role)) {
-    throw new HttpsError("invalid-argument", "Invalid role");
-  }
+  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
+  if (!allowed.includes(role)) throw new HttpsError("invalid-argument", "Invalid role");
 
   await admin.firestore().collection("Users").doc(uid).set({ Roles: role }, { merge: true });
 
@@ -52,32 +38,26 @@ exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
 });
 
 /* ====================================================
-   ADMIN-ONLY: Verify junkshop (lets them pass your checks)
+   ADMIN-ONLY: Verify junkshop
 ==================================================== */
 exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
-  }
+  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = request.data?.uid;
-  if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid required");
-  }
+  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
 
-  // 1) Mark junkshop verified in Firestore
-  await admin.firestore().collection("Junkshop").doc(uid).set(
+  // 1) Mark junkshop verified in Users/{uid}
+  await admin.firestore().collection("Users").doc(uid).set(
     {
+      Roles: "junkshop",
       verified: true,
       verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
   );
 
-  // 2) Keep Users role in sync (for RBAC UI)
-  await admin.firestore().collection("Users").doc(uid).set({ Roles: "junkshop" }, { merge: true });
-
-  // 3) Keep Auth custom claims in sync (for routing/guards)
+  // 2) Keep Auth custom claims in sync
   const user = await admin.auth().getUser(uid);
   const existing = user.customClaims || {};
 
@@ -85,71 +65,24 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
     ...existing,
     junkshop: true,
     collector: false,
-    // keep admin if already admin
-    admin: existing.admin === true,
+    admin: existing.admin === true, // preserve admin
   });
 
   return { ok: true, uid };
 });
 
 /* ====================================================
-   ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
-==================================================== */
-exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
-  }
-
-  const uid = request.data?.uid;
-  if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid required");
-  }
-
-  const db = admin.firestore();
-
-  try {
-    // 🔥 Delete Users profile
-    await db.collection("Users").doc(uid).delete().catch(() => null);
-
-    // 🔥 Delete Junkshop profile
-    await db.collection("Junkshop").doc(uid).delete().catch(() => null);
-
-    // 🔥 Delete Permit Requests
-    const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
-    const batch = db.batch();
-    permits.docs.forEach((doc) => batch.delete(doc.ref));
-    await batch.commit().catch(() => null);
-
-    // 🔥 Delete Firebase Auth account
-    await admin.auth().deleteUser(uid);
-
-    return { ok: true, uid };
-  } catch (err) {
-    console.error("adminDeleteUser error:", err);
-    throw new HttpsError("internal", err?.message || String(err));
-  }
-});
-
-/* ====================================================
    OWNER/ADMIN-ONLY: Grant/Revoke admin claim
-   IMPORTANT: user must re-login/refresh token to see claim
 ==================================================== */
 exports.setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
-  }
+  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = request.data?.uid;
   const makeAdmin = request.data?.makeAdmin;
 
-  if (!uid || typeof uid !== "string") {
-    throw new HttpsError("invalid-argument", "uid required");
-  }
-  if (typeof makeAdmin !== "boolean") {
-    throw new HttpsError("invalid-argument", "makeAdmin must be boolean");
-  }
+  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
+  if (typeof makeAdmin !== "boolean") throw new HttpsError("invalid-argument", "makeAdmin must be boolean");
 
   try {
     const user = await admin.auth().getUser(uid);
@@ -159,9 +92,6 @@ exports.setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) =>
       ...existing,
       admin: makeAdmin,
     });
-
-    // (optional) keep Users role aligned if you want:
-    // if (makeAdmin) await admin.firestore().collection("Users").doc(uid).set({ Roles: "admin" }, { merge: true });
 
     return { ok: true, uid, admin: makeAdmin };
   } catch (err) {
@@ -194,7 +124,7 @@ exports.syncRoleClaims = onDocumentWritten(
       if (role === "collectors") role = "collector";
       if (role === "junkshops") role = "junkshop";
 
-      if (beforeRole === role) return; // ✅ no change, skip
+      if (beforeRole === role) return;
 
       const roleClaims = {
         admin: role === "admin",
@@ -211,6 +141,67 @@ exports.syncRoleClaims = onDocumentWritten(
     }
   }
 );
+
+/* ====================================================
+   Delete subcollections helper (needed for Users/{uid})
+==================================================== */
+async function deleteSubcollection(db, parentRef, subName, batchSize = 250) {
+  while (true) {
+    const snap = await parentRef.collection(subName).limit(batchSize).get();
+    if (snap.empty) return;
+
+    const batch = db.batch();
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+
+    if (snap.size < batchSize) return;
+  }
+}
+
+/* ====================================================
+   ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
+   - Deletes Users/{uid}
+   - Deletes Users/{uid}/inventory + Users/{uid}/transaction
+   - Deletes permitRequests
+   - Deletes legacy Junkshop/{uid} if still present (safe during migration)
+==================================================== */
+exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+
+  const uid = request.data?.uid;
+  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
+
+  const db = admin.firestore();
+
+  try {
+    const userRef = db.collection("Users").doc(uid);
+
+    // delete subcollections first
+    await deleteSubcollection(db, userRef, "inventory");
+    await deleteSubcollection(db, userRef, "transaction");
+
+    // delete Users profile
+    await userRef.delete().catch(() => null);
+
+    // legacy cleanup (optional)
+    await db.collection("Junkshop").doc(uid).delete().catch(() => null);
+
+    // delete permit requests (docs)
+    const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
+    const batch = db.batch();
+    permits.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit().catch(() => null);
+
+    // delete auth user
+    await admin.auth().deleteUser(uid);
+
+    return { ok: true, uid };
+  } catch (err) {
+    console.error("adminDeleteUser error:", err);
+    throw new HttpsError("internal", err?.message || String(err));
+  }
+});
 
 /* ====================================================
    KEYS
@@ -238,12 +229,9 @@ function getKeysOrThrow() {
 function normalizeText(v) {
   return String(v).trim();
 }
-
 function normalizeEmail(v) {
   return String(v).trim().toLowerCase();
 }
-
-// Accepts number
 function normalizeMoney(v) {
   if (v === undefined || v === null) throw new Error("Missing money value");
 
@@ -264,8 +252,6 @@ function normalizeMoney(v) {
 
 /* ====================================================
    ENCRYPTION HELPERS
-   - With timestamp (OK for top-level fields)
-   - No timestamp (required for arrays)
 ==================================================== */
 function encryptNormalizedToFields(normalized, AES_KEY, HMAC_KEY, fieldPrefix) {
   const nonce = crypto.randomBytes(12);
@@ -300,32 +286,28 @@ function encryptNormalizedToFieldsNoTimestamp(normalized, AES_KEY, HMAC_KEY, fie
     [`${fieldPrefix}_nonce`]: nonce.toString("base64"),
     [`${fieldPrefix}_tag`]: tag.toString("base64"),
     [`${fieldPrefix}_lookup`]: lookup,
-    // ✅ no serverTimestamp here (array-safe)
   };
 }
 
 function encryptStringToFields(plainText, AES_KEY, HMAC_KEY, fieldPrefix) {
   return encryptNormalizedToFields(normalizeText(plainText), AES_KEY, HMAC_KEY, fieldPrefix);
 }
-
 function encryptEmailToFields(email, AES_KEY, HMAC_KEY) {
   return encryptNormalizedToFields(normalizeEmail(email), AES_KEY, HMAC_KEY, "shopEmail");
 }
-
 function encryptMoneyToFields(value, AES_KEY, HMAC_KEY, fieldPrefix) {
   return encryptNormalizedToFields(normalizeMoney(value), AES_KEY, HMAC_KEY, fieldPrefix);
 }
-
 function encryptMoneyToFieldsForArray(value, AES_KEY, HMAC_KEY, fieldPrefix) {
   return encryptNormalizedToFieldsNoTimestamp(normalizeMoney(value), AES_KEY, HMAC_KEY, fieldPrefix);
 }
 
 /* ====================================================
-   1) AUTO-ENCRYPT Junkshop.email ON CREATE/UPDATE
+   1) AUTO-ENCRYPT Users.email (only if Roles=junkshop)
 ==================================================== */
 exports.encryptJunkshopEmailOnWrite = onDocumentWritten(
   {
-    document: "Junkshop/{shopId}",
+    document: "Users/{uid}",
     region: "asia-southeast1",
     secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
   },
@@ -334,7 +316,10 @@ exports.encryptJunkshopEmailOnWrite = onDocumentWritten(
     if (!afterSnap?.exists) return;
 
     const after = afterSnap.data();
-    const { shopId } = event.params;
+    const uid = event.params.uid;
+
+    const role = String(after?.Roles || after?.roles || "").toLowerCase();
+    if (role !== "junkshop") return;
 
     const hasPlainEmail = typeof after?.email === "string" && after.email.trim() !== "";
     const alreadyEncrypted = !!after?.shopEmail_enc;
@@ -349,25 +334,20 @@ exports.encryptJunkshopEmailOnWrite = onDocumentWritten(
         email: admin.firestore.FieldValue.delete(),
       });
 
-      logger.info("Encrypted Junkshop email successfully", { shopId });
+      logger.info("Encrypted junkshop email on Users doc", { uid });
     } catch (err) {
-      logger.error("Encryption failed (Junkshop email)", {
-        shopId,
-        message: err?.message,
-        stack: err?.stack,
-      });
+      logger.error("Encryption failed (Users email)", { uid, message: err?.message, stack: err?.stack });
     }
   }
 );
 
 /* ====================================================
    2) AUTO-ENCRYPT Transaction customerName + total + items[].subtotal
-   Supports totalAmount OR totalPrice
-   ✅ UPDATED: keep UI fields (avoid Walk-in + ₱0.00)
+   ✅ Keeps UI fields (avoid Walk-in + ₱0.00)
 ==================================================== */
 exports.encryptTransactionCustomerOnWrite = onDocumentWritten(
   {
-    document: "Junkshop/{shopId}/transaction/{txId}",
+    document: "Users/{uid}/transaction/{txId}",
     region: "asia-southeast1",
     secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
   },
@@ -376,7 +356,7 @@ exports.encryptTransactionCustomerOnWrite = onDocumentWritten(
     if (!afterSnap?.exists) return;
 
     const after = afterSnap.data();
-    const { shopId, txId } = event.params;
+    const { uid, txId } = event.params;
 
     const hasTotalAmount = after?.totalAmount !== undefined && after?.totalAmount !== null;
     const hasTotalPrice = after?.totalPrice !== undefined && after?.totalPrice !== null;
@@ -391,47 +371,39 @@ exports.encryptTransactionCustomerOnWrite = onDocumentWritten(
         if (typeof after.customerName === "string" && after.customerName.trim() !== "") {
           Object.assign(updatePayload, encryptStringToFields(after.customerName, AES_KEY, HMAC_KEY, "customerName"));
 
-          // ✅ KEEP a UI-safe display field
+          // UI-safe display
           updatePayload.customerNameDisplay = after.customerName;
 
-          // ✅ Remove plaintext PII field
+          // remove plaintext PII
           updatePayload.customerName = admin.firestore.FieldValue.delete();
         } else {
-          logger.warn("Skipping customerName (not a non-empty string)", { shopId, txId, type: typeof after.customerName });
+          logger.warn("Skipping customerName (not a non-empty string)", {
+            uid,
+            txId,
+            type: typeof after.customerName,
+          });
         }
       }
 
-      // totalAmount (not usually PII; keep plaintext for UI)
+      // totalAmount (keep plaintext for UI)
       if (hasTotalAmount && !after?.totalAmount_enc) {
         Object.assign(updatePayload, encryptMoneyToFields(after.totalAmount, AES_KEY, HMAC_KEY, "totalAmount"));
-
-        // ✅ DO NOT delete plaintext (UI reads totalAmount)
-        // updatePayload.totalAmount = admin.firestore.FieldValue.delete();
       }
 
-      // totalPrice (if you also use this in some screens)
+      // totalPrice (keep plaintext for UI)
       if (hasTotalPrice && !after?.totalPrice_enc) {
         Object.assign(updatePayload, encryptMoneyToFields(after.totalPrice, AES_KEY, HMAC_KEY, "totalPrice"));
-
-        // ✅ DO NOT delete plaintext (UI may read totalPrice)
-        // updatePayload.totalPrice = admin.firestore.FieldValue.delete();
       }
 
-      // items[].subtotal (ARRAY-SAFE: no serverTimestamp)
+      // items[].subtotal (array-safe)
       if (Array.isArray(after.items) && after.items.length > 0) {
         const newItems = after.items.map((it) => {
           const copy = { ...(it || {}) };
 
           if (copy.subtotal != null && !copy.subtotal_enc) {
             Object.assign(copy, encryptMoneyToFieldsForArray(copy.subtotal, AES_KEY, HMAC_KEY, "subtotal"));
-
-            // ✅ DO NOT delete plaintext subtotal (your Receipt UI needs it)
-            // delete copy.subtotal;
-
-            // allowed timestamp in arrays:
-            copy.subtotalSetAtMs = Date.now();
+            copy.subtotalSetAtMs = Date.now(); // array-safe timestamp
           }
-
           return copy;
         });
 
@@ -442,10 +414,10 @@ exports.encryptTransactionCustomerOnWrite = onDocumentWritten(
       if (Object.keys(updatePayload).length === 0) return;
 
       await afterSnap.ref.update(updatePayload);
-      logger.info("Encrypted transaction fields successfully", { shopId, txId });
+      logger.info("Encrypted transaction fields successfully", { uid, txId });
     } catch (err) {
       logger.error("Encryption failed (transaction)", {
-        shopId,
+        uid,
         txId,
         message: err?.message,
         stack: err?.stack,
@@ -455,8 +427,7 @@ exports.encryptTransactionCustomerOnWrite = onDocumentWritten(
 );
 
 /* ====================================================
-   ADMIN-ONLY: SET/ENCRYPT Junkshop email via callable
-   (Optional if you already auto-encrypt on write)
+   ADMIN-ONLY: SET/ENCRYPT junkshop email into Users/{uid}
 ==================================================== */
 exports.setJunkshopEmail = onCall(
   {
@@ -477,11 +448,13 @@ exports.setJunkshopEmail = onCall(
       const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
       const encFields = encryptEmailToFields(email, AES_KEY, HMAC_KEY);
 
-      const ref = admin.firestore().collection("Junkshop").doc(shopId);
+      const ref = admin.firestore().collection("Users").doc(shopId);
+
       await ref.set(
         {
+          Roles: "junkshop", // optional, helpful for admin-set
           ...encFields,
-          email: admin.firestore.FieldValue.delete(), // ensure plaintext removed
+          email: admin.firestore.FieldValue.delete(),
         },
         { merge: true }
       );
@@ -512,7 +485,6 @@ exports.setApprovedAtOnApprove = onDocumentUpdated(
   async (event) => {
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-
     if (!before || !after) return;
 
     if (before.approved !== true && after.approved === true && !after.approvedAt) {
@@ -526,7 +498,9 @@ exports.setApprovedAtOnApprove = onDocumentUpdated(
 );
 
 /* ====================================================
-   SHARED CLEANUP LOGIC
+   SHARED CLEANUP LOGIC (batch update + safe file delete)
+   - Unapproved older than 30 days -> mark expired + delete permit file
+   - Approved older than 15 days -> mark expired + delete permit file
 ==================================================== */
 async function cleanupPermits() {
   const db = admin.firestore();
@@ -561,12 +535,14 @@ async function cleanupPermits() {
     return { deleted: 0 };
   }
 
-  logger.info("Permits found", {
+  logger.info("Permits eligible", {
     total: docsToDelete.length,
     unapproved: unapprovedSnap.size,
     approved: approvedSnap.size,
   });
 
+  // delete files sequentially (safe) + batch update docs
+  const batch = db.batch();
   let deleted = 0;
 
   for (const doc of docsToDelete) {
@@ -578,19 +554,19 @@ async function cleanupPermits() {
         await bucket.file(permitPath).delete({ ignoreNotFound: true });
       }
 
-      // NOTE: This marks as deleted (does NOT delete document)
-      await doc.ref.update({
+      batch.update(doc.ref, {
         permitExpired: true,
         permitDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       deleted++;
-
       logger.info("Permit file removed", { requestId: doc.id, permitPath });
     } catch (err) {
       logger.error("Permit deletion failed", { requestId: doc.id, err: String(err) });
     }
   }
+
+  await batch.commit().catch((e) => logger.error("Permit batch update failed", { err: String(e) }));
 
   logger.info("Cleanup finished", { deleted });
   return { deleted };
@@ -625,15 +601,15 @@ exports.runPermitCleanupNow = onRequest({ region: "asia-southeast1" }, async (re
 });
 
 /* ====================================================
-   EXISTING INVENTORY FUNCTION (UNCHANGED)
+   INVENTORY DEDUCTION (UNCHANGED logic, updated path)
 ==================================================== */
 exports.deductInventoryOnTransactionCreate = onDocumentCreated(
   {
-    document: "Junkshop/{shopId}/transaction/{txId}",
+    document: "Users/{uid}/transaction/{txId}",
     region: "asia-southeast1",
   },
   async (event) => {
-    const { shopId } = event.params;
+    const { uid } = event.params;
     const snap = event.data;
     if (!snap) return;
 
@@ -645,8 +621,8 @@ exports.deductInventoryOnTransactionCreate = onDocumentCreated(
     await db.runTransaction(async (t) => {
       for (const item of data.items) {
         const inventoryRef = db
-          .collection("Junkshop")
-          .doc(shopId)
+          .collection("Users")
+          .doc(uid)
           .collection("inventory")
           .doc(item.inventoryDocId);
 

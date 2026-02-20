@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -26,36 +27,28 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   }
 
   Future<void> _pickId() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
     if (picked == null) return;
     setState(() => _idImage = File(picked.path));
   }
 
-  // uploads to /permits/{uid}/...
-  Future<String?> _uploadId(String uid) async {
+  /// ✅ Upload under /permits/{uid}/... (matches your current storage rules)
+  /// ✅ Return STORAGE PATH (not URL)
+  Future<String?> _uploadIdPermitPath(String uid) async {
     if (_idImage == null) return null;
 
-    final ref = FirebaseStorage.instance
-        .ref()
-        .child('permits')
-        .child(uid)
-        .child('collector_id_${DateTime.now().millisecondsSinceEpoch}.jpg');
+    final path = 'permits/$uid/collector_id_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final ref = FirebaseStorage.instance.ref().child(path);
 
-    await ref.putFile(_idImage!, SettableMetadata(contentType: 'image/jpeg'));
-    return await ref.getDownloadURL();
-  }
+    await ref.putFile(
+      _idImage!,
+      SettableMetadata(contentType: 'image/jpeg'),
+    );
 
-  // ✅ since only 1 junkshop exists, take the first VERIFIED doc
-  Future<DocumentSnapshot<Map<String, dynamic>>?> _getSingleJunkshopDoc() async {
-    final snap = await FirebaseFirestore.instance
-        .collection("Junkshop")
-        .where("verified", isEqualTo: true)
-        .limit(1)
-        .get();
-
-    if (snap.docs.isEmpty) return null;
-    return snap.docs.first;
+    return path;
   }
 
   Future<void> _submitCollector() async {
@@ -67,86 +60,76 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     setState(() => _loading = true);
 
     try {
-      final junkshopDoc = await _getSingleJunkshopDoc();
-      if (junkshopDoc == null) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("No verified junkshop found. Please verify a junkshop first.")),
-        );
-        return;
-      }
-
-      final shopId = junkshopDoc.id;
-      final shopName = (junkshopDoc.data()?["shopName"] ?? shopId).toString();
-
-      final idUrl = await _uploadId(user.uid);
-
-      final batch = FirebaseFirestore.instance.batch();
-
-      // 1) Users/{uid}
+      final permitPath = await _uploadIdPermitPath(user.uid);
       final userRef = FirebaseFirestore.instance.collection("Users").doc(user.uid);
-      batch.set(userRef, {
+
+      // Read existing so we don’t wipe assignments if user re-submits
+      final existingSnap = await userRef.get();
+      final existing = existingSnap.data() ?? {};
+
+      final hasCreatedAt = existing.containsKey("createdAt");
+      final hasCreatedAtCaps = existing.containsKey("CreatedAt");
+
+      // Keep existing junkshop assignment if already assigned
+      final existingJunkshopId = (existing["junkshopId"] ?? "").toString();
+      final existingJunkshopName = (existing["junkshopName"] ?? "").toString();
+      final existingJunkshopVerified = existing["junkshopVerified"] == true;
+      final existingJunkshopStatus = (existing["junkshopStatus"] ?? "").toString();
+
+      // Keep existing admin decisions if already reviewed
+      final existingAdminVerified = existing["adminVerified"] == true;
+      final existingAdminStatus = (existing["adminStatus"] ?? "").toString();
+      final existingAdminReviewedAt = existing["adminReviewedAt"];
+
+      await userRef.set({
         "UserID": user.uid,
         "Email": user.email ?? "",
         "Name": _name.text.trim(),
         "Roles": "collector",
 
-        "junkshopId": shopId,
-        "junkshopName": shopName,
+        // ✅ Admin flow (don’t reset if already approved/rejected)
+        "adminVerified": existingAdminVerified,
+        "adminStatus": existingAdminStatus.isNotEmpty ? existingAdminStatus : "pending",
+        "adminReviewedAt": existingAdminReviewedAt,
 
-        "collectorActive": false,
-        "adminVerified": false,
-        "adminStatus": "pending",
-        "junkshopVerified": false,
-        "junkshopStatus": "pending",
+        "collectorActive": existing["collectorActive"] ?? false,
 
-        "createdAt": FieldValue.serverTimestamp(),
+        // ✅ Junkshop assignment fields (kept, but NOT based on shopName logic)
+        // These are set later by the junkshop after admin approves.
+        "junkshopId": existingJunkshopId,
+        "junkshopName": existingJunkshopName,
+        "junkshopVerified": existingJunkshopVerified,
+        "junkshopStatus": existingJunkshopStatus.isNotEmpty ? existingJunkshopStatus : "unassigned",
+
+        // ✅ ID path saved INSIDE Users doc (no other collection)
+        if (permitPath != null)
+          "kyc": {
+            "permitPath": permitPath,
+            "status": "pending",
+            "submittedAt": FieldValue.serverTimestamp(),
+            "type": "valid_id",
+          }
+        else if (existing["kyc"] != null)
+          "kyc": existing["kyc"],
+
+        if (!hasCreatedAt) "createdAt": FieldValue.serverTimestamp(),
+        if (!hasCreatedAtCaps) "CreatedAt": FieldValue.serverTimestamp(),
+
         "updatedAt": FieldValue.serverTimestamp(),
-        "isOnline": false,
+        "isOnline": existing["isOnline"] ?? false,
         "lastSeen": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      // 2) collectorKYC/{uid}
-      if (idUrl != null) {
-        final kycRef = FirebaseFirestore.instance.collection("collectorKYC").doc(user.uid);
-        batch.set(kycRef, {
-          "collectorUid": user.uid,
-          "permitUrl": idUrl,
-          "createdAt": FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-
-      // 3) collectorApplications/{uid}
-      final appRef = FirebaseFirestore.instance.collection("collectorApplications").doc(user.uid);
-      batch.set(appRef, {
-        "collectorUid": user.uid,
-        "collectorName": _name.text.trim(),
-        "collectorEmail": user.email ?? "",
-        "role": "collector",
-
-        "preferredJunkshopId": shopId,
-        "preferredJunkshopName": shopName,
-
-        "adminVerified": false,
-        "adminStatus": "pending",
-
-        "junkshopVerified": false,
-        "junkshopStatus": "pending",
-
-        "createdAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      await batch.commit();
-
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Submitted! Collector application is pending admin review.")),
+        const SnackBar(content: Text("Submitted! Pending admin review.")),
       );
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed: $e")),
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -169,25 +152,16 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
             children: [
               const Text(
                 "Collector Account",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 30),
-
               _buildTextField(_name, "Full Name", Icons.person),
               const SizedBox(height: 30),
 
               ElevatedButton.icon(
                 onPressed: _loading ? null : _pickId,
                 icon: Icon(_idImage == null ? Icons.badge_outlined : Icons.check_circle),
-                label: Text(
-                  _idImage == null
-                      ? "Upload Valid ID (optional)"
-                      : "ID Selected (Tap to Change)",
-                ),
+                label: Text(_idImage == null ? "Upload Valid ID (optional)" : "ID Selected (Tap to Change)"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white10,
                   foregroundColor: Colors.white,
@@ -196,21 +170,15 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
               ),
 
               const SizedBox(height: 40),
-
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1FA9A7),
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1FA9A7)),
                   onPressed: _loading ? null : _submitCollector,
                   child: _loading
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text(
-                          "Submit (Pending)",
-                          style: TextStyle(color: Colors.white),
-                        ),
+                      : const Text("Submit (Pending)", style: TextStyle(color: Colors.white)),
                 ),
               ),
             ],
@@ -220,11 +188,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     );
   }
 
-  Widget _buildTextField(
-    TextEditingController controller,
-    String label,
-    IconData icon,
-  ) {
+  Widget _buildTextField(TextEditingController controller, String label, IconData icon) {
     return TextFormField(
       controller: controller,
       style: const TextStyle(color: Colors.white),

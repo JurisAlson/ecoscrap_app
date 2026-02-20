@@ -10,7 +10,6 @@ class AdminDashboardPage extends StatefulWidget {
 }
 
 class _AdminDashboardPageState extends State<AdminDashboardPage> {
-  // Cache Storage download URLs to avoid refetching on every rebuild
   final Map<String, Future<String>> _urlCache = {};
 
   Future<String> _getPermitUrlCached(String permitPath) {
@@ -24,7 +23,15 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     await ref.update({'approved': value});
   }
 
-  Future<void> _deleteRequest(DocumentReference ref) async {
+  Future<void> _deleteRequest(DocumentReference ref, {String? permitPath}) async {
+    // Optional: delete the storage file too
+    if (permitPath != null && permitPath.isNotEmpty) {
+      try {
+        await FirebaseStorage.instance.ref(permitPath).delete();
+      } catch (_) {
+        // ignore
+      }
+    }
     await ref.delete();
   }
 
@@ -116,6 +123,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             final permitPath = (data['permitPath'] ?? '').toString();
             final approved = data['approved'] == true;
 
+            final ext = permitPath.split(".").last.toLowerCase();
+            final isImage = ["png", "jpg", "jpeg"].contains(ext);
+            final isPdf = ext == "pdf";
+
             return Card(
               elevation: 2,
               child: Padding(
@@ -173,7 +184,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                               ),
                             );
                             if (ok == true) {
-                              await _deleteRequest(ref);
+                              await _deleteRequest(ref, permitPath: permitPath);
                             }
                           },
                           icon: const Icon(Icons.delete_outline),
@@ -196,10 +207,40 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                             );
                           }
                           if (urlSnap.hasError || !urlSnap.hasData) {
-                            return Text("Image load failed: ${urlSnap.error}");
+                            return Text("Permit load failed: ${urlSnap.error}");
                           }
 
                           final url = urlSnap.data!;
+
+                          if (isPdf) {
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.04),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.picture_as_pdf, color: Colors.red),
+                                  const SizedBox(width: 10),
+                                  const Expanded(child: Text("PDF uploaded (tap to open in browser).")),
+                                  TextButton(
+                                    onPressed: () {
+                                      // simplest: open system browser using url_launcher if you have it
+                                      // otherwise keep as info only.
+                                      _showImageDialog(context, url); // will show blank for pdf, but harmless
+                                    },
+                                    child: const Text("Open"),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+
+                          if (!isImage) {
+                            return Text("Unsupported file type: .$ext");
+                          }
+
                           return GestureDetector(
                             onTap: () => _showImageDialog(context, url),
                             child: ClipRRect(

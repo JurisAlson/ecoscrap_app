@@ -116,7 +116,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
   @override
   Widget build(BuildContext context) {
     final txStream = FirebaseFirestore.instance
-        .collection('Junkshop')
+        .collection('Users')
         .doc(widget.shopID)
         .collection('transaction')
         .orderBy('transactionDate', descending: true)
@@ -174,7 +174,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
                             return Theme(
                               data: ThemeData.dark().copyWith(
                                 scaffoldBackgroundColor: const Color(0xFF0F172A),
-                                dialogBackgroundColor: const Color(0xFF0F172A),
                                 colorScheme: const ColorScheme.dark(
                                   primary: Color(0xFF1FA9A7),
                                   onPrimary: Colors.white,
@@ -185,7 +184,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   style: TextButton.styleFrom(
                                     foregroundColor: const Color(0xFF1FA9A7),
                                   ),
-                                ),
+                                ), dialogTheme: DialogThemeData(backgroundColor: const Color(0xFF0F172A)),
                               ),
                               child: child!,
                             );

@@ -175,19 +175,19 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   // ✅ find existing inventory doc for BUY (query OUTSIDE transaction)
-  Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
-    final snap = await FirebaseFirestore.instance
-        .collection('Junkshop')
-        .doc(widget.shopID)
-        .collection('inventory')
-        .where('category', isEqualTo: cat)
-        .where('subCategory', isEqualTo: sub)
-        .limit(1)
-        .get();
+Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
+  final snap = await FirebaseFirestore.instance
+      .collection('Users') // ✅ UPDATED
+      .doc(widget.shopID)
+      .collection('inventory')
+      .where('category', isEqualTo: cat)
+      .where('subCategory', isEqualTo: sub)
+      .limit(1)
+      .get();
 
-    if (snap.docs.isEmpty) return null;
-    return snap.docs.first.id;
-  }
+  if (snap.docs.isEmpty) return null;
+  return snap.docs.first.id;
+}
 
   // ===================== SAVE (SELL deduct, BUY add) =====================
   Future<void> _saveReceipt() async {
@@ -243,9 +243,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     }
 
     final db = FirebaseFirestore.instance;
-    final shopRef = db.collection('Junkshop').doc(widget.shopID);
-    final txCol = shopRef.collection('transaction');
-    final invCol = shopRef.collection('inventory');
+    final shopRef = db.collection('Users').doc(widget.shopID); // ✅ UPDATED
+    final txCol = shopRef.collection('transaction');          // ✅ UPDATED
+    final invCol = shopRef.collection('inventory');           // ✅ UPDATED
 
     // ✅ pre-fetch BUY merge targets outside transaction
     final Map<_ReceiptItem, String?> buyTargets = {};
@@ -417,7 +417,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
                   if (isSell)
                     DropdownButtonFormField<String>(
-                      value: _selectedSellBranch,
+                      initialValue: _selectedSellBranch,
                       items: _sellBranches
                           .map((b) => DropdownMenuItem(value: b, child: Text(b)))
                           .toList(),
@@ -431,7 +431,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                     )
                   else ...[
                     DropdownButtonFormField<String>(
-                      value: _selectedBuySource,
+                      initialValue: _selectedBuySource,
                       items: _buySources
                           .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                           .toList(),
@@ -532,7 +532,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
                                 if (!isSell) ...[
                                   DropdownButtonFormField<String>(
-                                    value: item.categoryValue ?? kMajorCategories.first,
+                                    initialValue: item.categoryValue ?? kMajorCategories.first,
                                     items: kMajorCategories
                                         .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                                         .toList(),
@@ -546,7 +546,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                                   ),
                                   const SizedBox(height: 10),
                                   DropdownButtonFormField<String>(
-                                    value: item.subCategoryValue ?? kBuySubCategories.first,
+                                    initialValue: item.subCategoryValue ?? kBuySubCategories.first,
                                     items: kBuySubCategories
                                         .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                                         .toList(),

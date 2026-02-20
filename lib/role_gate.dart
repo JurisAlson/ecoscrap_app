@@ -1,4 +1,3 @@
-import 'package:ecoscrap_app/Collector/collectors_dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,6 +5,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import 'admin/admin_users_dashboard.dart';
 import 'auth/login_page.dart';
+import 'Collector/collectors_dashboard.dart';
 import 'household/household_dashboard.dart';
 import 'junkshop/junkshop_dashboard.dart';
 
@@ -26,29 +26,17 @@ Future<void> grantMeAdminClaimIfOwner(User user) async {
 class RoleGate extends StatelessWidget {
   const RoleGate({super.key});
 
-  Future<String> _getRoleFromUsers(String uid) async {
-    final doc = await FirebaseFirestore.instance.collection('Users').doc(uid).get();
-    if (!doc.exists) return 'unknown';
-
-    final data = doc.data() ?? {};
-    final raw = (data['Roles'] ?? data['roles'] ?? '')
-        .toString()
-        .trim()
-        .toLowerCase();
-
-    if (raw == 'admin') return 'admin';
-    if (raw == 'collector' || raw == 'collectors') return 'collector';
-    if (raw == 'junkshop' || raw == 'junkshops') return 'junkshop';
-    if (raw == 'user' || raw == 'users' || raw == 'household' || raw == 'households') {
-      return 'user';
-    }
-
-    return 'unknown';
+  String _normRole(dynamic raw) {
+    final s = (raw ?? "").toString().trim().toLowerCase();
+    if (s == "admins" || s == "admin") return "admin";
+    if (s == "collectors" || s == "collector") return "collector";
+    if (s == "junkshops" || s == "junkshop") return "junkshop";
+    if (s == "users" || s == "user" || s == "household" || s == "households") return "user";
+    return "unknown";
   }
 
-  Future<bool> _junkshopDocExists(String uid) async {
-    final junkDoc = await FirebaseFirestore.instance.collection('Junkshop').doc(uid).get();
-    return junkDoc.exists;
+  Future<DocumentSnapshot<Map<String, dynamic>>> _getUserDoc(String uid) {
+    return FirebaseFirestore.instance.collection('Users').doc(uid).get();
   }
 
   Future<bool> _hasAdminClaim(User user) async {
@@ -71,22 +59,33 @@ class RoleGate extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return const LoginPage();
 
-    return FutureBuilder<String>(
-      future: _getRoleFromUsers(user.uid),
-      builder: (context, roleSnap) {
-        if (roleSnap.connectionState == ConnectionState.waiting) {
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: _getUserDoc(user.uid),
+      builder: (context, docSnap) {
+        if (docSnap.connectionState == ConnectionState.waiting) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
 
-        if (roleSnap.hasError) {
+        if (docSnap.hasError) {
           return _RoleErrorPage(
-            message: "Failed to load role.\n\n${roleSnap.error}",
+            message: "Failed to load Users/{uid}.\n\n${docSnap.error}",
             actionLabel: "Logout",
             onAction: () => _logout(context),
           );
         }
 
-        final role = roleSnap.data ?? 'unknown';
+        if (!docSnap.hasData || !docSnap.data!.exists) {
+          return _RoleErrorPage(
+            message:
+                "Profile is missing in Users/{uid}.\n\n"
+                "Please logout and login again. If it persists, contact admin.",
+            actionLabel: "Logout",
+            onAction: () => _logout(context),
+          );
+        }
+
+        final data = docSnap.data!.data() ?? {};
+        final role = _normRole(data['Roles'] ?? data['roles'] ?? data['role']);
 
         // ================= ADMIN =================
         if (role == 'admin') {
@@ -121,78 +120,38 @@ class RoleGate extends StatelessWidget {
           );
         }
 
-        // ================= COLLECTOR / USER =================
-        if (role == 'collector') return const CollectorsDashboardPage();
-        if (role == 'user') return const DashboardPage();
+        // ================= COLLECTOR =================
+        if (role == 'collector') {
+          return const CollectorsDashboardPage();
+        }
+
+        // ================= USER =================
+        if (role == 'user') {
+          return const DashboardPage();
+        }
 
         // ================= JUNKSHOP =================
         if (role == 'junkshop') {
-          return FutureBuilder<bool>(
-            future: _junkshopDocExists(user.uid),
-            builder: (context, junkSnap) {
-              if (junkSnap.connectionState == ConnectionState.waiting) {
-                return const Scaffold(body: Center(child: CircularProgressIndicator()));
-              }
+          final verified = data["verified"] == true;
+          final shopName = (data["shopName"] ?? data["name"] ?? "Junkshop").toString();
 
-              if (junkSnap.hasError) {
-                return _RoleErrorPage(
-                  message: "Failed to load junkshop profile.\n\n${junkSnap.error}",
-                  actionLabel: "Logout",
-                  onAction: () => _logout(context),
-                );
-              }
+          // If you want to block unverified junkshops:
+          if (!verified) {
+            final status = (data["junkshopStatus"] ?? "pending").toString();
+            return _RoleErrorPage(
+              message:
+                  "Junkshop application is not verified yet.\n\n"
+                  "Status: $status\n\n"
+                  "Please wait for admin approval.",
+              actionLabel: "Logout",
+              onAction: () => _logout(context),
+            );
+          }
 
-              final exists = junkSnap.data == true;
-              if (!exists) {
-                return _RoleErrorPage(
-                  message:
-                      "This account is marked as Junkshop, but Junkshop profile is missing.\n\n"
-                      "Please contact admin or re-register the shop profile.",
-                  actionLabel: "Logout",
-                  onAction: () => _logout(context),
-                );
-              }
-
-              // ✅ IMPORTANT: RETURN this FutureBuilder (your code did not return it)
-              // ✅ Use your real collection name: 'Junkshop'
-              // ✅ shopID is user.uid in your structure
-              return FutureBuilder<DocumentSnapshot>(
-                future: FirebaseFirestore.instance.collection('Junkshop').doc(user.uid).get(),
-                builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting) {
-                    return const Scaffold(body: Center(child: CircularProgressIndicator()));
-                  }
-
-                  if (snap.hasError) {
-                    return _RoleErrorPage(
-                      message: "Failed to load shop details.\n\n${snap.error}",
-                      actionLabel: "Logout",
-                      onAction: () => _logout(context),
-                    );
-                  }
-
-                  if (!snap.hasData || !snap.data!.exists) {
-                    return _RoleErrorPage(
-                      message: "Junkshop document not found.",
-                      actionLabel: "Logout",
-                      onAction: () => _logout(context),
-                    );
-                  }
-
-                  final data = snap.data!.data() as Map<String, dynamic>?;
-
-                  // ✅ Use the correct field name here:
-                  // If your field is "shopName" this works.
-                  // If it's "name" or "businessName", change below.
-                  final shopName = (data?['shopName'] ?? data?['name'] ?? 'Junkshop').toString();
-
-                  return JunkshopDashboardPage(
-                    shopID: user.uid,
-                    shopName: shopName,
-                  );
-                },
-              );
-            },
+          // Verified -> proceed
+          return JunkshopDashboardPage(
+            shopID: user.uid,
+            shopName: shopName,
           );
         }
 

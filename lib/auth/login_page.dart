@@ -1,8 +1,9 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+
 import 'forgot_password.dart';
 import 'UserAccountCreation.dart';
 import '../role_gate.dart';
@@ -28,6 +29,44 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  Future<void> _ensureUserProfile(User u) async {
+    final ref = FirebaseFirestore.instance.collection('Users').doc(u.uid);
+    final snap = await ref.get();
+
+    if (!snap.exists) {
+      await ref.set({
+        "uid": u.uid,
+        "emailDisplay": u.email ?? "",
+        "Roles": "user",
+        "role": "user",
+        "verified": false,
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return;
+    }
+
+    final data = snap.data() ?? {};
+    final updates = <String, dynamic>{
+      "updatedAt": FieldValue.serverTimestamp(),
+    };
+
+    if ((data["uid"] ?? "").toString().isEmpty) updates["uid"] = u.uid;
+
+    if ((data["emailDisplay"] ?? "").toString().isEmpty && (u.email ?? "").isNotEmpty) {
+      updates["emailDisplay"] = u.email;
+    }
+
+    final roles = (data["Roles"] ?? data["roles"] ?? "").toString().trim();
+    final role = (data["role"] ?? "").toString().trim();
+    if (roles.isEmpty && role.isNotEmpty) updates["Roles"] = role;
+    if (role.isEmpty && roles.isNotEmpty) updates["role"] = roles;
+
+    if (updates.length > 1) {
+      await ref.set(updates, SetOptions(merge: true));
+    }
+  }
+
   Future<void> _login() async {
     if (_isLoading) return;
 
@@ -41,7 +80,6 @@ class _LoginPageState extends State<LoginPage> {
 
     setState(() => _isLoading = true);
 
-
     try {
       final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email,
@@ -53,6 +91,10 @@ class _LoginPageState extends State<LoginPage> {
       debugPrint("LOGIN OK UID=${u.uid} EMAIL=${u.email}");
       debugPrint("PROJECT=${Firebase.app().options.projectId}");
 
+      // ✅ Ensure Users/{uid} exists so RoleGate won't block with "profile missing"
+      await _ensureUserProfile(u);
+
+      // Optional debug:
       try {
         final snap = await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
         debugPrint("ROLE DOC exists=${snap.exists} data=${snap.data()}");
@@ -134,16 +176,13 @@ class _LoginPageState extends State<LoginPage> {
               ? IconButton(
                   onPressed: onToggleVisibility,
                   icon: Icon(
-                    obscureText
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
+                    obscureText ? Icons.visibility_outlined : Icons.visibility_off_outlined,
                     color: const Color(0xFF475569),
                   ),
                 )
               : null,
           border: InputBorder.none,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
         ),
       ),
     );
@@ -155,7 +194,6 @@ class _LoginPageState extends State<LoginPage> {
       backgroundColor: const Color(0xFF0F172A),
       body: Stack(
         children: [
-          // Blurred gradient background
           Positioned(
             top: -100,
             left: -100,
@@ -188,8 +226,6 @@ class _LoginPageState extends State<LoginPage> {
               ),
             ),
           ),
-
-          // UI Content
           SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -197,7 +233,6 @@ class _LoginPageState extends State<LoginPage> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const SizedBox(height: 80),
-
                   Transform.rotate(
                     angle: -0.1,
                     child: Container(
@@ -210,11 +245,9 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         borderRadius: BorderRadius.circular(24),
                       ),
-                      child: const Icon(Icons.recycling,
-                          color: Colors.white, size: 40),
+                      child: const Icon(Icons.recycling, color: Colors.white, size: 40),
                     ),
                   ),
-
                   const SizedBox(height: 25),
                   const Text(
                     "EcoScrap",
@@ -226,13 +259,9 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const Text(
                     "Join the green movement",
-                    style: TextStyle(
-                      color: Color(0xFF94A3B8),
-                    ),
+                    style: TextStyle(color: Color(0xFF94A3B8)),
                   ),
-
                   const SizedBox(height: 40),
-
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Column(
@@ -240,23 +269,17 @@ class _LoginPageState extends State<LoginPage> {
                       children: const [
                         Text(
                           "Sign In",
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold),
+                          style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
                         ),
                         SizedBox(height: 8),
                         Text(
                           "Welcome back 🌿 enter your details",
-                          style: TextStyle(
-                              color: Color(0xFF94A3B8), fontSize: 14),
+                          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
                         ),
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 32),
-
                   _buildTextField(
                     controller: _emailController,
                     hint: "Email Address",
@@ -264,36 +287,28 @@ class _LoginPageState extends State<LoginPage> {
                     keyboardType: TextInputType.emailAddress,
                   ),
                   const SizedBox(height: 16),
-
                   _buildTextField(
                     controller: _passwordController,
                     hint: "Password",
                     icon: Icons.lock_outline,
                     isPassword: true,
                     obscureText: _obscurePassword,
-                    onToggleVisibility: () {
-                      setState(() => _obscurePassword = !_obscurePassword);
-                    },
+                    onToggleVisibility: () => setState(() => _obscurePassword = !_obscurePassword),
                   ),
-
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
                       onPressed: () => Navigator.push(
                         context,
-                        MaterialPageRoute(
-                            builder: (_) => const ForgotPasswordPage()),
+                        MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
                       ),
                       child: const Text(
                         "Forgot Password?",
-                        style: TextStyle(
-                            color: Color(0xFF1FA9A7),
-                            fontWeight: FontWeight.w600),
+                        style: TextStyle(color: Color(0xFF1FA9A7), fontWeight: FontWeight.w600),
                       ),
                     ),
                   ),
                   const SizedBox(height: 20),
-
                   SizedBox(
                     width: double.infinity,
                     height: 56,
@@ -301,46 +316,32 @@ class _LoginPageState extends State<LoginPage> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF1FA9A7),
                         foregroundColor: const Color(0xFF0F172A),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
                       onPressed: _isLoading ? null : _login,
                       child: _isLoading
-                          ? const CircularProgressIndicator(
-                              strokeWidth: 3,
-                              color: Color(0xFF0F172A),
-                            )
+                          ? const CircularProgressIndicator(strokeWidth: 3, color: Color(0xFF0F172A))
                           : const Text(
                               "Continue",
-                              style: TextStyle(
-                                  fontSize: 17, fontWeight: FontWeight.bold),
+                              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                             ),
                     ),
                   ),
-
                   const SizedBox(height: 30),
-
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Text(
-                        "Don't have an account?",
-                        style: TextStyle(color: Color(0xFF94A3B8)),
-                      ),
+                      const Text("Don't have an account?", style: TextStyle(color: Color(0xFF94A3B8))),
                       TextButton(
                         onPressed: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(
-                                builder: (_) => const UserAccountCreationPage()),
+                            MaterialPageRoute(builder: (_) => const UserAccountCreationPage()),
                           );
                         },
                         child: const Text(
                           "Create one",
-                          style: TextStyle(
-                              color: Color(0xFF1FA9A7),
-                              fontWeight: FontWeight.bold),
+                          style: TextStyle(color: Color(0xFF1FA9A7), fontWeight: FontWeight.bold),
                         ),
                       ),
                     ],
