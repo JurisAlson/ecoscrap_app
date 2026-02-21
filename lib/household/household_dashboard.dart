@@ -4,10 +4,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../image_detection.dart';
 import '../auth/JunkshopAccountCreation.dart';
-
+import 'household_order_page.dart';
 import '../auth/CollectorAccountCreation.dart';
 
 
@@ -38,16 +38,16 @@ class _DashboardPageState extends State<DashboardPage> {
 
   // ================= TAB SCREENS =================
   List<Widget> get _tabScreens => [
-        _householdHome(),
-        _historyScreen(),
-        _collectorsTab(),
-        const Center(
-          child: Text(
-            "Chat Screen",
-            style: TextStyle(color: Colors.white, fontSize: 22),
-          ),
-        ),
-      ];
+    _householdHome(),
+    _historyScreen(),
+    const HouseholdOrderPage(),
+    const Center(
+      child: Text(
+        "Chat Screen",
+        style: TextStyle(color: Colors.white, fontSize: 22),
+      ),
+    ),
+  ];
 
   @override
   void initState() {
@@ -233,7 +233,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           _navItem(0, Icons.home_outlined, "Home"),
                           _navItem(1, Icons.history, "History"),
                           const SizedBox(width: 62),
-                          _navItem(2, Icons.group_outlined, "Collectors"),
+                          _navItem(2, Icons.receipt_long, "Order"),
                           _navItem(3, Icons.message_outlined, "Chat"),
                         ],
                       ),
@@ -500,10 +500,255 @@ class _DashboardPageState extends State<DashboardPage> {
 
   // ================= HISTORY TAB =================
   Widget _historyScreen() {
-    return const Center(
-      child: Text(
-        "History Screen",
-        style: TextStyle(color: Colors.white, fontSize: 22),
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Center(
+        child: Text("Not logged in.", style: TextStyle(color: Colors.white)),
+      );
+    }
+
+    final query = FirebaseFirestore.instance
+        .collection('pickupRequests')
+        .where('householdId', isEqualTo: user.uid)
+        .orderBy('updatedAt', descending: true)
+        .limit(30);
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: query.snapshots(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snap.hasError) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              "Error loading history: ${snap.error}",
+              style: const TextStyle(color: Colors.white70),
+            ),
+          );
+        }
+
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return const Center(
+            child: Text("No history yet.", style: TextStyle(color: Colors.white70)),
+          );
+        }
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Transaction History",
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              for (final d in docs) _pickupHistoryCard(d),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _pickupHistoryCard(QueryDocumentSnapshot d) {
+    final data = d.data() as Map<String, dynamic>;
+
+    final collectorName = (data['collectorName'] ?? '—').toString();
+    final status = (data['status'] ?? '').toString().toLowerCase();
+    final pickupType = (data['pickupType'] ?? '').toString().toLowerCase();
+
+    // Prefer createdAt if you have it; otherwise use updatedAt
+    final createdAt = data['createdAt'] is Timestamp ? data['createdAt'] as Timestamp : null;
+    final updatedAt = data['updatedAt'] is Timestamp ? data['updatedAt'] as Timestamp : null;
+    final ts = createdAt ?? updatedAt;
+
+    final windowStart = data['windowStart'] is Timestamp ? data['windowStart'] as Timestamp : null;
+    final windowEnd = data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
+
+    final title = _statusToTitle(status);
+
+    // Multiline subtitle exactly like your example fields
+    final subtitle = [
+      "Collector: $collectorName",
+      "Created: ${_formatDateTime(ts)}",
+      "Pickup Type: ${pickupType.isEmpty ? '—' : pickupType}",
+      "Status: ${status.isEmpty ? '—' : status}",
+      if (pickupType == 'window' && windowStart != null && windowEnd != null)
+        "Window: ${_formatTime(windowStart)} - ${_formatTime(windowEnd)}",
+    ].join("\n");
+
+    return _historyCard(
+      title: title,
+      subtitle: subtitle,
+      rightText: _formatShortTime(ts), // small time on the right
+      icon: _statusToIcon(status),
+      iconBg: _statusToIconBg(status),
+      iconColor: _statusToIconColor(status),
+    );
+  }
+
+  String _statusToTitle(String status) {
+    switch (status) {
+      case 'accepted':
+        return "Pickup request accepted";
+      case 'scheduled':
+        return "Pickup scheduled";
+      case 'pending':
+        return "Pickup request sent";
+      case 'completed':
+        return "Pickup completed";
+      case 'cancelled':
+      case 'canceled':
+        return "Pickup cancelled";
+      default:
+        return status.isEmpty ? "Pickup update" : "Pickup $status";
+    }
+  }
+
+  IconData _statusToIcon(String status) {
+    switch (status) {
+      case 'completed':
+        return Icons.check_circle_outline;
+      case 'accepted':
+        return Icons.thumb_up_alt_outlined;
+      case 'scheduled':
+        return Icons.event_available_outlined;
+      case 'pending':
+        return Icons.schedule_outlined;
+      case 'cancelled':
+      case 'canceled':
+        return Icons.cancel_outlined;
+      default:
+        return Icons.receipt_long;
+    }
+  }
+
+  Color _statusToIconBg(String status) {
+    switch (status) {
+      case 'completed':
+        return Colors.green.withOpacity(0.15);
+      case 'accepted':
+        return Colors.blue.withOpacity(0.15);
+      case 'scheduled':
+        return Colors.purple.withOpacity(0.15);
+      case 'pending':
+        return Colors.white.withOpacity(0.10);
+      case 'cancelled':
+      case 'canceled':
+        return Colors.red.withOpacity(0.15);
+      default:
+        return Colors.white.withOpacity(0.10);
+    }
+  }
+
+  Color _statusToIconColor(String status) {
+    switch (status) {
+      case 'completed':
+        return Colors.green;
+      case 'accepted':
+        return Colors.lightBlueAccent;
+      case 'scheduled':
+        return Colors.purpleAccent;
+      case 'pending':
+        return Colors.white70;
+      case 'cancelled':
+      case 'canceled':
+        return Colors.redAccent;
+      default:
+        return Colors.white70;
+    }
+  }
+
+  // Formats: "20 Feb 2026 • 3:05 PM"
+  String _formatDateTime(Timestamp? ts) {
+    if (ts == null) return "—";
+    final dt = ts.toDate();
+
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    final m = months[dt.month - 1];
+
+    int hour = dt.hour % 12;
+    if (hour == 0) hour = 12;
+    final ampm = dt.hour >= 12 ? "PM" : "AM";
+    final mm = dt.minute.toString().padLeft(2, '0');
+
+    return "${dt.day} $m ${dt.year} • $hour:$mm $ampm";
+  }
+
+  // Formats: "3:05 PM"
+  String _formatShortTime(Timestamp? ts) {
+    if (ts == null) return "—";
+    final dt = ts.toDate();
+    int hour = dt.hour % 12;
+    if (hour == 0) hour = 12;
+    final ampm = dt.hour >= 12 ? "PM" : "AM";
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return "$hour:$mm $ampm";
+  }
+
+  // Formats: "5:00 PM"
+  String _formatTime(Timestamp ts) {
+    final dt = ts.toDate();
+    int hour = dt.hour % 12;
+    if (hour == 0) hour = 12;
+    final ampm = dt.hour >= 12 ? "PM" : "AM";
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return "$hour:$mm $ampm";
+  }
+
+  Widget _historyCard({
+    required String title,
+    required String subtitle,
+    required String rightText,
+    required IconData icon,
+    required Color iconBg,
+    required Color iconColor,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: iconBg,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: iconColor),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                Text(
+                  subtitle,
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11, height: 1.35),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            rightText,
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+          ),
+        ],
       ),
     );
   }

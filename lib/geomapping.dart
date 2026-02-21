@@ -648,6 +648,26 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       _snack("Please choose an available collector first.", bg: Colors.red);
       return;
     }
+    // ✅ OPTIONAL: block if household already has an active order
+    try {
+      final active = await FirebaseFirestore.instance
+          .collection('pickupRequests')
+          .where('householdId', isEqualTo: user.uid)
+          .where('status', whereIn: ['pending', 'accepted', 'scheduled'])
+          .limit(1)
+          .get();
+
+      if (active.docs.isNotEmpty) {
+        _snack(
+          "You already have an active pickup order. Cancel it first from the Order tab.",
+          bg: Colors.red,
+        );
+        return;
+      }
+    } catch (e) {
+      // If this fails due to missing index or connection, you can still allow request
+      debugPrint("Active-order check failed: $e");
+    }
 
     final householdName = await _getUserName(user.uid, fallback: user.email ?? "Household");
     final collectorName = _selectedCollectorName ??
@@ -702,6 +722,11 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         'junkshopLocation': _selectedJunkshop == null
             ? null
             : GeoPoint(_selectedJunkshop!.latLng.latitude, _selectedJunkshop!.latLng.longitude),
+
+          // ✅ NEW: arrived + cancel defaults
+        'arrived': false,
+        'arrivedAt': null,
+        'cancelledAt': null,
 
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),

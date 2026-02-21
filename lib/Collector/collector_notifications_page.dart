@@ -55,7 +55,9 @@ class CollectorNotificationsPage extends StatelessWidget {
 
     try {
       await doc.reference.update({
+        'status': 'declined',
         'declinedBy': FieldValue.arrayUnion([user.uid]),
+        'declinedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
@@ -123,7 +125,14 @@ class CollectorNotificationsPage extends StatelessWidget {
             );
           }
 
-          final docs = snap.data?.docs ?? [];
+          final uid = FirebaseAuth.instance.currentUser!.uid;
+          final allDocs = snap.data?.docs ?? [];
+
+          final docs = allDocs.where((d) {
+            final data = d.data();
+            final declinedBy = (data['declinedBy'] as List?) ?? [];
+            return !declinedBy.contains(uid);
+          }).toList();
           if (docs.isEmpty) {
             return const Center(
               child: Text("No pending pickup requests.", style: TextStyle(color: Colors.white)),

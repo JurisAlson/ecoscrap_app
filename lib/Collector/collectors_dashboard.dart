@@ -45,7 +45,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       _setOnline(false);
     }
   }
-
+  
   Future<void> _setOnline(bool online) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -361,7 +361,7 @@ class _CollectorLogsHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final query = FirebaseFirestore.instance
-        .collection('PickupRequests')
+        .collection('pickupRequests')
         .where('collectorId', isEqualTo: collectorId)
         .orderBy('updatedAt', descending: true)
         .limit(25);
