@@ -100,17 +100,16 @@ class _JunkshopAccountCreationPageState
         'originalFileName': _pickedFile!.name,
       }, SetOptions(merge: true));
 
-      // 3) Create/merge Users profile doc (junkshop data lives here)
       await _firestore.collection('Users').doc(uid).set({
         'uid': uid,
         'shopName': shopName,
-        'emailDisplay': email, // optional for admin/UI display
+        'emailDisplay': email,
 
-        // RBAC role
-        'Roles': 'junkshop',
-        'role': 'junkshop',
+        // ✅ KEEP as user until approved
+        'Roles': 'user',
+        'role': 'user',
 
-        // verification gate
+        // application tracking only
         'verified': false,
         'junkshopStatus': 'pending',
         'activePermitRequestId': requestRef.id,

@@ -66,6 +66,40 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     Navigator.pushNamedAndRemoveUntil(context, "/login", (_) => false);
   }
 
+  // ---------- Common helpers for reject/cancel ----------
+  Future<void> _deleteStorageIfAny(String path) async {
+    if (path.trim().isEmpty) return;
+    try {
+      await FirebaseStorage.instance.ref(path).delete();
+    } catch (_) {}
+  }
+
+  Future<void> _revertJunkshopApplicantToUser(String uid) async {
+    await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+      "Roles": "user",
+      "role": "user",
+      "verified": false,
+      "junkshopStatus": "rejected",
+      "activePermitRequestId": FieldValue.delete(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> _revertCollectorApplicantToUser(String uid) async {
+    await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+      "Roles": "user",
+      "role": "user",
+
+      "collectorStatus": "rejected",
+      "adminVerified": false,
+      "adminStatus": "rejected",
+      "adminReviewedAt": FieldValue.serverTimestamp(),
+      "collectorActive": false,
+
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
   Future<T?> _confirm<T>({
     required String title,
     required String body,
@@ -112,7 +146,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     }
   }
 
-  // ---------- Storage helpers ----------
+  // ---------- Storage URL cache ----------
   final Map<String, Future<String>> _urlCache = {};
 
   Future<String> _storageUrl(String path) {
@@ -267,7 +301,6 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                               ],
                             ),
                           ),
-
                         _usersSection(),
                         const SizedBox(height: 24),
                         _junkshopsSection(),
@@ -308,8 +341,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
 
             // ✅ Hide junkshops from Users list
             final allDocs = snap.data!.docs.where((d) {
-              final data = d.data();
-              final role = _normRole(data["Roles"] ?? data["roles"]);
+              final role = _normRole(d.data()["Roles"] ?? d.data()["roles"]);
               return role != "junkshop";
             }).toList();
 
@@ -362,8 +394,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     );
   }
 
-  // ✅ Junkshops now read from Users where Roles == junkshop (no old Junkshop collection)
-  // IMPORTANT: if you decided to keep applicants as role=user until approval, change this query accordingly.
+  // ✅ Junkshops list from Users where Roles == junkshop (shows verified + pending)
   Widget _junkshopsSection() {
     final junkStream = FirebaseFirestore.instance
         .collection("Users")
@@ -482,7 +513,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
   }
 
   // ✅ Permit approval is the ONLY verification step
-  // ✅ FIXED: uses status == "pending" so rejected ones disappear
+  // ✅ Uses status == "pending" so rejected ones disappear
   Widget _permitRequestsSection() {
     final permitsStream = FirebaseFirestore.instance
         .collection("permitRequests")
@@ -545,11 +576,10 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
               if (mounted) setState(() => _busy = false);
             }
           },
-
           onReject: () async {
             final ok = await _confirm<bool>(
               title: "Reject permit?",
-              body: "Reject $shopName?",
+              body: "Reject $shopName? This cancels the submission and reverts the account back to a normal user.",
               yesValue: true,
               yesLabel: "Reject",
             );
@@ -557,7 +587,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
 
             setState(() => _busy = true);
             try {
-              // ✅ Fix: set status rejected so it disappears from pending list
+              // mark request rejected (optional if you delete it after)
               await d.reference.set({
                 "approved": false,
                 "status": "rejected",
@@ -565,20 +595,24 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
                 "reviewedByUid": FirebaseAuth.instance.currentUser?.uid,
               }, SetOptions(merge: true));
 
-              await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-                "verified": false,
-                "junkshopStatus": "rejected",
-                "updatedAt": FieldValue.serverTimestamp(),
-              }, SetOptions(merge: true));
+              // delete permit file
+              await _deleteStorageIfAny(permitPath);
 
-              _toast("Rejected $shopName");
+              // revert applicant back to normal user
+              if (uid.isNotEmpty) {
+                await _revertJunkshopApplicantToUser(uid);
+              }
+
+              // cancel submission (remove request doc)
+              await d.reference.delete();
+
+              _toast("Rejected. Submission cancelled. Reverted to user.");
             } catch (e) {
               _toast("Reject failed: $e");
             } finally {
               if (mounted) setState(() => _busy = false);
             }
           },
-
           onDelete: () async {
             final ok = await _confirm<bool>(
               title: "Delete permit request?",
@@ -603,249 +637,239 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
     );
   }
 
-  // ===================== ADMIN: COLLECTOR REQUESTS (AS YOU HAD) =====================
+  // ===================== ADMIN: COLLECTOR REQUESTS =====================
   Widget _collectorRequestsSection() {
-  final collectorsStream = FirebaseFirestore.instance
-      .collection("Users")
-      .where("Roles", isEqualTo: "collector")
-      .snapshots();
+    // ✅ Only pending collector submissions
+    final collectorsStream = FirebaseFirestore.instance
+        .collection("Users")
+        .where("collectorStatus", isEqualTo: "pending")
+        .snapshots();
 
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text("Collector Requests", style: TextStyle(color: Colors.white, fontSize: 18)),
-      const SizedBox(height: 10),
-      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: collectorsStream,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return Text("Collector Requests ERROR: ${snap.error}",
-                style: const TextStyle(color: Colors.red));
-          }
-          if (!snap.hasData) {
-            return const Text("Loading Collector Requests...",
-                style: TextStyle(color: Colors.white));
-          }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Collector Requests", style: TextStyle(color: Colors.white, fontSize: 18)),
+        const SizedBox(height: 10),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: collectorsStream,
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Text("Collector Requests ERROR: ${snap.error}", style: const TextStyle(color: Colors.red));
+            }
+            if (!snap.hasData) {
+              return const Text("Loading Collector Requests...", style: TextStyle(color: Colors.white));
+            }
 
-          final docs = snap.data!.docs;
+            final docs = snap.data!.docs;
 
-          // Pending collectors = adminVerified false AND adminStatus pending
-          final pending = docs.where((d) {
-            final data = d.data();
-            final adminVerified = data["adminVerified"] == true;
-            final adminStatus = (data["adminStatus"] ?? "pending").toString().toLowerCase().trim();
-            return !adminVerified && adminStatus == "pending";
-          }).toList();
+            // ✅ since query is already pending, no extra filter needed
+            final pending = docs.toList();
 
-          // newest first
-          pending.sort((a, b) {
-            final ta = a.data()["createdAt"];
-            final tb = b.data()["createdAt"];
-            final da = (ta is Timestamp) ? ta.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
-            final db = (tb is Timestamp) ? tb.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
-            return db.compareTo(da);
-          });
+            // newest first
+            pending.sort((a, b) {
+              final ta = a.data()["createdAt"];
+              final tb = b.data()["createdAt"];
+              final da = (ta is Timestamp) ? ta.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
+              final db = (tb is Timestamp) ? tb.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
+              return db.compareTo(da);
+            });
 
-          if (pending.isEmpty) {
-            return Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.06)),
-              ),
-              child: const Column(
-                children: [
-                  Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 40),
-                  SizedBox(height: 10),
-                  Text("No New Collector Requests",
-                      style: TextStyle(color: Colors.white, fontSize: 16)),
-                ],
-              ),
-            );
-          }
-
-          return ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: pending.length,
-            itemBuilder: (context, i) {
-              final doc = pending[i];
-              final uid = doc.id;
-              final data = doc.data();
-
-              final name = (data["Name"] ?? data["name"] ?? "Collector").toString();
-              final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
-
-              // ✅ NEW location for KYC: Users/{uid}.kyc
-              final kyc = (data["kyc"] is Map) ? (data["kyc"] as Map) : const {};
-              final permitPath = (kyc["permitPath"] ?? "").toString(); // ✅ preferred (storage path)
-              final permitUrlOld = (kyc["permitUrl"] ?? "").toString(); // ✅ fallback (old url)
-
-              Widget idWidget;
-
-              if (permitPath.isNotEmpty) {
-                // ✅ Convert storage path -> download url
-                idWidget = FutureBuilder<String>(
-                  future: _storageUrl(permitPath),
-                  builder: (context, urlSnap) {
-                    if (urlSnap.connectionState == ConnectionState.waiting) {
-                      return const SizedBox(
-                        height: 160,
-                        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                      );
-                    }
-                    if (urlSnap.hasError || !urlSnap.hasData) {
-                      return Text("Image failed: ${urlSnap.error}",
-                          style: const TextStyle(color: Colors.redAccent));
-                    }
-
-                    final url = urlSnap.data!;
-                    return GestureDetector(
-                      onTap: () => _showImageDialog(url),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.network(
-                          url,
-                          height: 160,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, e, __) => Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Text("Render error: $e",
-                                style: const TextStyle(color: Colors.redAccent)),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                );
-              } else if (permitUrlOld.isNotEmpty) {
-                // ✅ Backward compatibility if you previously saved permitUrl
-                idWidget = GestureDetector(
-                  onTap: () => _showImageDialog(permitUrlOld),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.network(
-                      permitUrlOld,
-                      height: 160,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, e, __) => Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Text("Render error: $e",
-                            style: const TextStyle(color: Colors.redAccent)),
-                      ),
-                    ),
-                  ),
-                );
-              } else {
-                idWidget = const Text("No ID image uploaded.",
-                    style: TextStyle(color: Colors.white70));
-              }
-
+            if (pending.isEmpty) {
               return Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(12),
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.05),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: Colors.white.withOpacity(0.06)),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: const Column(
                   children: [
-                    Text(name,
-                        style: const TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold)),
-                    if (email.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
-                      ),
-                    const SizedBox(height: 6),
-                    Text("UID: $uid",
-                        style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    const SizedBox(height: 10),
-
-                    idWidget,
-
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        const Text("pending", style: TextStyle(color: Colors.orangeAccent)),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () async {
-                            final ok = await _confirm<bool>(
-                              title: "Approve collector?",
-                              body: "Approve $name (Admin step)?",
-                              yesValue: true,
-                              yesLabel: "Approve",
-                            );
-                            if (ok != true) return;
-
-                            setState(() => _busy = true);
-                            try {
-                              await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-                                "adminVerified": true,
-                                "adminStatus": "approved",
-                                "adminReviewedAt": FieldValue.serverTimestamp(),
-                                "collectorActive": true,
-                                "updatedAt": FieldValue.serverTimestamp(),
-                              }, SetOptions(merge: true));
-
-                              _toast("Admin approved $name");
-                            } catch (e) {
-                              _toast("Approve failed: $e");
-                            } finally {
-                              if (mounted) setState(() => _busy = false);
-                            }
-                          },
-                          child: const Text("Approve"),
-                        ),
-                        TextButton(
-                          onPressed: () async {
-                            final ok = await _confirm<bool>(
-                              title: "Reject collector?",
-                              body: "Reject $name (Admin step)?",
-                              yesValue: true,
-                              yesLabel: "Reject",
-                            );
-                            if (ok != true) return;
-
-                            setState(() => _busy = true);
-                            try {
-                              await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-                                "adminVerified": false,
-                                "adminStatus": "rejected",
-                                "adminReviewedAt": FieldValue.serverTimestamp(),
-                                "collectorActive": false,
-                                "updatedAt": FieldValue.serverTimestamp(),
-                              }, SetOptions(merge: true));
-
-                              _toast("Admin rejected $name");
-                            } catch (e) {
-                              _toast("Reject failed: $e");
-                            } finally {
-                              if (mounted) setState(() => _busy = false);
-                            }
-                          },
-                          child: const Text("Reject"),
-                        ),
-                      ],
-                    ),
+                    Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 40),
+                    SizedBox(height: 10),
+                    Text("No New Collector Requests", style: TextStyle(color: Colors.white, fontSize: 16)),
                   ],
                 ),
               );
-            },
-          );
-        },
-      ),
-    ],
-  );
-}
+            }
+
+            return ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: pending.length,
+              itemBuilder: (context, i) {
+                final doc = pending[i];
+                final uid = doc.id;
+                final data = doc.data();
+
+                final name = (data["Name"] ?? data["name"] ?? "Collector").toString();
+                final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
+
+                // ✅ KYC in Users/{uid}.kyc
+                final kyc = (data["kyc"] is Map) ? (data["kyc"] as Map) : const {};
+                final permitPath = (kyc["permitPath"] ?? "").toString(); // ✅ preferred (storage path)
+                final permitUrlOld = (kyc["permitUrl"] ?? "").toString(); // ✅ fallback (old url)
+
+                Widget idWidget;
+
+                if (permitPath.isNotEmpty) {
+                  idWidget = FutureBuilder<String>(
+                    future: _storageUrl(permitPath),
+                    builder: (context, urlSnap) {
+                      if (urlSnap.connectionState == ConnectionState.waiting) {
+                        return const SizedBox(
+                          height: 160,
+                          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                        );
+                      }
+                      if (urlSnap.hasError || !urlSnap.hasData) {
+                        return Text("Image failed: ${urlSnap.error}", style: const TextStyle(color: Colors.redAccent));
+                      }
+
+                      final url = urlSnap.data!;
+                      return GestureDetector(
+                        onTap: () => _showImageDialog(url),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.network(
+                            url,
+                            height: 160,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, e, __) => Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Text("Render error: $e", style: const TextStyle(color: Colors.redAccent)),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                } else if (permitUrlOld.isNotEmpty) {
+                  idWidget = GestureDetector(
+                    onTap: () => _showImageDialog(permitUrlOld),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        permitUrlOld,
+                        height: 160,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, e, __) => Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Text("Render error: $e", style: const TextStyle(color: Colors.redAccent)),
+                        ),
+                      ),
+                    ),
+                  );
+                } else {
+                  idWidget = const Text("No ID image uploaded.", style: TextStyle(color: Colors.white70));
+                }
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withOpacity(0.06)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      if (email.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                        ),
+                      const SizedBox(height: 6),
+                      Text("UID: $uid", style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      const SizedBox(height: 10),
+                      idWidget,
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          const Text("pending", style: TextStyle(color: Colors.orangeAccent)),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () async {
+                              final ok = await _confirm<bool>(
+                                title: "Approve collector?",
+                                body: "Approve $name?",
+                                yesValue: true,
+                                yesLabel: "Approve",
+                              );
+                              if (ok != true) return;
+
+                              setState(() => _busy = true);
+                              try {
+                                await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+                                  "Roles": "collector",
+                                  "role": "collector",
+                                  "collectorStatus": "approved",
+
+                                  "adminVerified": true,
+                                  "adminStatus": "approved",
+                                  "adminReviewedAt": FieldValue.serverTimestamp(),
+                                  "collectorActive": true,
+
+                                  "updatedAt": FieldValue.serverTimestamp(),
+                                }, SetOptions(merge: true));
+
+                                _toast("Admin approved $name");
+                              } catch (e) {
+                                _toast("Approve failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            child: const Text("Approve"),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              final ok = await _confirm<bool>(
+                                title: "Reject collector?",
+                                body: "Reject $name? This cancels the submission and reverts the account back to a normal user.",
+                                yesValue: true,
+                                yesLabel: "Reject",
+                              );
+                              if (ok != true) return;
+
+                              setState(() => _busy = true);
+                              try {
+                                // delete KYC file if any
+                                await _deleteStorageIfAny(permitPath);
+
+                                // revert to normal user + mark rejected
+                                await _revertCollectorApplicantToUser(uid);
+
+                                // OPTIONAL: wipe kyc so they must reupload next time
+                                // await FirebaseFirestore.instance.collection("Users").doc(uid).set({
+                                //   "kyc": FieldValue.delete(),
+                                // }, SetOptions(merge: true));
+
+                                _toast("Admin rejected $name");
+                              } catch (e) {
+                                _toast("Reject failed: $e");
+                              } finally {
+                                if (mounted) setState(() => _busy = false);
+                              }
+                            },
+                            child: const Text("Reject"),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
 
   // ---------- Reusable request section ----------
   Widget _requestSection({
@@ -1053,9 +1077,7 @@ class _AdminUsersDashboardPageState extends State<AdminUsersDashboardPage> {
   }
 
   // ---------- Small UI widgets ----------
-  Widget _countRow(List<Widget> chips) {
-    return Wrap(spacing: 8, runSpacing: 8, children: chips);
-  }
+  Widget _countRow(List<Widget> chips) => Wrap(spacing: 8, runSpacing: 8, children: chips);
 
   Widget _countChip(String label, int value, {required String filterValue}) {
     final isSelected = filterValue == _roleFilter;
