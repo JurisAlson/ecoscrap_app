@@ -7,7 +7,6 @@ import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-
 class CollectorPickupMapPage extends StatefulWidget {
   final String requestId;
   final double pickupLat;
@@ -358,11 +357,28 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                             child: SizedBox(
                               height: 48,
                               child: ElevatedButton.icon(
-                                onPressed: () {
-                                  // Optional: later update status to "arrived"
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text("Arrived clicked (hook status update later).")),
-                                  );
+                                onPressed: () async {
+                                  try {
+                                    await FirebaseFirestore.instance
+                                        .collection('pickupRequests')
+                                        .doc(widget.requestId) // ✅ THIS is the correct one
+                                        .update({
+                                      'status': 'arrived',
+                                      'arrived': true,
+                                      'arrivedAt': FieldValue.serverTimestamp(),
+                                      'updatedAt': FieldValue.serverTimestamp(),
+                                    });
+
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("Marked as arrived.")),
+                                    );
+                                  } catch (e) {
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text("Error: $e")),
+                                    );
+                                  }
                                 },
                                 icon: const Icon(Icons.check_circle),
                                 label: const Text("ARRIVED"),
