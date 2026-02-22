@@ -1,5 +1,3 @@
-// ======================= collector_details_page.dart =======================
-
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -21,66 +19,73 @@ class CollectorDetailsPage extends StatefulWidget {
 class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   bool _busy = false;
 
-  Future<void> _deleteStorageIfAny(String path) async {
-    if (path.trim().isEmpty) return;
-    try {
-      await FirebaseStorage.instance.ref(path).delete();
-    } catch (_) {}
-  }
-
   /// ✅ Admin rejects:
-  /// - marks collectorRequests/{uid} as rejected
-  /// - restores Users/{uid} back to normal user state (keeps base profile)
   /// - deletes permit file if any
+  /// - restores Users/{uid} back to normal user state (keeps base profile)
+  /// - marks collectorRequests/{uid} as rejected (keeps history)
+  /// - clears stale permit pointers so next re-submit won't show broken image
   Future<void> _rejectCollectorAndRestoreUser(
     String uid, {
     String permitPath = "",
   }) async {
     // 1) delete uploaded ID file (optional)
-    await _deleteStorageIfAny(permitPath);
+    if (permitPath.trim().isNotEmpty) {
+      try {
+        await FirebaseStorage.instance.ref(permitPath).delete();
+      } catch (_) {}
+    }
 
     final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
     final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(uid);
 
-    // 2) read current role so we don't accidentally downgrade admin/junkshop
-    final snap = await userRef.get();
-    final data = snap.data() ?? {};
-    final existingRole = (data["role"] ?? data["Roles"] ?? "user")
-        .toString()
-        .trim()
-        .toLowerCase();
+    await FirebaseFirestore.instance.runTransaction((tx) async {
+      // Read user to preserve role safely (do not downgrade admin/junkshop)
+      final userSnap = await tx.get(userRef);
+      final userData = (userSnap.data() as Map<String, dynamic>?) ?? {};
 
-    final roleToSave =
-        (existingRole == "collector" || existingRole.isEmpty) ? "user" : existingRole;
+      // preserve exact previous role string if it was admin/junkshop/user etc.
+      final rawRole = userData["role"] ?? userData["Roles"] ?? "user";
+      final rawRoleStr = rawRole.toString().trim();
+      final rawLower = rawRoleStr.toLowerCase();
 
-    final batch = FirebaseFirestore.instance.batch();
+      // If user was collector (or blank), restore to user; otherwise keep exact role
+      final roleToSave = (rawLower == "collector" || rawRoleStr.isEmpty) ? "user" : rawRoleStr;
 
-    // 3) mark request rejected (so it disappears from admin list)
-    batch.set(reqRef, {
-      "status": "rejected",
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      // 2) restore clean user state but keep base profile fields
+      tx.set(userRef, {
+        "collectorStatus": "rejected",
 
-    // 4) restore clean user state but keep base profile (name/email/etc.)
-    batch.set(userRef, {
-      "collectorStatus": "rejected",
+        // remove application-only fields
+        "collectorSubmittedAt": FieldValue.delete(),
+        "collectorUpdatedAt": FieldValue.delete(),
+        "collectorKyc": FieldValue.delete(),
 
-      // remove application-only fields
-      "collectorSubmittedAt": FieldValue.delete(),
-      "collectorUpdatedAt": FieldValue.delete(),
-      "collectorKyc": FieldValue.delete(),
+        // remove junkshop verification flags if they existed
+        "junkshopVerified": FieldValue.delete(),
+        "junkshopStatus": FieldValue.delete(),
 
-      // keep role safe
-      "role": roleToSave,
-      "Roles": roleToSave,
+        // keep role safe
+        "role": roleToSave,
+        "Roles": roleToSave,
 
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-    await batch.commit();
+      // 3) mark request rejected (keeps history + allows resubmit)
+      // and clear stale permit pointers (so admin doesn't see broken image later)
+      tx.set(reqRef, {
+        "status": "rejected",
+        "acceptedByJunkshopUid": "",
+        "acceptedAt": FieldValue.delete(),
+        "rejectedByJunkshops": [],
+        "permitPath": FieldValue.delete(),
+        "permitUrl": FieldValue.delete(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
   }
 
-  /// ✅ Admin approves:
+  /// ✅ Admin approves (NEW FLOW):
   /// - collectorRequests/{uid} => status: adminApproved (junkshops can see it)
   /// - Users/{uid} => collectorStatus: adminApproved
   /// - DOES NOT promote role to collector (junkshop does final step)
@@ -229,6 +234,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                   const Text("No ID image uploaded.", style: TextStyle(color: Colors.white70));
             }
 
+            final isPending = status.toLowerCase() == "pending";
+
             return Padding(
               padding: const EdgeInsets.all(24),
               child: Column(
@@ -243,8 +250,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  if (email.isNotEmpty)
-                    Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                  if (email.isNotEmpty) Text(email, style: TextStyle(color: Colors.grey.shade300)),
                   const SizedBox(height: 6),
                   Text("UID: $uid", style: const TextStyle(color: Colors.white54)),
                   const SizedBox(height: 6),
@@ -276,7 +282,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                         child: ElevatedButton.icon(
                           icon: const Icon(Icons.check),
                           label: const Text("Approve"),
-                          onPressed: _busy
+                          onPressed: (_busy || !isPending)
                               ? null
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
@@ -306,13 +312,13 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.close),
                           label: const Text("Reject"),
-                          onPressed: _busy
+                          onPressed: (_busy || !isPending)
                               ? null
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Reject collector?",
-                                    body: "Reject $name? This keeps the account as a normal user.",
+                                    body: "Reject $name? This restores the account to a normal user and allows re-submit.",
                                     yesValue: true,
                                     yesLabel: "Reject",
                                   );

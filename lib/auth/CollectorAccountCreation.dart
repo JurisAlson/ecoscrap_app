@@ -89,10 +89,6 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
           "emailDisplay": email,
           "name": _name.text.trim(),
 
-          // keep normal user until junkshop accepts
-          "role": existing["role"] ?? "user",
-          "Roles": existing["Roles"] ?? "user",
-
           "collectorStatus": "pending",
           "collectorSubmittedAt": FieldValue.serverTimestamp(),
           "collectorUpdatedAt": FieldValue.serverTimestamp(),
@@ -107,23 +103,23 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
           "updatedAt": FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 
-        tx.set(reqRef, {
-          "collectorUid": uid,
-          "publicName": _name.text.trim(),
-          "emailDisplay": email,
+          tx.set(reqRef, {
+            "publicName": _name.text.trim(),
+            "emailDisplay": email,
 
-          "status": "pending",
-          "submittedAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
+            "status": "pending",
+            "submittedAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp(),
 
-          // admin-only reference
-          if (permitPath != null) "permitPath": permitPath,
+            // ✅ ALWAYS reset routing fields (critical for resubmit)
+            "acceptedByJunkshopUid": "",
+            "acceptedAt": FieldValue.delete(),
+            "rejectedByJunkshops": [],
 
-          // routing
-          "acceptedByJunkshopUid": "",
-          "rejectedByJunkshops": [],
-        }, SetOptions(merge: true));
-      });
+            // ✅ clear stale permit if user didn't upload a new one
+            if (permitPath != null) "permitPath": permitPath else "permitPath": FieldValue.delete(),
+          }, SetOptions(merge: true));
+          });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
