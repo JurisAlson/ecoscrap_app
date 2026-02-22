@@ -12,13 +12,13 @@ class AdminCollectorRequestsTab extends StatefulWidget {
 }
 
 class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
-  String _query = ""; // (unused for now, safe to keep)
+  String _query = ""; // unused (safe to keep)
 
   @override
   Widget build(BuildContext context) {
     final stream = FirebaseFirestore.instance
-        .collection("Users")
-        .where("collectorStatus", isEqualTo: "pending")
+        .collection("collectorRequests")
+        .where("status", isEqualTo: "pending")
         .snapshots();
 
     return Scaffold(
@@ -35,18 +35,24 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                   SizedBox(width: 10),
                   Text(
                     "Collector Requests",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-
               Expanded(
                 child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: stream,
                   builder: (context, snap) {
                     if (snap.hasError) {
-                      return Text("Error: ${snap.error}", style: const TextStyle(color: Colors.redAccent));
+                      return Text(
+                        "Error: ${snap.error}",
+                        style: const TextStyle(color: Colors.redAccent),
+                      );
                     }
                     if (!snap.hasData) {
                       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
@@ -55,14 +61,17 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                     final docs = snap.data!.docs.toList();
                     if (docs.isEmpty) {
                       return const Center(
-                        child: Text("No New Collector Requests", style: TextStyle(color: Colors.white70)),
+                        child: Text(
+                          "No New Collector Requests",
+                          style: TextStyle(color: Colors.white70),
+                        ),
                       );
                     }
 
-                    // newest first
+                    // newest first by submittedAt (not createdAt)
                     docs.sort((a, b) {
-                      final ta = a.data()["createdAt"];
-                      final tb = b.data()["createdAt"];
+                      final ta = a.data()["submittedAt"];
+                      final tb = b.data()["submittedAt"];
                       final da = (ta is Timestamp) ? ta.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
                       final db = (tb is Timestamp) ? tb.toDate() : DateTime.fromMillisecondsSinceEpoch(0);
                       return db.compareTo(da);
@@ -73,8 +82,9 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                       itemBuilder: (_, i) {
                         final d = docs[i];
                         final data = d.data();
-                        final name = (data["Name"] ?? data["name"] ?? "Collector").toString();
-                        final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
+
+                        final name = (data["publicName"] ?? "Collector").toString();
+                        final email = (data["emailDisplay"] ?? "").toString();
 
                         return Card(
                           color: Colors.white.withOpacity(0.06),
@@ -82,7 +92,10 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                           child: ListTile(
                             title: Text(
                               name,
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                             subtitle: Text(
                               email.isNotEmpty ? email : "Tap to review",
@@ -93,7 +106,7 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => CollectorDetailsPage(userRef: d.reference),
+                                  builder: (_) => CollectorDetailsPage(requestRef: d.reference),
                                 ),
                               );
                             },
