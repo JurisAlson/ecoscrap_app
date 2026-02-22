@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -22,7 +20,8 @@ class PermitDetailsPage extends StatefulWidget {
 class _PermitDetailsPageState extends State<PermitDetailsPage> {
   bool _busy = false;
 
-  FirebaseFunctions get _fn => FirebaseFunctions.instanceFor(region: "asia-southeast1");
+  FirebaseFunctions get _fn =>
+      FirebaseFunctions.instanceFor(region: "asia-southeast1");
 
   Future<void> _callVerifyJunkshop(String uid) async {
     final callable = _fn.httpsCallable("verifyJunkshop");
@@ -36,13 +35,19 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
     } catch (_) {}
   }
 
-  Future<void> _revertJunkshopApplicantToUser(String uid) async {
+  /// ✅ Clean revert: do NOT touch user profile fields.
+  /// Only reset role + tracking fields so user remains a normal user.
+  Future<void> _revertApplicantToUserClean(String uid) async {
     await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-      "Roles": "user",
+      // Keep the user as a user
       "role": "user",
-      "verified": false,
-      "junkshopStatus": "rejected",
+      // If your app still reads this legacy field, keep it too:
+      "Roles": "user",
+
+      // Tracking fields only
+      "junkshopStatus": "rejected", // pending|approved|rejected
       "activePermitRequestId": FieldValue.delete(),
+
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
@@ -94,13 +99,20 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
           stream: widget.requestRef.snapshots(),
           builder: (context, snap) {
             if (snap.hasError) {
-              return Center(child: Text("Error: ${snap.error}", style: const TextStyle(color: Colors.redAccent)));
+              return Center(
+                child: Text(
+                  "Error: ${snap.error}",
+                  style: const TextStyle(color: Colors.redAccent),
+                ),
+              );
             }
             if (!snap.hasData) {
               return const Center(child: CircularProgressIndicator(strokeWidth: 2));
             }
             if (!snap.data!.exists) {
-              return const Center(child: Text("Request not found.", style: TextStyle(color: Colors.white70)));
+              return const Center(
+                child: Text("Request not found.", style: TextStyle(color: Colors.white70)),
+              );
             }
 
             final data = snap.data!.data() ?? {};
@@ -114,9 +126,17 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(shopName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
+                  Text(
+                    shopName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20,
+                    ),
+                  ),
                   const SizedBox(height: 6),
-                  if (email.isNotEmpty) Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                  if (email.isNotEmpty)
+                    Text(email, style: TextStyle(color: Colors.grey.shade300)),
                   const SizedBox(height: 6),
                   Text("UID: $uid", style: const TextStyle(color: Colors.white54)),
                   const SizedBox(height: 16),
@@ -134,14 +154,22 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
                           );
                         }
                         if (urlSnap.hasError || !urlSnap.hasData) {
-                          return Text("Image failed: ${urlSnap.error}", style: const TextStyle(color: Colors.redAccent));
+                          return Text(
+                            "Image failed: ${urlSnap.error}",
+                            style: const TextStyle(color: Colors.redAccent),
+                          );
                         }
                         final url = urlSnap.data!;
                         return GestureDetector(
                           onTap: () => _showImageDialog(url),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(14),
-                            child: Image.network(url, height: 220, width: double.infinity, fit: BoxFit.cover),
+                            child: Image.network(
+                              url,
+                              height: 220,
+                              width: double.infinity,
+                              fit: BoxFit.cover,
+                            ),
                           ),
                         );
                       },
@@ -181,24 +209,36 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
-                                    await widget.requestRef.set({
-                                      "approved": true,
+                                    final reviewedBy = FirebaseAuth.instance.currentUser?.uid;
+
+                                    // ✅ Use a batch so request + user update is consistent
+                                    final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
+                                    final batch = FirebaseFirestore.instance.batch();
+
+                                    batch.set(widget.requestRef, {
                                       "status": "approved",
+                                      "approved": true,
                                       "reviewedAt": FieldValue.serverTimestamp(),
-                                      "reviewedByUid": FirebaseAuth.instance.currentUser?.uid,
-                                    }, SetOptions(merge: true));
-
-                                    if (uid.isNotEmpty) await _callVerifyJunkshop(uid);
-
-                                    await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-                                      "verified": true,
-                                      "junkshopStatus": "verified",
-                                      "role": "junkshop",
-                                      "Roles": "junkshop",
+                                      "reviewedByUid": reviewedBy,
                                       "updatedAt": FieldValue.serverTimestamp(),
                                     }, SetOptions(merge: true));
 
-                                    if (mounted) AdminHelpers.toast(context, "Approved & Verified $shopName");
+                                    batch.set(userRef, {
+                                      "role": "junkshop",
+                                      "Roles": "junkshop", // keep if legacy
+                                      "junkshopStatus": "approved",
+                                      "activePermitRequestId": FieldValue.delete(), // optional but clean
+                                      "updatedAt": FieldValue.serverTimestamp(),
+                                    }, SetOptions(merge: true));
+
+                                    await batch.commit();
+
+                                    // Optional: call CF after commit (or before—your choice)
+                                    if (uid.isNotEmpty) {
+                                      await _callVerifyJunkshop(uid);
+                                    }
+
+                                    if (mounted) AdminHelpers.toast(context, "Approved $shopName");
                                     if (mounted) Navigator.pop(context);
                                   } catch (e) {
                                     if (mounted) AdminHelpers.toast(context, "Approve failed: $e");
@@ -219,7 +259,7 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Reject permit?",
-                                    body: "Reject $shopName? This cancels submission and reverts to normal user.",
+                                    body: "Reject $shopName? This keeps the account as a normal user.",
                                     yesValue: true,
                                     yesLabel: "Reject",
                                   );
@@ -227,19 +267,27 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
+                                    final reviewedBy = FirebaseAuth.instance.currentUser?.uid;
+
+                                    // ✅ Keep the request doc for history (do NOT delete)
                                     await widget.requestRef.set({
-                                      "approved": false,
                                       "status": "rejected",
+                                      "approved": false,
                                       "reviewedAt": FieldValue.serverTimestamp(),
-                                      "reviewedByUid": FirebaseAuth.instance.currentUser?.uid,
+                                      "reviewedByUid": reviewedBy,
+                                      "updatedAt": FieldValue.serverTimestamp(),
+                                      // optional:
+                                      // "rejectionReason": "Incomplete documents",
                                     }, SetOptions(merge: true));
 
+                                    // Optional: delete the permit file on reject
                                     await _deleteStorageIfAny(permitPath);
-                                    if (uid.isNotEmpty) await _revertJunkshopApplicantToUser(uid);
 
-                                    await widget.requestRef.delete();
+                                    if (uid.isNotEmpty) {
+                                      await _revertApplicantToUserClean(uid);
+                                    }
 
-                                    if (mounted) AdminHelpers.toast(context, "Rejected & reverted.");
+                                    if (mounted) AdminHelpers.toast(context, "Rejected. User restored.");
                                     if (mounted) Navigator.pop(context);
                                   } catch (e) {
                                     if (mounted) AdminHelpers.toast(context, "Reject failed: $e");
@@ -264,7 +312,7 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
                               final ok = await AdminHelpers.confirm<bool>(
                                 context: context,
                                 title: "Delete request?",
-                                body: "This will delete the request document only.",
+                                body: "This deletes the request document only.",
                                 yesValue: true,
                                 yesLabel: "Delete",
                               );

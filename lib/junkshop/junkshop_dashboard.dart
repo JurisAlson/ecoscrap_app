@@ -34,7 +34,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   static const double _bottomNavHeight = 96;
 
   // ✅ Always use auth uid as the shopId (RBAC)
-  String get _shopIdSafe => FirebaseAuth.instance.currentUser?.uid ?? widget.shopID;
+  String get _shopIdSafe =>
+      FirebaseAuth.instance.currentUser?.uid ?? widget.shopID;
 
   // ✅ Get live shop doc from Users (no old Junkshop collection)
   Stream<DocumentSnapshot<Map<String, dynamic>>> get _shopDocStream =>
@@ -54,46 +55,199 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // ✅ Junkshop ACCEPTS collector by updating ONLY Users/{collectorUid}
+  // ✅ Junkshop ACCEPTS collector (2-step finalization)
+  // - Updates collectorRequests/{collectorUid} status -> junkshopAccepted
+  // - Promotes Users/{collectorUid}.role -> collector
   Future<void> _acceptCollector({
-    required String collectorUid,
-    required String shopId,
-    required String shopName,
-  }) async {
-    final ref = FirebaseFirestore.instance.collection("Users").doc(collectorUid);
+  required String collectorUid,
+  required String shopUid,
+}) async {
+  final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(collectorUid);
+  final userRef = FirebaseFirestore.instance.collection("Users").doc(collectorUid);
 
-    // Safety: prevent overwriting if already assigned to another junkshop
-    final snap = await ref.get();
-    final data = snap.data() ?? {};
-    final existingShopId = (data["junkshopId"] ?? "").toString();
+  await FirebaseFirestore.instance.runTransaction((tx) async {
+    final reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists) throw Exception("Request not found.");
 
-    if (existingShopId.isNotEmpty && existingShopId != shopId) {
-      _toast("Collector already assigned to another junkshop.");
-      return;
+    final req = (reqSnap.data() as Map<String, dynamic>?) ?? {};
+    final status = (req["status"] ?? "").toString();
+    final acceptedBy = (req["acceptedByJunkshopUid"] ?? "").toString();
+
+    // already accepted
+    if (status == "junkshopAccepted") {
+      if (acceptedBy == shopUid) return;
+      throw Exception("Collector already accepted by another junkshop.");
     }
 
-    await ref.set({
-      "junkshopId": shopId,
-      "junkshopName": shopName,
-      "junkshopVerified": true,
-      "junkshopStatus": "approved",
-      "collectorActive": true,
+    // must be adminApproved
+    if (status != "adminApproved") {
+      throw Exception("Collector is not admin approved yet.");
+    }
+
+    // 1) lock request
+    tx.set(reqRef, {
+      "status": "junkshopAccepted",
+      "acceptedByJunkshopUid": shopUid,
+      "acceptedAt": FieldValue.serverTimestamp(),
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
-  }
 
-  // ✅ Junkshop REJECTS collector (does not assign junkshopId)
-  Future<void> _rejectCollector({
-    required String collectorUid,
-  }) async {
-    final ref = FirebaseFirestore.instance.collection("Users").doc(collectorUid);
-
-    await ref.set({
+    // 2) promote user
+    tx.set(userRef, {
+      "role": "collector",
+      "Roles": "collector",
       "junkshopVerified": true,
-      "junkshopStatus": "rejected",
-      "collectorActive": false,
+      "junkshopStatus": "verified",
+      "collectorStatus": "junkshopAccepted",
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  });
+}
+
+  // ✅ Junkshop REJECTS collector (hide it from THIS junkshop only)
+  // This does NOT affect other junkshops.
+Future<void> _rejectCollector({
+  required String collectorUid,
+  required String shopUid,
+}) async {
+  final reqRef = FirebaseFirestore.instance
+      .collection("collectorRequests")
+      .doc(collectorUid);
+
+  // Hide ONLY from this junkshop (do NOT change global status)
+  await reqRef.set({
+    "rejectedByJunkshops": FieldValue.arrayUnion([shopUid]),
+    "updatedAt": FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
+}
+
+  // ================= COLLECTOR REQUESTS SECTION (collectorRequests) =================
+  Widget _collectorRequestsSection({required String shopId}) {
+    final stream = FirebaseFirestore.instance
+        .collection("collectorRequests")
+        .where("status", isEqualTo: "adminApproved")
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: stream,
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Text(
+            "Collector requests error: ${snap.error}",
+            style: const TextStyle(color: Colors.redAccent),
+          );
+        }
+        if (!snap.hasData) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+
+        // Hide collectors this junkshop already rejected
+        final docs = snap.data!.docs.where((d) {
+          final data = d.data();
+          final rejectedBy = (data["rejectedByJunkshops"] as List?) ?? const [];
+          return !rejectedBy.contains(shopId);
+        }).toList();
+
+        if (docs.isEmpty) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withOpacity(0.06)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.mark_email_read,
+                    color: Colors.greenAccent, size: 22),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "No collector requests available.",
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Column(
+          children: docs.map((d) {
+            final data = d.data();
+            final collectorUid = d.id;
+
+            // ✅ Non-sensitive fields only (safe for junkshops)
+            final name = (data["publicName"] ?? "Collector").toString();
+            final email = (data["emailDisplay"] ?? "").toString();
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                  if (email.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(email,
+                          style: TextStyle(color: Colors.grey.shade300)),
+                    ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Text("Admin Approved",
+                          style: TextStyle(color: Colors.orangeAccent)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () async {
+                          try {
+                            await _acceptCollector(
+                              collectorUid: collectorUid,
+                              shopUid: shopId,
+                            );
+                            _toast("Accepted collector: $name");
+                          } catch (e) {
+                            _toast("Accept failed: $e");
+                          }
+                        },
+                        child: const Text("Accept"),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          try {
+                            await _rejectCollector(
+                              collectorUid: collectorUid,
+                              shopUid: shopId,
+                            );
+                            _toast("Rejected collector: $name");
+                          } catch (e) {
+                            _toast("Reject failed: $e");
+                          }
+                        },
+                        child: const Text("Reject"),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
   }
 
   @override
@@ -105,7 +259,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       builder: (context, snap) {
         final shopData = snap.data?.data() ?? {};
         final shopId = _shopIdSafe;
-        final shopName = (shopData["shopName"] ?? widget.shopName).toString();
+
+        // Keep format: still display a name in UI, but we do NOT use it for logic.
+        final shopName =
+            (shopData["name"] ?? shopData["shopName"] ?? widget.shopName)
+                .toString();
 
         final tabs = <Widget>[
           AnalyticsHomeTab(
@@ -145,8 +303,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
             body: Stack(
               children: [
-                _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
-                _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
+                _blurCircle(primaryColor.withOpacity(0.15), 300,
+                    top: -100, right: -100),
+                _blurCircle(Colors.green.withOpacity(0.1), 350,
+                    bottom: 100, left: -100),
                 SafeArea(
                   child: PageView(
                     controller: _pageController,
@@ -173,7 +333,9 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           height: _bottomNavHeight,
           decoration: BoxDecoration(
             color: bgColor.withOpacity(0.86),
-            border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
+            border: Border(
+              top: BorderSide(color: Colors.white.withOpacity(0.08)),
+            ),
           ),
           child: Column(
             children: [
@@ -194,131 +356,6 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
-  // ================= COLLECTOR REQUESTS SECTION (USERS ONLY) =================
-  Widget _collectorRequestsSection({required String shopId, required String shopName}) {
-    // ✅ Show collectors that admin approved AND not yet assigned to any junkshop
-    final stream = FirebaseFirestore.instance
-        .collection("Users")
-        .where("Roles", isEqualTo: "collector")
-        .where("adminStatus", isEqualTo: "approved")
-        .where("junkshopId", isEqualTo: "")
-        .snapshots();
-
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: stream,
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Text(
-            "Collector requests error: ${snap.error}",
-            style: const TextStyle(color: Colors.redAccent),
-          );
-        }
-        if (!snap.hasData) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 10),
-            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-          );
-        }
-
-        final docs = snap.data!.docs;
-
-        if (docs.isEmpty) {
-          return Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withOpacity(0.06)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.mark_email_read, color: Colors.greenAccent, size: 22),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    "No pending collector requests.",
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Column(
-          children: docs.map((d) {
-            final data = d.data();
-            final uid = d.id;
-
-            final name = (data["Name"] ?? data["name"] ?? "Collector").toString();
-            final email = (data["Email"] ?? data["emailDisplay"] ?? data["email"] ?? "").toString();
-            final status = (data["junkshopStatus"] ?? "unassigned").toString();
-
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.06)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  if (email.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(email, style: TextStyle(color: Colors.grey.shade300)),
-                    ),
-                  const SizedBox(height: 10),
-
-                  Row(
-                    children: [
-                      Text(status, style: const TextStyle(color: Colors.orangeAccent)),
-                      const Spacer(),
-
-                      // ✅ ACCEPT
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await _acceptCollector(
-                              collectorUid: uid,
-                              shopId: shopId,
-                              shopName: shopName,
-                            );
-                            _toast("Accepted collector: $name");
-                          } catch (e) {
-                            _toast("Accept failed: $e");
-                          }
-                        },
-                        child: const Text("Accept"),
-                      ),
-
-                      // ✅ REJECT
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await _rejectCollector(collectorUid: uid);
-                            _toast("Rejected collector: $name");
-                          } catch (e) {
-                            _toast("Reject failed: $e");
-                          }
-                        },
-                        child: const Text("Reject"),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
-        );
-      },
-    );
-  }
-
   // ================= DRAWERS =================
   Widget _notificationsDrawer() {
     return SingleChildScrollView(
@@ -335,7 +372,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               const SizedBox(width: 8),
               const Text(
                 "Notifications",
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ],
           ),
@@ -383,9 +424,13 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(title,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
-                Text(subtitle, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text(subtitle,
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 13)),
               ],
             ),
           ),
@@ -409,7 +454,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               const SizedBox(width: 8),
               const Text(
                 "Profile",
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold),
               ),
             ],
           ),
@@ -419,10 +467,12 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           Text(
             shopName,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            style: const TextStyle(
+                color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 6),
-          Text(user?.email ?? "", style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          Text(user?.email ?? "",
+              style: const TextStyle(color: Colors.white70, fontSize: 13)),
           const SizedBox(height: 18),
 
           // Impact card
@@ -437,11 +487,16 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("Impact", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                Text("Impact",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
                 SizedBox(height: 10),
                 Text(
                   "Your junkshop helps the community and the environment by increasing recycling, supporting collectors, and reducing waste in landfills.",
-                  style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.3),
+                  style: TextStyle(
+                      color: Colors.white70, fontSize: 13, height: 1.3),
                 ),
               ],
             ),
@@ -463,10 +518,13 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               children: [
                 const Text(
                   "Collector Requests",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 10),
-                _collectorRequestsSection(shopId: shopId, shopName: shopName),
+                _collectorRequestsSection(shopId: shopId),
               ],
             ),
           ),
@@ -487,7 +545,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: primaryColor,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ),

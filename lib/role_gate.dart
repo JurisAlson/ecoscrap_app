@@ -121,7 +121,23 @@ class RoleGate extends StatelessWidget {
         }
 
         // ================= COLLECTOR =================
+// ================= COLLECTOR =================
         if (role == 'collector') {
+          final ok = data["junkshopVerified"] == true ||
+              (data["junkshopStatus"] ?? "").toString().toLowerCase() == "verified";
+
+          if (!ok) {
+            final status = (data["junkshopStatus"] ?? "pending").toString();
+            return _RoleErrorPage(
+              message:
+                  "Collector is not yet verified by a junkshop.\n\n"
+                  "Status: $status\n\n"
+                  "Please wait for a junkshop to accept you.",
+              actionLabel: "Logout",
+              onAction: () => _logout(context),
+            );
+          }
+
           return const CollectorsDashboardPage();
         }
 

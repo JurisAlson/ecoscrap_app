@@ -87,31 +87,32 @@ class _JunkshopAccountCreationPageState
       );
 
       // 2) Create/merge permit request doc (doc id = uid prevents duplicates)
+      // 2) Create/merge permit request doc (doc id = uid prevents duplicates)
       final requestRef = _firestore.collection('permitRequests').doc(uid);
+
       await requestRef.set({
         'uid': uid,
-        'shopName': shopName,
-        'emailDisplay': email, // ✅ always from Auth
-        'approved': false,
-        'status': 'pending',
+        'shopName': shopName,               // ✅ application data lives here
+        'emailDisplay': email,              // ✅ from Auth
+        'status': 'pending',                // pending | approved | rejected
         'submittedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'permitPath': storagePath,
         'originalFileName': _pickedFile!.name,
+        // optional:
+        // 'rejectionReason': null,
       }, SetOptions(merge: true));
 
+      // Users doc: ✅ keep it clean + minimal, don't overwrite profile fields
       await _firestore.collection('Users').doc(uid).set({
         'uid': uid,
-        'shopName': shopName,
         'emailDisplay': email,
 
-        // ✅ KEEP as user until approved
-        'Roles': 'user',
+        // user stays user until approved
         'role': 'user',
 
-        // application tracking only
-        'verified': false,
-        'junkshopStatus': 'pending',
+        // only tracking fields
+        'junkshopStatus': 'pending',         // pending | approved | rejected | none
         'activePermitRequestId': requestRef.id,
 
         'updatedAt': FieldValue.serverTimestamp(),

@@ -1,3 +1,5 @@
+// ======================= collector_details_page.dart =======================
+
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -9,9 +11,8 @@ import '../admin_storage_cache.dart';
 import '../admin_theme_page.dart';
 
 class CollectorDetailsPage extends StatefulWidget {
-  final DocumentReference<Map<String, dynamic>> userRef;
-
-  const CollectorDetailsPage({super.key, required this.userRef});
+  final DocumentReference<Map<String, dynamic>> requestRef;
+  const CollectorDetailsPage({super.key, required this.requestRef});
 
   @override
   State<CollectorDetailsPage> createState() => _CollectorDetailsPageState();
@@ -27,19 +28,81 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     } catch (_) {}
   }
 
-  Future<void> _revertCollectorApplicantToUser(String uid) async {
-    await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-      "Roles": "user",
-      "role": "user",
+  /// ✅ Admin rejects:
+  /// - marks collectorRequests/{uid} as rejected
+  /// - restores Users/{uid} back to normal user state (keeps base profile)
+  /// - deletes permit file if any
+  Future<void> _rejectCollectorAndRestoreUser(
+    String uid, {
+    String permitPath = "",
+  }) async {
+    // 1) delete uploaded ID file (optional)
+    await _deleteStorageIfAny(permitPath);
 
+    final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
+    final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(uid);
+
+    // 2) read current role so we don't accidentally downgrade admin/junkshop
+    final snap = await userRef.get();
+    final data = snap.data() ?? {};
+    final existingRole = (data["role"] ?? data["Roles"] ?? "user")
+        .toString()
+        .trim()
+        .toLowerCase();
+
+    final roleToSave =
+        (existingRole == "collector" || existingRole.isEmpty) ? "user" : existingRole;
+
+    final batch = FirebaseFirestore.instance.batch();
+
+    // 3) mark request rejected (so it disappears from admin list)
+    batch.set(reqRef, {
+      "status": "rejected",
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // 4) restore clean user state but keep base profile (name/email/etc.)
+    batch.set(userRef, {
       "collectorStatus": "rejected",
-      "adminVerified": false,
-      "adminStatus": "rejected",
-      "adminReviewedAt": FieldValue.serverTimestamp(),
-      "collectorActive": false,
+
+      // remove application-only fields
+      "collectorSubmittedAt": FieldValue.delete(),
+      "collectorUpdatedAt": FieldValue.delete(),
+      "collectorKyc": FieldValue.delete(),
+
+      // keep role safe
+      "role": roleToSave,
+      "Roles": roleToSave,
 
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    await batch.commit();
+  }
+
+  /// ✅ Admin approves:
+  /// - collectorRequests/{uid} => status: adminApproved (junkshops can see it)
+  /// - Users/{uid} => collectorStatus: adminApproved
+  /// - DOES NOT promote role to collector (junkshop does final step)
+  Future<void> _adminApprove(String uid) async {
+    final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(uid);
+    final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
+
+    final batch = FirebaseFirestore.instance.batch();
+
+    batch.set(reqRef, {
+      "status": "adminApproved",
+      "adminReviewedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    batch.set(userRef, {
+      "collectorStatus": "adminApproved",
+      "collectorUpdatedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
   }
 
   void _showImageDialog(String url) {
@@ -86,27 +149,35 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       ),
       body: AdminTheme.background(
         child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: widget.userRef.snapshots(),
+          stream: widget.requestRef.snapshots(),
           builder: (context, snap) {
             if (snap.hasError) {
-              return Center(child: Text("Error: ${snap.error}", style: const TextStyle(color: Colors.redAccent)));
+              return Center(
+                child: Text(
+                  "Error: ${snap.error}",
+                  style: const TextStyle(color: Colors.redAccent),
+                ),
+              );
             }
             if (!snap.hasData) {
               return const Center(child: CircularProgressIndicator(strokeWidth: 2));
             }
             if (!snap.data!.exists) {
-              return const Center(child: Text("User not found.", style: TextStyle(color: Colors.white70)));
+              return const Center(
+                child: Text("Request not found.", style: TextStyle(color: Colors.white70)),
+              );
             }
 
             final data = snap.data!.data() ?? {};
             final uid = snap.data!.id;
 
-            final name = (data["Name"] ?? data["name"] ?? "Collector").toString();
-            final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
+            // ✅ from collectorRequests
+            final name = (data["publicName"] ?? "Collector").toString();
+            final email = (data["emailDisplay"] ?? "").toString();
+            final status = (data["status"] ?? "").toString();
 
-            final kyc = (data["kyc"] is Map) ? (data["kyc"] as Map) : const {};
-            final permitPath = (kyc["permitPath"] ?? "").toString();
-            final permitUrlOld = (kyc["permitUrl"] ?? "").toString();
+            final permitPath = (data["permitPath"] ?? "").toString();
+            final permitUrlOld = (data["permitUrl"] ?? "").toString(); // optional legacy
 
             Widget imageBlock;
             if (permitPath.isNotEmpty) {
@@ -114,17 +185,28 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                 future: AdminStorageCache.url(permitPath),
                 builder: (context, s) {
                   if (s.connectionState == ConnectionState.waiting) {
-                    return const SizedBox(height: 220, child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
+                    return const SizedBox(
+                      height: 220,
+                      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                    );
                   }
                   if (s.hasError || !s.hasData) {
-                    return Text("Image failed: ${s.error}", style: const TextStyle(color: Colors.redAccent));
+                    return Text(
+                      "Image failed: ${s.error}",
+                      style: const TextStyle(color: Colors.redAccent),
+                    );
                   }
                   final url = s.data!;
                   return GestureDetector(
                     onTap: () => _showImageDialog(url),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(14),
-                      child: Image.network(url, height: 220, width: double.infinity, fit: BoxFit.cover),
+                      child: Image.network(
+                        url,
+                        height: 220,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   );
                 },
@@ -134,11 +216,17 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                 onTap: () => _showImageDialog(permitUrlOld),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(14),
-                  child: Image.network(permitUrlOld, height: 220, width: double.infinity, fit: BoxFit.cover),
+                  child: Image.network(
+                    permitUrlOld,
+                    height: 220,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                  ),
                 ),
               );
             } else {
-              imageBlock = const Text("No ID image uploaded.", style: TextStyle(color: Colors.white70));
+              imageBlock =
+                  const Text("No ID image uploaded.", style: TextStyle(color: Colors.white70));
             }
 
             return Padding(
@@ -146,11 +234,21 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20,
+                    ),
+                  ),
                   const SizedBox(height: 6),
-                  if (email.isNotEmpty) Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                  if (email.isNotEmpty)
+                    Text(email, style: TextStyle(color: Colors.grey.shade300)),
                   const SizedBox(height: 6),
                   Text("UID: $uid", style: const TextStyle(color: Colors.white54)),
+                  const SizedBox(height: 6),
+                  Text("Status: $status", style: const TextStyle(color: Colors.white70)),
                   const SizedBox(height: 16),
 
                   imageBlock,
@@ -161,7 +259,11 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       padding: EdgeInsets.only(bottom: 10),
                       child: Row(
                         children: [
-                          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
                           SizedBox(width: 10),
                           Text("Processing...", style: TextStyle(color: Colors.white)),
                         ],
@@ -180,7 +282,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Approve collector?",
-                                    body: "Approve $name?",
+                                    body: "Approve $name? (This makes it visible to junkshops)",
                                     yesValue: true,
                                     yesLabel: "Approve",
                                   );
@@ -188,20 +290,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
-                                    await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-                                      "Roles": "collector",
-                                      "role": "collector",
-                                      "collectorStatus": "approved",
-
-                                      "adminVerified": true,
-                                      "adminStatus": "approved",
-                                      "adminReviewedAt": FieldValue.serverTimestamp(),
-                                      "collectorActive": true,
-
-                                      "updatedAt": FieldValue.serverTimestamp(),
-                                    }, SetOptions(merge: true));
-
-                                    if (mounted) AdminHelpers.toast(context, "Admin approved $name");
+                                    await _adminApprove(uid);
+                                    if (mounted) AdminHelpers.toast(context, "Approved $name");
                                     if (mounted) Navigator.pop(context);
                                   } catch (e) {
                                     if (mounted) AdminHelpers.toast(context, "Approve failed: $e");
@@ -222,7 +312,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Reject collector?",
-                                    body: "Reject $name? This reverts the account back to normal user.",
+                                    body: "Reject $name? This keeps the account as a normal user.",
                                     yesValue: true,
                                     yesLabel: "Reject",
                                   );
@@ -230,11 +320,14 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
-                                    await _deleteStorageIfAny(permitPath);
-                                    await _revertCollectorApplicantToUser(uid);
-
-                                    if (mounted) AdminHelpers.toast(context, "Admin rejected $name");
-                                    if (mounted) Navigator.pop(context);
+                                    await _rejectCollectorAndRestoreUser(
+                                      uid,
+                                      permitPath: permitPath,
+                                    );
+                                    if (mounted) {
+                                      AdminHelpers.toast(context, "Rejected $name. User restored.");
+                                      Navigator.pop(context);
+                                    }
                                   } catch (e) {
                                     if (mounted) AdminHelpers.toast(context, "Reject failed: $e");
                                   } finally {
