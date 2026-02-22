@@ -25,6 +25,7 @@ class HouseholdOrderPage extends StatelessWidget {
         .orderBy('updatedAt', descending: true)
         .limit(1);
 
+
     return StreamBuilder<QuerySnapshot>(
       stream: query.snapshots(),
       builder: (context, snap) {
