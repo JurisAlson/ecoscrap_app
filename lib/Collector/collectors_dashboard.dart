@@ -36,7 +36,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // foreground = online, background = offline
     if (state == AppLifecycleState.resumed) {
       _setOnline(true);
     } else if (state == AppLifecycleState.paused ||
@@ -45,25 +44,59 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       _setOnline(false);
     }
   }
-  
+
   Future<void> _setOnline(bool online) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     try {
-      await FirebaseFirestore.instance
-          .collection('Users')
-          .doc(user.uid) // ✅ assumes Users docId == auth.uid
-          .set({
+      await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
         'isOnline': online,
         'lastSeen': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(), // ✅ helps if rules require updatedAt
       }, SetOptions(merge: true));
     } catch (e) {
       debugPrint("❌ setOnline failed: $e");
     }
   }
 
-  Widget _pendingVerificationScreen() {
+  Widget _pendingVerificationScreenNew({
+    required String collectorStatus,
+    required bool legacyAdminOk,
+    required bool legacyJunkshopOk,
+    required bool legacyActive,
+  }) {
+    final s = collectorStatus.toLowerCase();
+
+    String title = "Collector account pending";
+    String body = "Your account is not verified yet.\nPlease wait for approval.";
+
+    // NEW FLOW
+    if (s == "pending") {
+      title = "Collector request submitted";
+      body = "Please wait for admin approval.";
+    } else if (s == "adminapproved") {
+      title = "Admin approved";
+      body = "Now wait for a junkshop to accept you (first claim).";
+    } else if (s == "rejected") {
+      title = "Request rejected";
+      body = "Your collector request was rejected.\nYou may submit again.";
+    }
+
+    // LEGACY FLOW fallback messaging (if you still use these flags somewhere)
+    if (collectorStatus.isEmpty) {
+      if (!legacyAdminOk) {
+        title = "Collector account pending";
+        body = "Please wait for admin approval.";
+      } else if (!legacyJunkshopOk) {
+        title = "Admin approved";
+        body = "Now wait for junkshop verification.";
+      } else if (!legacyActive) {
+        title = "Almost ready";
+        body = "Your account is verified but not yet active.";
+      }
+    }
+
     return SafeArea(
       child: Center(
         child: Padding(
@@ -73,15 +106,19 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
             children: [
               const Icon(Icons.hourglass_top, color: Colors.white70, size: 70),
               const SizedBox(height: 16),
-              const Text(
-                "Collector account pending",
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                "Your account is not verified yet.\nPlease wait for admin approval.",
+              Text(
+                body,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70),
+                style: const TextStyle(color: Colors.white70),
               ),
               const SizedBox(height: 18),
               SizedBox(
@@ -99,7 +136,9 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                   ),
                 ),
               ),
@@ -110,7 +149,17 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     );
   }
 
-  
+  bool _isCollectorRole(Map<String, dynamic>? data) {
+    final rolesRaw =
+        (data?['Roles'] ?? data?['role'] ?? "").toString().trim().toLowerCase();
+    return rolesRaw == "collector" || rolesRaw == "collectors";
+  }
+
+  bool _isJunkshopVerifiedNew(Map<String, dynamic>? data) {
+    return data?['junkshopVerified'] == true ||
+        (data?['junkshopStatus'] ?? "").toString().toLowerCase() == "verified";
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -138,34 +187,56 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           return Scaffold(
             backgroundColor: bgColor,
             body: Center(
-              child: Text("Error: ${snap.error}", style: const TextStyle(color: Colors.white)),
+              child: Text("Error: ${snap.error}",
+                  style: const TextStyle(color: Colors.white)),
             ),
           );
         }
 
         final data = snap.data?.data() as Map<String, dynamic>?;
 
-        // ✅ If missing, default to false
-        final bool adminOk = (data?['adminVerified'] == true);
-        final bool junkshopOk = (data?['junkshopVerified'] == true);
-        final bool active = (data?['collectorActive'] == true);
+        // ✅ NEW FLOW checks
+        final isCollectorRole = _isCollectorRole(data);
+        final junkshopOkNew = _isJunkshopVerifiedNew(data);
+        final collectorStatus = (data?['collectorStatus'] ?? "").toString();
 
-        // ✅ Gate the dashboard (must pass both approvals + active)
-        if (!(adminOk && junkshopOk && active)) {
+        // ✅ LEGACY FLOW checks (kept, so you don't break old accounts)
+        final legacyAdminOk = data?['adminVerified'] == true;
+        final legacyJunkshopOk = data?['junkshopVerified'] == true;
+        final legacyActive = data?['collectorActive'] == true;
+
+        // ✅ Allow entry if:
+        // NEW FLOW: role=collector AND junkshop verified
+        // OR legacy flow: adminVerified AND junkshopVerified AND collectorActive
+        final allowDashboard =
+            (isCollectorRole && junkshopOkNew) || (legacyAdminOk && legacyJunkshopOk && legacyActive);
+
+        if (!allowDashboard) {
           return Scaffold(
             backgroundColor: bgColor,
-            body: _pendingVerificationScreen(),
+            body: _pendingVerificationScreenNew(
+              collectorStatus: collectorStatus,
+              legacyAdminOk: legacyAdminOk,
+              legacyJunkshopOk: legacyJunkshopOk,
+              legacyActive: legacyActive,
+            ),
           );
         }
-
 
         return Scaffold(
           backgroundColor: bgColor,
           body: Stack(
             children: [
-              Positioned(top: -120, right: -120, child: _blurCircle(primaryColor.withOpacity(0.15), 320)),
-              Positioned(bottom: 80, left: -120, child: _blurCircle(Colors.green.withOpacity(0.10), 360)),
-
+              Positioned(
+                top: -120,
+                right: -120,
+                child: _blurCircle(primaryColor.withOpacity(0.15), 320),
+              ),
+              Positioned(
+                bottom: 80,
+                left: -120,
+                child: _blurCircle(Colors.green.withOpacity(0.10), 360),
+              ),
               SafeArea(
                 child: Column(
                   children: [
@@ -179,15 +250,18 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text("Collector Dashboard", style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+                                Text("Collector Dashboard",
+                                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
                                 const Text(
                                   "Collector",
-                                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold),
                                 ),
                               ],
                             ),
                           ),
-
                           _iconButton(
                             Icons.map_outlined,
                             onTap: () {
@@ -197,7 +271,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                             },
                           ),
                           const SizedBox(width: 10),
-
                           _iconButton(
                             Icons.chat_bubble_outline,
                             onTap: () {
@@ -208,7 +281,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                             },
                           ),
                           const SizedBox(width: 10),
-
                           _iconButton(
                             Icons.notifications_none,
                             onTap: () {
@@ -225,7 +297,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                         ],
                       ),
                     ),
-
                     Expanded(child: _CollectorLogsHome(collectorId: user.uid)),
                   ],
                 ),
@@ -236,6 +307,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       },
     );
   }
+
   // ================== UI HELPERS ==================
   static Widget _logoBox() {
     return Container(
@@ -255,7 +327,10 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       borderRadius: BorderRadius.circular(50),
       child: Container(
         padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), shape: BoxShape.circle),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          shape: BoxShape.circle,
+        ),
         child: Icon(icon, color: Colors.grey.shade300),
       ),
     );
@@ -298,10 +373,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                   ),
                 ),
                 const SizedBox(height: 16),
-
                 const Icon(Icons.person, size: 64, color: Colors.white54),
                 const SizedBox(height: 10),
-
                 Text(
                   user?.displayName ?? "Collector",
                   style: const TextStyle(
@@ -311,25 +384,19 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                   ),
                 ),
                 const SizedBox(height: 6),
-
                 Text(
                   user?.email ?? "No email",
                   style: const TextStyle(color: Colors.white70),
                 ),
-
                 const SizedBox(height: 18),
-
                 SizedBox(
                   width: double.infinity,
                   height: 48,
                   child: ElevatedButton.icon(
                     onPressed: () async {
-                      // ✅ mark offline before sign out
                       await _setOnline(false);
-
                       await FirebaseAuth.instance.signOut();
                       if (!context.mounted) return;
-
                       Navigator.pop(context);
                       Navigator.pushReplacementNamed(context, '/login');
                     },
@@ -353,9 +420,10 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   }
 }
 
+// ================= LOGS HOME (unchanged) =================
+
 class _CollectorLogsHome extends StatelessWidget {
   const _CollectorLogsHome({required this.collectorId});
-
   final String collectorId;
 
   @override
@@ -390,10 +458,7 @@ class _CollectorLogsHome extends StatelessWidget {
         if (docs.isEmpty) {
           return const Padding(
             padding: EdgeInsets.all(16),
-            child: Text(
-              "No logs yet.",
-              style: TextStyle(color: Colors.white70),
-            ),
+            child: Text("No logs yet.", style: TextStyle(color: Colors.white70)),
           );
         }
 
@@ -411,7 +476,6 @@ class _CollectorLogsHome extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
-
               for (final d in docs) ...[
                 _buildLogCard(d),
               ],
@@ -422,12 +486,10 @@ class _CollectorLogsHome extends StatelessWidget {
     );
   }
 
-  Widget _buildLogCard(QueryDocumentSnapshot d) {
+  static Widget _buildLogCard(QueryDocumentSnapshot d) {
     final data = d.data() as Map<String, dynamic>;
-
     final status = (data['status'] ?? '').toString().toLowerCase();
 
-    // Name resolution (supports either householdName or household.name)
     final name = (data['householdName'] ??
             (data['household'] is Map ? (data['household']['name']) : null) ??
             data['name'] ??
@@ -435,8 +497,6 @@ class _CollectorLogsHome extends StatelessWidget {
         .toString();
 
     final title = _statusToTitle(status);
-
-    // Pick best timestamp for the status, fallback to updatedAt/createdAt
     final ts = _pickBestTimestamp(data, status);
     final timeText = _formatTimestamp(ts);
 
@@ -450,7 +510,7 @@ class _CollectorLogsHome extends StatelessWidget {
     );
   }
 
-  String _statusToTitle(String status) {
+  static String _statusToTitle(String status) {
     switch (status) {
       case 'completed':
         return "Pickup completed";
@@ -464,11 +524,11 @@ class _CollectorLogsHome extends StatelessWidget {
       case 'canceled':
         return "Pickup cancelled";
       default:
-        return status.isEmpty ? "Pickup update" : "Pickup ${status}";
+        return status.isEmpty ? "Pickup update" : "Pickup $status";
     }
   }
 
-  IconData _statusToIcon(String status) {
+  static IconData _statusToIcon(String status) {
     switch (status) {
       case 'completed':
         return Icons.check_circle_outline;
@@ -486,7 +546,7 @@ class _CollectorLogsHome extends StatelessWidget {
     }
   }
 
-  Color _statusToIconBg(String status) {
+  static Color _statusToIconBg(String status) {
     switch (status) {
       case 'completed':
         return Colors.green.withOpacity(0.15);
@@ -504,7 +564,7 @@ class _CollectorLogsHome extends StatelessWidget {
     }
   }
 
-  Color _statusToIconColor(String status) {
+  static Color _statusToIconColor(String status) {
     switch (status) {
       case 'completed':
         return Colors.green;
@@ -522,10 +582,9 @@ class _CollectorLogsHome extends StatelessWidget {
     }
   }
 
-  Timestamp? _pickBestTimestamp(Map<String, dynamic> data, String status) {
+  static Timestamp? _pickBestTimestamp(Map<String, dynamic> data, String status) {
     Timestamp? t(dynamic v) => v is Timestamp ? v : null;
 
-    // Prefer status-specific timestamps if you have them
     if (status == 'accepted') {
       return t(data['acceptedAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
     }
@@ -535,23 +594,19 @@ class _CollectorLogsHome extends StatelessWidget {
     if (status == 'transferred') {
       return t(data['transferredAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
     }
-
     return t(data['updatedAt']) ?? t(data['createdAt']);
   }
 
-  String _formatTimestamp(Timestamp? ts) {
+  static String _formatTimestamp(Timestamp? ts) {
     if (ts == null) return "—";
     final dt = ts.toDate();
     final now = DateTime.now();
 
     final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
-    final yesterday = dt.year == now.year &&
-        dt.month == now.month &&
-        dt.day == now.day - 1;
+    final yesterday = dt.year == now.year && dt.month == now.month && dt.day == now.day - 1;
 
     String two(int n) => n.toString().padLeft(2, '0');
 
-    // 12-hour time
     int hour = dt.hour % 12;
     if (hour == 0) hour = 12;
     final ampm = dt.hour >= 12 ? "PM" : "AM";
@@ -560,10 +615,7 @@ class _CollectorLogsHome extends StatelessWidget {
     if (sameDay) return "Today • $time";
     if (yesterday) return "Yesterday • $time";
 
-    // Simple fallback: MMM d • h:mm AM/PM
-    const months = [
-      "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
-    ];
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     final m = months[dt.month - 1];
     return "$m ${dt.day} • $time";
   }
@@ -602,28 +654,19 @@ class _CollectorLogsHome extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: TextStyle(
-                    color: Colors.grey.shade400,
-                    fontSize: 11,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
                 ),
               ],
             ),
           ),
           Text(
             time,
-            style: TextStyle(
-              color: Colors.grey.shade500,
-              fontSize: 11,
-            ),
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
           ),
         ],
       ),
