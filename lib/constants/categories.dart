@@ -5,7 +5,7 @@ const List<String> kMajorCategories = [
   "PP WHITE",
   "HDPE",
   "BLACK",
-  "PP COLORED"
+  "PP COLORED",
   "PET",
 ];
 
@@ -24,7 +24,7 @@ const Map<String, double> kFixedBuyCostPerKg = {
   "HDPE": 8.0,
   "BLACK": 3.0,
   "PP COLORED": 6.0,
-  "PET":4.0
+  "PET":4.0,
 };
 
 /// ✅ FIXED SELL PRICE per KG (edit values)
@@ -33,5 +33,5 @@ const Map<String, double> kFixedSellPricePerKg = {
   "HDPE": 15.0,
   "BLACK": 6.0,
   "PP COLORED": 12.0,
-  "PET":8.0
+  "PET":8.0,
 };

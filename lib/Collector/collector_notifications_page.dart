@@ -11,6 +11,8 @@ class CollectorNotificationsPage extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    final db = FirebaseFirestore.instance;
+
     final data = doc.data();
     final gp = data['pickupLocation'] as GeoPoint?;
 
@@ -22,11 +24,58 @@ class CollectorNotificationsPage extends StatelessWidget {
     }
 
     try {
+      // ✅ Get required info from pickup request
+      final householdId = (data['householdId'] ?? '').toString();
+      final householdName = (data['householdName'] ?? '').toString();
+      final collectorName = (data['collectorName'] ?? '').toString();
+
+      // ✅ junkshopId should ideally be saved in pickupRequests when created
+      String junkshopId = (data['junkshopId'] ?? '').toString();
+      final String junkshopName = (data['junkshopName'] ?? '').toString();
+
+      // Optional fallback: if junkshopId not in request, try to get from collector profile
+      // (only works if you store junkshopId in collector's Users doc)
+      if (junkshopId.isEmpty) {
+        final cDoc = await db.collection('Users').doc(user.uid).get();
+        final c = cDoc.data() ?? {};
+        junkshopId = (c['junkshopId'] ?? '').toString();
+      }
+
+      // ✅ Update pickup request to accepted
       await doc.reference.update({
         'status': 'accepted',
+        'acceptedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
+
+        // keep these if available so junkshop routing is reliable
+        if (junkshopId.isNotEmpty) 'junkshopId': junkshopId,
+        if (junkshopName.isNotEmpty) 'junkshopName': junkshopName,
       });
 
+      // ✅ Create junkshop notification
+      if (junkshopId.isNotEmpty) {
+        await db
+            .collection('Users')
+            .doc(junkshopId)
+            .collection('notifications')
+            .doc(doc.id) // ✅ prevent duplicate notifs
+            .set({
+          'type': 'pickup_accepted',
+          'pickupRequestId': doc.id,
+
+          'residentId': householdId,
+          'residentName': householdName,
+
+          'collectorId': user.uid,
+          'collectorName': collectorName,
+
+          'read': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } else {
+        // helpful debug (means pickupRequests lacks junkshopId)
+        debugPrint("⚠️ junkshopId missing. No notification created for request=${doc.id}");
+      }
 
       if (!context.mounted) return;
 
