@@ -487,12 +487,26 @@ exports.setApprovedAtOnApprove = onDocumentUpdated(
     const after = event.data?.after?.data();
     if (!before || !after) return;
 
-    if (before.approved !== true && after.approved === true && !after.approvedAt) {
-      logger.info("Auto setting approvedAt", { requestId: event.params.requestId });
+    if (before.approved !== true && after.approved === true) {
+      v2_1.logger.info("Approved -> notify user", { requestId: event.params.requestId });
 
-      await event.data.after.ref.update({
-        approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      // 1) set approvedAt once
+      if (!after.approvedAt) {
+        await afterSnap.ref.update({
+          approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      // 2) send push notification
+      const uid = after.uid; // you already use "uid" in adminDeleteUser permit query
+      if (uid) {
+        await sendPushToUser(
+          uid,
+          "Application Approved ✅",
+          "Your application has been approved by the admin.",
+          { type: "application_approved", requestId: event.params.requestId }
+        );
+      }
     }
   }
 );

@@ -9,6 +9,7 @@ import '../image_detection.dart';
 import '../auth/JunkshopAccountCreation.dart';
 import 'household_order_page.dart';
 import '../auth/CollectorAccountCreation.dart';
+import '../services/notification_service.dart';
 
 
 class DashboardPage extends StatefulWidget {
@@ -52,6 +53,9 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
+
+    // Initialize push notifications
+    NotificationService.init();
 
     // Auto-slide top slider every 4 seconds
     _promoTimer = Timer.periodic(const Duration(seconds: 4), (_) {
