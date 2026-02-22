@@ -1,4 +1,4 @@
-// ===================== receipt_screen.dart (UPDATED: Walk-in works, no name required) =====================
+// ===================== receipt_screen.dart (UPDATED - with Resident/Collector searchable picker) =====================
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +15,10 @@ class ReceiptScreen extends StatefulWidget {
 class _ReceiptScreenState extends State<ReceiptScreen> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
+  final TextEditingController _walkInNameCtrl = TextEditingController();
+
+  // ✅ prevents double-save/double-deduct
+  bool _saving = false;
 
   // ✅ consistent lower-case everywhere
   String _txType = "sell"; // "sell" | "buy"
@@ -30,12 +34,14 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   static const List<String> _buySources = [
     "Walk-in",
     "Resident",
-    "Collector",
   ];
   String _selectedBuySource = _buySources.first;
 
   // ✅ BUY source name (resident/collector, optional for walk-in)
   final TextEditingController _sourceNameCtrl = TextEditingController();
+
+  // ✅ Selected user document id (Resident/Collector) from Users collection
+  String? _sourceUserId;
 
   // (kept) for older uses, but BUY now uses _sourceNameCtrl for the label/name
   final TextEditingController _customerCtrl = TextEditingController();
@@ -98,6 +104,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   void dispose() {
     _customerCtrl.dispose();
     _sourceNameCtrl.dispose();
+    _walkInNameCtrl.dispose();
     for (final i in _items) {
       i.dispose();
     }
@@ -120,6 +127,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       item.categoryValue = (picked['category'] ?? '').toString();
       item.subCategoryValue = (picked['subCategory'] ?? '').toString();
 
+      // Optional: don’t auto-fill weight; keep what user typed
+      // item.weightCtrl.text = "";
+
       _recalcSellItem(item);
     });
   }
@@ -133,12 +143,16 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       if (_txType == "sell") {
         _selectedSellBranch = _sellBranches.first;
         _customerCtrl.clear();
+
         _selectedBuySource = _buySources.first;
         _sourceNameCtrl.clear();
+        _sourceUserId = null;
       } else {
         _customerCtrl.clear();
+
         _selectedBuySource = _buySources.first;
         _sourceNameCtrl.clear();
+        _sourceUserId = null;
       }
 
       for (final i in _items) {
@@ -175,89 +189,122 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   }
 
   // ✅ find existing inventory doc for BUY (query OUTSIDE transaction)
-Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
-  final snap = await FirebaseFirestore.instance
-      .collection('Users') // ✅ UPDATED
-      .doc(widget.shopID)
-      .collection('inventory')
-      .where('category', isEqualTo: cat)
-      .where('subCategory', isEqualTo: sub)
-      .limit(1)
-      .get();
+  Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(widget.shopID)
+        .collection('inventory')
+        .where('category', isEqualTo: cat)
+        .where('subCategory', isEqualTo: sub)
+        .limit(1)
+        .get();
 
-  if (snap.docs.isEmpty) return null;
-  return snap.docs.first.id;
-}
+    if (snap.docs.isEmpty) return null;
+    return snap.docs.first.id;
+  }
 
   // ===================== SAVE (SELL deduct, BUY add) =====================
   Future<void> _saveReceipt() async {
+    if (_saving) return; // ✅ prevent double-save
+    _saving = true;
+    if (mounted) setState(() {});
+
     final isSell = _txType == "sell";
 
-    if (_items.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Add at least 1 item.")),
-      );
-      return;
-    }
-
-    // ✅ BUY supports Walk-in with NO name required
-    final isWalkIn = (!isSell && _isWalkInBuy);
-
-    final sourceType = isSell
-        ? ""
-        : (isWalkIn ? "walkin" : _selectedBuySource.trim().toLowerCase()); // walkin|resident|collector
-
-    final sourceName = isSell ? "" : _sourceNameCtrl.text.trim(); // optional for walk-in
-
-    // ✅ compatibility field
-    final partyName = isSell ? _selectedSellBranch : (isWalkIn ? "Walk-in" : sourceName);
-
-    // ✅ only require name when NOT walk-in
-    if (!isSell && !isWalkIn) {
-      if (sourceName.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Enter the name of the Resident/Collector.")),
-        );
-        return;
-      }
-    }
-
-    // validate + compute total weight
-    double totalWeightKg = 0.0;
-    for (final it in _items) {
-      final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-      if (kg <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Weight must be greater than 0.")),
-        );
-        return;
-      }
-      totalWeightKg += kg;
-
-      if (isSell && it.inventoryDocId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Select an inventory item for each SELL line.")),
-        );
-        return;
-      }
-    }
-
-    final db = FirebaseFirestore.instance;
-    final shopRef = db.collection('Users').doc(widget.shopID); // ✅ UPDATED
-    final txCol = shopRef.collection('transaction');          // ✅ UPDATED
-    final invCol = shopRef.collection('inventory');           // ✅ UPDATED
-
-    // ✅ pre-fetch BUY merge targets outside transaction
-    final Map<_ReceiptItem, String?> buyTargets = {};
-    if (!isSell) {
-      for (final it in _items) {
-        final cat = (it.categoryValue ?? "").trim();
-        final sub = (it.subCategoryValue ?? "").trim();
-        buyTargets[it] = await _findInventoryDocIdForBuy(cat, sub);
-      }
-    }
-
     try {
+      if (_items.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Add at least 1 item.")),
+        );
+        return;
+      }
+
+      // ✅ BUY supports Walk-in with NO name required
+      final isWalkIn = (!isSell && _isWalkInBuy);
+
+      final sourceType = isSell
+          ? ""
+          : (isWalkIn ? "walkin" : _selectedBuySource.trim().toLowerCase()); // walkin|resident|collector
+
+      final residentName = _sourceNameCtrl.text.trim();
+      final walkInName = _walkInNameCtrl.text.trim();
+
+      final sourceName = isSell ? "" : (isWalkIn ? walkInName : residentName);
+
+      final partyName = isSell
+          ? _selectedSellBranch
+          : (isWalkIn ? (walkInName.isEmpty ? "Walk-in" : walkInName) : residentName);
+
+      // ✅ only require name when NOT walk-in
+      if (!isSell && isWalkIn) {
+      if (walkInName.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Enter walk-in name.")),
+        );
+        return;
+      }
+    } else if (!isSell && !isWalkIn) {
+      if (residentName.isEmpty || _sourceUserId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Select the resident.")),
+        );
+        return;
+      }
+    }
+
+      // validate + compute total weight
+      double totalWeightKg = 0.0;
+
+      for (final it in _items) {
+        final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+        if (kg <= 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Weight must be greater than 0.")),
+          );
+          return;
+        }
+        totalWeightKg += kg;
+
+        if (isSell && it.inventoryDocId == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Select an inventory item for each SELL line.")),
+          );
+          return;
+        }
+      }
+
+      // ✅ prevent duplicate inventory selection in SELL (double-deduct)
+      if (isSell) {
+        final ids = _items.map((it) => it.inventoryDocId).whereType<String>().toList();
+        if (ids.toSet().length != ids.length) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("You selected the same inventory item more than once.")),
+          );
+          return;
+        }
+      }
+
+      // ✅ show what will be saved (helps debug)
+      for (final it in _items) {
+        // ignore: avoid_print
+        print("ITEM LINE → doc=${it.inventoryDocId} weight='${it.weightCtrl.text}' picked='${it.sellPickedName}'");
+      }
+
+      final db = FirebaseFirestore.instance;
+      final shopRef = db.collection('Users').doc(widget.shopID);
+      final txCol = shopRef.collection('transaction');
+      final invCol = shopRef.collection('inventory');
+
+      // ✅ pre-fetch BUY merge targets outside transaction
+      final Map<_ReceiptItem, String?> buyTargets = {};
+      if (!isSell) {
+        for (final it in _items) {
+          final cat = (it.categoryValue ?? "").trim();
+          final sub = (it.subCategoryValue ?? "").trim();
+          buyTargets[it] = await _findInventoryDocIdForBuy(cat, sub);
+        }
+      }
+
       await db.runTransaction((trx) async {
         final txRef = txCol.doc();
         final itemsPayload = <Map<String, dynamic>>[];
@@ -283,11 +330,22 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
               );
             }
 
+            // ✅ Debug before update
+            // ignore: avoid_print
+            print(
+              "SELL DEBUG → doc=${it.inventoryDocId} "
+              "picked=${it.sellPickedName} "
+              "weightText='${it.weightCtrl.text}' "
+              "weightKg=$weightKg "
+              "currentKg=$currentKg "
+              "newKg=${currentKg - weightKg}",
+            );
+
             // ✅ SELL: deduct inventory
-            trx.update(invRef, {
+            /*trx.update(invRef, {
               'unitsKg': FieldValue.increment(-weightKg),
               'updatedAt': FieldValue.serverTimestamp(),
-            });
+            });*/
 
             final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
             final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
@@ -349,7 +407,7 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
         // ✅ SAVE TRANSACTION DOC
         final payload = <String, dynamic>{
           'transactionType': _txType, // "sell" | "buy"
-          'customerName': partyName,  // SELL: branch, BUY: Walk-in or typed name
+          'customerName': partyName, // SELL: branch, BUY: Walk-in or selected name
           'items': itemsPayload,
           'totalAmount': _totalAmount,
           'totalWeightKg': totalWeightKg,
@@ -360,6 +418,9 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
         if (!isSell) {
           payload['sourceType'] = sourceType; // walkin | resident | collector
           payload['sourceName'] = sourceName; // empty allowed for walk-in
+          if (!isWalkIn) {
+            payload['sourceUserId'] = _sourceUserId; // ✅ link to Users doc id
+          }
         }
 
         trx.set(txRef, payload);
@@ -371,6 +432,9 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Save failed: $e")),
       );
+    } finally {
+      _saving = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -384,7 +448,7 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
         backgroundColor: bgColor,
         elevation: 0,
         foregroundColor: Colors.white,
-        title: Text(isSell ? "Sell Receipt" : "Buy Receipt"),
+        title: Text(isSell ? "Transaction" : "Transaction"),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -407,12 +471,11 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
               ),
             ),
             const SizedBox(height: 16),
-
             _glassCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _label(isSell ? "Customer Name" : "Source"),
+                  _label(isSell ? "Client" : "Source"),
                   const SizedBox(height: 8),
 
                   if (isSell)
@@ -439,7 +502,11 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
                         if (v == null) return;
                         setState(() {
                           _selectedBuySource = v;
-                          if (_isWalkInBuy) _sourceNameCtrl.clear();
+
+                          // reset fields when source changes
+                          _sourceNameCtrl.clear();
+                          _sourceUserId = null;
+                          _walkInNameCtrl.clear();
                         });
                       },
                       dropdownColor: const Color(0xFF0F172A),
@@ -448,15 +515,21 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
                     ),
                     const SizedBox(height: 10),
 
-                    // ✅ Hide name input when Walk-in
-                    if (!_isWalkInBuy)
+                    // ✅ Walk-in: manual name input (editable)
+                    if (_isWalkInBuy)
+                      TextField(
+                        controller: _walkInNameCtrl,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _inputDecoration("Enter walk-in name"),
+                      )
+                    else
+                      // ✅ Resident: view-only bar (NOT clickable, no search/picker)
                       TextField(
                         controller: _sourceNameCtrl,
+                        readOnly: true, // view-only
                         style: const TextStyle(color: Colors.white),
-                        decoration: _inputDecoration(
-                          _selectedBuySource.trim().toLowerCase() == "resident"
-                              ? "Enter resident name"
-                              : "Enter collector name",
+                        decoration: _inputDecoration("Resident name").copyWith(
+                          suffixIcon: null, // remove dropdown icon
                         ),
                       ),
                   ],
@@ -625,14 +698,18 @@ Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
               width: double.infinity,
               height: 56,
               child: ElevatedButton(
-                onPressed: _saveReceipt,
+                onPressed: _saving ? null : _saveReceipt, // ✅ disabled while saving
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primaryColor,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                 ),
-                child: const Text(
-                  "SAVE RECEIPT",
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                child: Text(
+                  _saving ? "SAVING..." : "SAVE RECEIPT",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
                 ),
               ),
             ),
@@ -753,6 +830,147 @@ class _ReceiptItem {
   }
 }
 
+// ===================== USER PICKER (Resident/Collector) =====================
+class _UserPickerSheet extends StatefulWidget {
+  final String role; // "resident" | "collector"
+  const _UserPickerSheet({required this.role});
+
+  @override
+  State<_UserPickerSheet> createState() => _UserPickerSheetState();
+}
+
+class _UserPickerSheetState extends State<_UserPickerSheet> {
+  String q = "";
+
+  @override
+  Widget build(BuildContext context) {
+    final title = widget.role == "resident" ? "Select Resident" : "Select Collector";
+
+    // ✅ MAP UI ROLE -> FIRESTORE ROLE VALUE
+    final roleValue = widget.role == "resident" ? "Users" : "collector";
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 10),
+          Container(
+            width: 40,
+            height: 5,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                title,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: "Search name...",
+                hintStyle: const TextStyle(color: Color(0xFF64748B)),
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.06),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onChanged: (v) => setState(() => q = v.trim().toLowerCase()),
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('Users')
+                  .where('role', isEqualTo: roleValue)
+                   // ✅ Name field in your Firestore
+                  .snapshots(),
+              builder: (context, snap) {
+                if (snap.hasError) {
+                  return Center(
+                    child: Text(
+                      "Error: ${snap.error}",
+                      style: const TextStyle(color: Colors.redAccent),
+                      textAlign: TextAlign.center,
+                    ),
+                  );
+                }
+
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                final docs = snap.data?.docs ?? [];
+
+                final filtered = docs.where((d) {
+                  if (q.isEmpty) return true;
+                  final m = d.data() as Map<String, dynamic>;
+                  final name = (m['Name'] ?? '').toString().toLowerCase();
+                  return name.contains(q);
+                }).toList();
+
+                if (filtered.isEmpty) {
+                  return const Center(
+                    child: Text("No matching users", style: TextStyle(color: Colors.grey)),
+                  );
+                }
+
+                return ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: filtered.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) {
+                    final d = filtered[i];
+                    final m = d.data() as Map<String, dynamic>;
+                    final name = (m['Name'] ?? '').toString();
+
+                    return ListTile(
+                      tileColor: Colors.white.withOpacity(0.06),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      title: Text(name, style: const TextStyle(color: Colors.white)),
+                      subtitle: Text(roleValue, style: const TextStyle(color: Colors.grey)),
+                      onTap: () {
+                        Navigator.pop(context, {
+                          'id': d.id,
+                          'name': name,
+                        });
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ===================== INVENTORY PICKER =====================
 class _InventoryPickerSheet extends StatefulWidget {
   final String shopID;
@@ -808,10 +1026,10 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
-                  .collection('Junkshop')
-                  .doc(widget.shopID)
+                  .collection('Users') // ✅ FIXED (was Junkshop)
+                  .doc(widget.shopID) // ✅ FIXED
                   .collection('inventory')
-                  .orderBy('createdAt', descending: true)
+                  .orderBy('updatedAt', descending: true) // ✅ safer than createdAt
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {

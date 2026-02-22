@@ -22,11 +22,13 @@ const String _googleDirectionsApiKey = "AIzaSyAJVP8YXeKKBvr5rSsGwOUqWEAOPZ10dGg"
 enum TripStage { planning, pickup, delivering }
 
 class Destination {
+  final String id; // ✅ Firestore docId (junkshopId)
   final String name;
   final String subtitle;
   final LatLng latLng;
 
   const Destination({
+    required this.id,
     required this.name,
     required this.subtitle,
     required this.latLng,
@@ -64,10 +66,11 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   // Fallback destination if Firestore list is empty
   final Destination _moresFallback = const Destination(
-    name: "Mores Scrap Trading",
-    subtitle: "Junkshop • Drop-off",
-    latLng: LatLng(14.0000, 121.0000),
-  );
+  id: "fallback",
+  name: "Mores Scrap Trading",
+  subtitle: "Junkshop • Drop-off",
+  latLng: LatLng(14.0000, 121.0000),
+);
 
   // If user taps map -> pin a custom drop-off
   LatLng? _customDestinationLatLng;
@@ -356,34 +359,43 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   void _listenJunkshops() {
     FirebaseFirestore.instance
-        .collection('Junkshop')
-        .where('verified', isEqualTo: true)
+        .collection('Users')
         .where('role', isEqualTo: 'junkshop')
+        .where('verified', isEqualTo: true)
         .snapshots()
         .listen(
       (snap) {
-        debugPrint("✅ JUNKSHOP DOCS FOUND: ${snap.docs.length}");
+        debugPrint("✅ JUNKSHOP USERS FOUND: ${snap.docs.length}");
 
         final list = <Destination>[];
+
         for (final d in snap.docs) {
           final data = d.data();
-          final gp = data['location'];
-          debugPrint("📦 doc=${d.id} shopName=${data['shopName']} locationType=${gp.runtimeType}");
 
-          if (gp is! GeoPoint) continue;
+          // ✅ make sure you read correct fields from your Users junkshop doc
+          final shopName = (data['shopName'] ?? data['Name'] ?? 'Junkshop').toString();
+          final address = (data['address'] ?? '').toString();
+
+          // location field can be 'location' or 'junkshopLocation' depending on your schema
+          final gp = data['location'] ?? data['junkshopLocation'];
+
+          if (gp is! GeoPoint) {
+            debugPrint("⚠️ junkshop ${d.id} has no valid GeoPoint location");
+            continue;
+          }
 
           list.add(Destination(
-            name: (data['shopName'] ?? 'Junkshop').toString(),
-            subtitle: (data['address'] ?? 'Drop-off').toString(),
+            id: d.id, // ✅ THIS becomes junkshopId in pickupRequests
+            name: shopName,
+            subtitle: address.isEmpty ? "Junkshop • Drop-off" : address,
             latLng: LatLng(gp.latitude, gp.longitude),
           ));
         }
 
-        debugPrint("✅ Parsed junkshops list size: ${list.length}");
-
         if (!mounted) return;
         setState(() {
           _junkshops = list;
+
           if (_customDestinationLatLng == null && _selectedJunkshop == null && _junkshops.isNotEmpty) {
             _selectedJunkshop = _junkshops.first;
           }
@@ -498,6 +510,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       ..._junkshops,
       if (_customDestinationLatLng != null)
         Destination(
+          id: "pinned",
           name: "Pinned Drop-off",
           subtitle: "Custom location",
           latLng: _customDestinationLatLng!,
@@ -718,6 +731,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         'pickupLocation': GeoPoint(pickupLatLng.latitude, pickupLatLng.longitude),
         'pickupAddress': pickupAddress ?? '',
 
+
+        'junkshopId': _selectedJunkshop?.id ?? '',
         'junkshopName': _selectedJunkshop?.name ?? '',
         'junkshopLocation': _selectedJunkshop == null
             ? null
