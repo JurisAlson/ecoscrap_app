@@ -12,6 +12,25 @@ import * as crypto from "crypto";
 admin.initializeApp();
 setGlobalOptions({ maxInstances: 10 });
 
+async function sendPushToUser(
+  uid: string,
+  title: string,
+  body: string,
+  data: Record<string, string> = {}
+) {
+  const userSnap = await admin.firestore().collection("Users").doc(uid).get();
+  if (!userSnap.exists) return;
+
+  const token = (userSnap.data() as any)?.fcmToken as string | undefined;
+  if (!token) return;
+
+  await admin.messaging().send({
+    token,
+    notification: { title, body },
+    data,
+  });
+}
+
 /* ====================================================
     ADMIN-ONLY: Set user role in Firestore (for app routing)
 ==================================================== */
@@ -434,15 +453,28 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
 
     const before = beforeSnap.data() as any;
     const after = afterSnap.data() as any;
-
     if (!before || !after) return;
 
-    if (before.approved !== true && after.approved === true && !after.approvedAt) {
-      logger.info("Auto setting approvedAt", { requestId: event.params.requestId });
+    // Trigger only when it changes to approved
+    if (before.approved !== true && after.approved === true) {
+      logger.info("Approved -> set approvedAt + notify user", { requestId: event.params.requestId });
 
-      await afterSnap.ref.update({
-        approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      // set approvedAt once
+      if (!after.approvedAt) {
+        await afterSnap.ref.update({
+          approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      const uid = String(after.uid || "").trim();
+      if (uid) {
+        await sendPushToUser(
+          uid,
+          "Junkshop Application Approved ✅",
+          "Your junkshop application has been approved by the admin.",
+          { type: "junkshop_approved", requestId: String(event.params.requestId) }
+        );
+      }
     }
   }
 );
@@ -569,8 +601,8 @@ export const deductInventoryOnTransactionCreate = onDocumentCreated(
     const db = admin.firestore();
 
     // helpers
-    const EPS = 0.0001; // tiny tolerance for float errors
-    const round2 = (n: number) => Math.round(n * 100) / 100;
+    /*const EPS = 0.0001; // tiny tolerance for float errors
+    const round2 = (n: number) => Math.round(n * 100) / 100;*/
 
     await db.runTransaction(async (t) => {
         for (const item of data.items) {
@@ -603,6 +635,36 @@ export const deductInventoryOnTransactionCreate = onDocumentCreated(
         });
         });
     }
+);
+
+export const notifyCollectorApproved = onDocumentUpdated(
+  { document: "Users/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const afterSnap = event.data?.after;
+    if (!beforeSnap || !afterSnap) return;
+
+    const before = beforeSnap.data() as any;
+    const after = afterSnap.data() as any;
+
+    // Your app uses BOTH "Roles" and "role" in different places
+    const beforeRole = String(before?.Roles || before?.role || "").trim().toLowerCase();
+    const afterRole = String(after?.Roles || after?.role || "").trim().toLowerCase();
+
+    // Only notify on transition to collector
+    if (beforeRole !== "collector" && afterRole === "collector") {
+      const uid = String(event.params.uid);
+
+      await sendPushToUser(
+        uid,
+        "Collector Application Approved",
+        "Your collector application has been approved by the admin.",
+        { type: "collector_approved", uid }
+      );
+
+      logger.info("Collector approval notified", { uid });
+    }
+  }
 );
 
 

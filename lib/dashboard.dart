@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'dart:ui';
 import 'image_detection.dart';
 
+
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
 
