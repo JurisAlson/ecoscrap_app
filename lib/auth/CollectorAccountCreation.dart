@@ -10,7 +10,8 @@ class CollectorAccountCreation extends StatefulWidget {
   const CollectorAccountCreation({super.key});
 
   @override
-  State<CollectorAccountCreation> createState() => _CollectorAccountCreationState();
+  State<CollectorAccountCreation> createState() =>
+      _CollectorAccountCreationState();
 }
 
 class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
@@ -40,7 +41,8 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   Future<String?> _uploadIdPermitPath(String uid) async {
     if (_idImage == null) return null;
 
-    final path = 'permits/$uid/collector_id_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final path =
+        'permits/$uid/collector_id_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final ref = FirebaseStorage.instance.ref().child(path);
 
     await ref.putFile(
@@ -52,88 +54,101 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   }
 
   Future<void> _submitCollector() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    if (!_formKey.currentState!.validate()) return;
+  if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _loading = true);
+  setState(() => _loading = true);
 
-    try {
-      final permitPath = await _uploadIdPermitPath(user.uid);
-      final userRef = FirebaseFirestore.instance.collection("Users").doc(user.uid);
+  try {
+    final permitPath = await _uploadIdPermitPath(user.uid);
+    final userRef = FirebaseFirestore.instance.collection("Users").doc(user.uid);
 
-      // Read existing so we don’t wipe assignments if user re-submits
-      final existingSnap = await userRef.get();
-      final existing = existingSnap.data() ?? {};
+    final existingSnap = await userRef.get();
+    final existing = existingSnap.data() ?? {};
 
-      final hasCreatedAt = existing.containsKey("createdAt");
-      final hasCreatedAtCaps = existing.containsKey("CreatedAt");
+    final hasCreatedAt = existing.containsKey("createdAt");
+    final hasCreatedAtCaps = existing.containsKey("CreatedAt");
 
-      // Keep existing junkshop assignment if already assigned
-      final existingJunkshopId = (existing["junkshopId"] ?? "").toString();
-      final existingJunkshopName = (existing["junkshopName"] ?? "").toString();
-      final existingJunkshopVerified = existing["junkshopVerified"] == true;
-      final existingJunkshopStatus = (existing["junkshopStatus"] ?? "").toString();
+    final existingJunkshopId = (existing["junkshopId"] ?? "").toString();
+    final existingJunkshopName = (existing["junkshopName"] ?? "").toString();
+    final existingJunkshopVerified = existing["junkshopVerified"] == true;
+    final existingJunkshopStatus = (existing["junkshopStatus"] ?? "").toString();
 
-      // Keep existing admin decisions if already reviewed
-      final existingAdminVerified = existing["adminVerified"] == true;
-      final existingAdminStatus = (existing["adminStatus"] ?? "").toString();
-      final existingAdminReviewedAt = existing["adminReviewedAt"];
+    final existingAdminVerified = existing["adminVerified"] == true;
+    final existingAdminStatus = (existing["adminStatus"] ?? "").toString();
+    final existingAdminReviewedAt = existing["adminReviewedAt"];
 
-      await userRef.set({
-        "UserID": user.uid,
-        "Email": user.email ?? "",
-        "Name": _name.text.trim(),
-        "Roles": "collector",
+    final existingCollectorStatus =
+        (existing["collectorStatus"] ?? "").toString().trim().toLowerCase();
 
-        // ✅ Admin flow (don’t reset if already approved/rejected)
-        "adminVerified": existingAdminVerified,
-        "adminStatus": existingAdminStatus.isNotEmpty ? existingAdminStatus : "pending",
-        "adminReviewedAt": existingAdminReviewedAt,
+    final alreadyDecided = existingCollectorStatus == "approved" || existingCollectorStatus == "rejected";
+    final collectorStatusToSave = alreadyDecided ? existingCollectorStatus : "pending";
 
-        "collectorActive": existing["collectorActive"] ?? false,
+    // ✅ Protect approved collectors: don't downgrade their role on resubmit
+    final existingRole = (existing["Roles"] ?? existing["role"] ?? "user").toString().trim().toLowerCase();
+    final rolesToSave = (collectorStatusToSave == "approved") ? (existingRole.isEmpty ? "collector" : existingRole) : "user";
 
-        // ✅ Junkshop assignment fields (kept, but NOT based on shopName logic)
-        // These are set later by the junkshop after admin approves.
-        "junkshopId": existingJunkshopId,
-        "junkshopName": existingJunkshopName,
-        "junkshopVerified": existingJunkshopVerified,
-        "junkshopStatus": existingJunkshopStatus.isNotEmpty ? existingJunkshopStatus : "unassigned",
+    await userRef.set({
+      "UserID": user.uid,
+      "Email": user.email ?? "",
+      "Name": _name.text.trim(),
 
-        // ✅ ID path saved INSIDE Users doc (no other collection)
-        if (permitPath != null)
-          "kyc": {
-            "permitPath": permitPath,
-            "status": "pending",
-            "submittedAt": FieldValue.serverTimestamp(),
-            "type": "valid_id",
-          }
-        else if (existing["kyc"] != null)
-          "kyc": existing["kyc"],
+      // ✅ user until approved
+      "Roles": rolesToSave,
+      "role": rolesToSave,
 
-        if (!hasCreatedAt) "createdAt": FieldValue.serverTimestamp(),
-        if (!hasCreatedAtCaps) "CreatedAt": FieldValue.serverTimestamp(),
+      // ✅ pending list uses this
+      "collectorStatus": collectorStatusToSave,
 
-        "updatedAt": FieldValue.serverTimestamp(),
-        "isOnline": existing["isOnline"] ?? false,
-        "lastSeen": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      // ✅ admin review fields (do not reset if already decided)
+      "adminVerified": existingAdminVerified,
+      "adminStatus": existingAdminStatus.isNotEmpty ? existingAdminStatus : "pending",
+      "adminReviewedAt": existingAdminReviewedAt,
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Submitted! Pending admin review.")),
-      );
-      Navigator.pop(context);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed: $e")),
-      );
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+      // ✅ inactive until approved
+      "collectorActive": existing["collectorActive"] ?? false,
+
+      // ✅ keep assignment fields
+      "junkshopId": existingJunkshopId,
+      "junkshopName": existingJunkshopName,
+      "junkshopVerified": existingJunkshopVerified,
+      "junkshopStatus": existingJunkshopStatus.isNotEmpty ? existingJunkshopStatus : "unassigned",
+
+      // ✅ KYC
+      if (permitPath != null)
+        "kyc": {
+          "permitPath": permitPath,
+          "status": "pending",
+          "submittedAt": FieldValue.serverTimestamp(),
+          "type": "valid_id",
+        }
+      else if (existing["kyc"] != null)
+        "kyc": existing["kyc"],
+
+      if (!hasCreatedAt) "createdAt": FieldValue.serverTimestamp(),
+      if (!hasCreatedAtCaps) "CreatedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+
+      "isOnline": existing["isOnline"] ?? false,
+      "lastSeen": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Submitted! Pending admin review.")),
+    );
+    Navigator.pop(context);
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Failed: $e")),
+    );
+  } finally {
+    if (mounted) setState(() => _loading = false);
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -152,33 +167,43 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
             children: [
               const Text(
                 "Collector Account",
-                style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 30),
               _buildTextField(_name, "Full Name", Icons.person),
               const SizedBox(height: 30),
-
               ElevatedButton.icon(
                 onPressed: _loading ? null : _pickId,
-                icon: Icon(_idImage == null ? Icons.badge_outlined : Icons.check_circle),
-                label: Text(_idImage == null ? "Upload Valid ID (optional)" : "ID Selected (Tap to Change)"),
+                icon: Icon(
+                    _idImage == null ? Icons.badge_outlined : Icons.check_circle),
+                label: Text(_idImage == null
+                    ? "Upload Valid ID (optional)"
+                    : "ID Selected (Tap to Change)"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white10,
                   foregroundColor: Colors.white,
                   minimumSize: const Size(double.infinity, 50),
                 ),
               ),
-
               const SizedBox(height: 40),
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1FA9A7)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1FA9A7),
+                  ),
                   onPressed: _loading ? null : _submitCollector,
                   child: _loading
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text("Submit (Pending)", style: TextStyle(color: Colors.white)),
+                      : const Text(
+                          "Submit (Pending)",
+                          style: TextStyle(color: Colors.white),
+                        ),
                 ),
               ),
             ],
@@ -188,7 +213,8 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     );
   }
 
-  Widget _buildTextField(TextEditingController controller, String label, IconData icon) {
+  Widget _buildTextField(
+      TextEditingController controller, String label, IconData icon) {
     return TextFormField(
       controller: controller,
       style: const TextStyle(color: Colors.white),

@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
-import 'admin/admin_users_dashboard.dart';
+import 'admin/admin_home_page.dart';
 import 'auth/login_page.dart';
 import 'Collector/collectors_dashboard.dart';
 import 'household/household_dashboard.dart';
@@ -115,7 +115,7 @@ class RoleGate extends StatelessWidget {
                 );
               }
 
-              return const AdminUsersDashboardPage();
+              return const AdminHomePage();
             },
           );
         }
