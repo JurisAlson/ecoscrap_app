@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../screens/analytics_home_tab.dart';
 import '../screens/inventory_screen.dart';
 import '../screens/transaction_screen.dart';
+import '../chat/screens/chat_list_page.dart';
 
 class JunkshopDashboardPage extends StatefulWidget {
   final String shopID;
@@ -59,50 +60,60 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   // - Updates collectorRequests/{collectorUid} status -> junkshopAccepted
   // - Promotes Users/{collectorUid}.role -> collector
   Future<void> _acceptCollector({
-  required String collectorUid,
-  required String shopUid,
-}) async {
-  final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(collectorUid);
-  final userRef = FirebaseFirestore.instance.collection("Users").doc(collectorUid);
+    required String collectorUid,
+    required String shopUid,
+    required String shopName,
+  }) async {
+    final db = FirebaseFirestore.instance;
 
-  await FirebaseFirestore.instance.runTransaction((tx) async {
-    final reqSnap = await tx.get(reqRef);
-    if (!reqSnap.exists) throw Exception("Request not found.");
+    final reqRef = db.collection("collectorRequests").doc(collectorUid);
+    final userRef = db.collection("Users").doc(collectorUid);
 
-    final req = (reqSnap.data() as Map<String, dynamic>?) ?? {};
-    final status = (req["status"] ?? "").toString();
-    final acceptedBy = (req["acceptedByJunkshopUid"] ?? "").toString();
+    await db.runTransaction((tx) async {
+      final reqSnap = await tx.get(reqRef);
+      if (!reqSnap.exists) throw Exception("Request not found.");
 
-    // already accepted
-    if (status == "junkshopAccepted") {
-      if (acceptedBy == shopUid) return;
-      throw Exception("Collector already accepted by another junkshop.");
-    }
+      final req = (reqSnap.data() as Map<String, dynamic>?) ?? {};
+      final status = (req["status"] ?? "").toString();
+      final acceptedBy = (req["acceptedByJunkshopUid"] ?? "").toString();
 
-    // must be adminApproved
-    if (status != "adminApproved") {
-      throw Exception("Collector is not admin approved yet.");
-    }
+      if (status == "junkshopAccepted") {
+        if (acceptedBy == shopUid) return;
+        throw Exception("Collector already accepted by another junkshop.");
+      }
 
-    // 1) lock request
-    tx.set(reqRef, {
-      "status": "junkshopAccepted",
-      "acceptedByJunkshopUid": shopUid,
-      "acceptedAt": FieldValue.serverTimestamp(),
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      if (status != "adminApproved") {
+        throw Exception("Collector is not admin approved yet.");
+      }
 
-    // 2) promote user
-    tx.set(userRef, {
-      "role": "collector",
-      "Roles": "collector",
-      "junkshopVerified": true,
-      "junkshopStatus": "verified",
-      "collectorStatus": "junkshopAccepted",
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  });
-}
+      // 1) lock request
+      tx.set(reqRef, {
+        "status": "junkshopAccepted",
+        "acceptedByJunkshopUid": shopUid,
+        "acceptedAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // 2) promote + ✅ ASSIGN junkshop to collector (THIS FIXES CHAT)
+      tx.set(userRef, {
+        "role": "collector",
+        "Roles": "collector",
+        "junkshopVerified": true,
+        "junkshopStatus": "verified",
+        "collectorStatus": "junkshopAccepted",
+
+        // ✅ REQUIRED for collector app to find its junkshop chat
+        "assignedJunkshopUid": shopUid,
+        "assignedJunkshopName": shopName,
+
+        // optional compatibility
+        "junkshopId": shopUid,
+        "junkshopName": shopName,
+
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
+  }
 
   // ✅ Junkshop REJECTS collector (hide it from THIS junkshop only)
   // This does NOT affect other junkshops.
@@ -122,7 +133,7 @@ Future<void> _rejectCollector({
 }
 
   // ================= COLLECTOR REQUESTS SECTION (collectorRequests) =================
-  Widget _collectorRequestsSection({required String shopId}) {
+  Widget _collectorRequestsSection({required String shopId, required String shopName}) {
     final stream = FirebaseFirestore.instance
         .collection("collectorRequests")
         .where("status", isEqualTo: "adminApproved")
@@ -217,6 +228,7 @@ Future<void> _rejectCollector({
                             await _acceptCollector(
                               collectorUid: collectorUid,
                               shopUid: shopId,
+                              shopName: shopName, 
                             );
                             _toast("Accepted collector: $name");
                           } catch (e) {
@@ -524,8 +536,35 @@ Future<void> _rejectCollector({
                       fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 10),
-                _collectorRequestsSection(shopId: shopId),
+                _collectorRequestsSection(shopId: shopId, shopName: shopName),
               ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ChatListPage(
+                      type: "junkshop",
+                      title: "Collectors",
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.chat_bubble_outline),
+              label: const Text("Chats with Collectors"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
             ),
           ),
 

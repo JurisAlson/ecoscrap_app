@@ -23,9 +23,14 @@ Future<void> grantMeAdminClaimIfOwner(User user) async {
   await user.getIdTokenResult(true); // refresh token
 }
 
-class RoleGate extends StatelessWidget {
+class RoleGate extends StatefulWidget {
   const RoleGate({super.key});
 
+  @override
+  State<RoleGate> createState() => _RoleGateState();
+}
+
+class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
   String _normRole(dynamic raw) {
     final s = (raw ?? "").toString().trim().toLowerCase();
     if (s == "admins" || s == "admin") return "admin";
@@ -40,17 +45,57 @@ class RoleGate extends StatelessWidget {
   }
 
   Future<bool> _hasAdminClaim(User user) async {
-    final token = await user.getIdTokenResult(true); // force refresh
+    final token = await user.getIdTokenResult(true);
     return token.claims?['admin'] == true;
   }
 
   Future<void> _logout(BuildContext context) async {
+    await _setOnline(false); // ✅ set offline on logout
     await FirebaseAuth.instance.signOut();
     if (context.mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginPage()),
         (_) => false,
       );
+    }
+  }
+
+  Future<void> _setOnline(bool online) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    await FirebaseFirestore.instance.collection('Users').doc(uid).set({
+      'isOnline': online,
+      if (!online) 'lastSeen': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
+    // ✅ set online when RoleGate shows
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setOnline(true);
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _setOnline(false);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _setOnline(true);
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _setOnline(false);
     }
   }
 
@@ -87,7 +132,6 @@ class RoleGate extends StatelessWidget {
         final data = docSnap.data!.data() ?? {};
         final role = _normRole(data['Roles'] ?? data['roles'] ?? data['role']);
 
-        // ================= ADMIN =================
         if (role == 'admin') {
           return FutureBuilder<bool>(
             future: _hasAdminClaim(user),
@@ -120,8 +164,6 @@ class RoleGate extends StatelessWidget {
           );
         }
 
-        // ================= COLLECTOR =================
-// ================= COLLECTOR =================
         if (role == 'collector') {
           final ok = data["junkshopVerified"] == true ||
               (data["junkshopStatus"] ?? "").toString().toLowerCase() == "verified";
@@ -141,17 +183,14 @@ class RoleGate extends StatelessWidget {
           return const CollectorsDashboardPage();
         }
 
-        // ================= USER =================
         if (role == 'user') {
           return const DashboardPage();
         }
 
-        // ================= JUNKSHOP =================
         if (role == 'junkshop') {
           final verified = data["verified"] == true;
           final shopName = (data["shopName"] ?? data["name"] ?? "Junkshop").toString();
 
-          // If you want to block unverified junkshops:
           if (!verified) {
             final status = (data["junkshopStatus"] ?? "pending").toString();
             return _RoleErrorPage(
@@ -164,14 +203,12 @@ class RoleGate extends StatelessWidget {
             );
           }
 
-          // Verified -> proceed
           return JunkshopDashboardPage(
             shopID: user.uid,
             shopName: shopName,
           );
         }
 
-        // ================= UNKNOWN =================
         return _RoleErrorPage(
           message:
               "No valid role found for this account.\n\n"
@@ -183,7 +220,6 @@ class RoleGate extends StatelessWidget {
     );
   }
 }
-
 class _RoleErrorPage extends StatelessWidget {
   final String message;
   final String? actionLabel;
@@ -218,3 +254,4 @@ class _RoleErrorPage extends StatelessWidget {
     );
   }
 }
+
