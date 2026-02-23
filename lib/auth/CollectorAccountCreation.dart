@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 
 class CollectorAccountCreation extends StatefulWidget {
   const CollectorAccountCreation({super.key});
@@ -17,7 +17,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
 
-  File? _idImage;
+  PlatformFile? _pickedFile; // optional ID file
   bool _loading = false;
 
   @override
@@ -26,13 +26,52 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     super.dispose();
   }
 
-  Future<void> _pickId() async {
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
+  void _toast(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: error ? Colors.redAccent : Colors.green,
+      ),
     );
-    if (picked == null) return;
-    setState(() => _idImage = File(picked.path));
+  }
+
+  Future<void> _pickIdFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
+      withData: false,
+    );
+
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    if (file.path == null) {
+      _toast("Invalid file. Please try again.", error: true);
+      return;
+    }
+
+    // client-side size limit: 10MB (still enforce on Storage rules)
+    if (file.size > 10 * 1024 * 1024) {
+      _toast("File too large (Max 10MB).", error: true);
+      return;
+    }
+
+    setState(() => _pickedFile = file);
+  }
+
+  String _guessContentType(String ext) {
+    switch (ext) {
+      case 'pdf':
+        return 'application/pdf';
+      case 'png':
+        return 'image/png';
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      default:
+        return 'application/octet-stream';
+    }
   }
 
   Future<void> _submitCollector() async {
@@ -47,43 +86,54 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     try {
       final uid = user.uid;
       final email = user.email ?? "";
-      final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
-      final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(uid);
 
-      // quick check (transaction will re-check)
-      final snap = await userRef.get();
-      final existing0 = snap.data() ?? {};
-      final status0 = (existing0["collectorStatus"] ?? "").toString();
+      final db = FirebaseFirestore.instance;
+      final userRef = db.collection("Users").doc(uid);
+      final reqRef = db.collection("collectorRequests").doc(uid);
+      final kycRef = db.collection("collectorKYC").doc(uid);
 
-      final isActive0 =
-          status0 == "pending" || status0 == "adminApproved" || status0 == "junkshopAccepted";
+      // quick check: block if active
+      final snap0 = await userRef.get();
+      final existing0 = snap0.data() ?? {};
+      final status0 = (existing0["collectorStatus"] ?? "").toString().toLowerCase();
+      final isActive0 = status0 == "pending" || status0 == "adminapproved" || status0 == "junkshopaccepted";
 
       if (isActive0) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("You already have an active request ($status0).")),
-        );
+        _toast("You already have an active request ($status0).", error: true);
         return;
       }
 
       // Upload optional ID
       String? permitPath;
-      if (_idImage != null) {
-        final path = 'permits/$uid/collector_id_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      if (_pickedFile != null) {
+        final ext = (_pickedFile!.extension ?? "").toLowerCase();
+        if (!['jpg', 'jpeg', 'png', 'pdf'].contains(ext)) {
+          _toast("Invalid file type. Use JPG/PNG/PDF only.", error: true);
+          return;
+        }
+
+        final fileName = "collector_id_${DateTime.now().millisecondsSinceEpoch}.$ext";
+        final path = "kyc/$uid/$fileName";
+
         uploadedRef = FirebaseStorage.instance.ref(path);
-        await uploadedRef.putFile(_idImage!, SettableMetadata(contentType: 'image/jpeg'));
+        await uploadedRef.putFile(
+          File(_pickedFile!.path!),
+          SettableMetadata(contentType: _guessContentType(ext)),
+        );
+
         permitPath = path;
       }
 
-      // Write Users + collectorRequests atomically
-      await FirebaseFirestore.instance.runTransaction((tx) async {
+      // Transaction: Users + collectorRequests + collectorKYC (if file uploaded)
+      await db.runTransaction((tx) async {
         final userSnap = await tx.get(userRef);
         final existing = (userSnap.data() as Map<String, dynamic>?) ?? {};
 
-        final status = (existing["collectorStatus"] ?? "").toString();
-        final isActive = status == "pending" || status == "adminApproved" || status == "junkshopAccepted";
+        final status = (existing["collectorStatus"] ?? "").toString().toLowerCase();
+        final isActive = status == "pending" || status == "adminapproved" || status == "junkshopaccepted";
         if (isActive) throw Exception("Already has active request ($status)");
 
+        // Users doc (no permitPath stored here)
         tx.set(userRef, {
           "uid": uid,
           "emailDisplay": email,
@@ -93,50 +143,46 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
           "collectorSubmittedAt": FieldValue.serverTimestamp(),
           "collectorUpdatedAt": FieldValue.serverTimestamp(),
 
-          if (permitPath != null)
-            "collectorKyc": {
-              "permitPath": permitPath,
-              "submittedAt": FieldValue.serverTimestamp(),
-            },
-
           if (!existing.containsKey("createdAt")) "createdAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 
-          tx.set(reqRef, {
-            "publicName": _name.text.trim(),
-            "emailDisplay": email,
+        // collectorRequests (junkshop-visible, NO KYC fields)
+        tx.set(reqRef, {
+          "publicName": _name.text.trim(),
+          "emailDisplay": email,
 
-            "status": "pending",
+          "status": "pending",
+          "submittedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+
+          // routing fields (reset every submit)
+          "acceptedByJunkshopUid": "",
+          "acceptedAt": FieldValue.delete(),
+          "rejectedByJunkshops": [],
+        }, SetOptions(merge: true));
+
+        // collectorKYC (admin-only)
+        if (permitPath != null) {
+          tx.set(kycRef, {
+            "uid": uid,
+            "permitPath": permitPath,
             "submittedAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp(),
-
-            // ✅ ALWAYS reset routing fields (critical for resubmit)
-            "acceptedByJunkshopUid": "",
-            "acceptedAt": FieldValue.delete(),
-            "rejectedByJunkshops": [],
-
-            // ✅ clear stale permit if user didn't upload a new one
-            if (permitPath != null) "permitPath": permitPath else "permitPath": FieldValue.delete(),
           }, SetOptions(merge: true));
-          });
+        }
+      });
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Submitted! Pending admin review.")),
-      );
-      Navigator.pop(context);
+      _toast("Submitted! Pending admin review.");
+      if (mounted) Navigator.pop(context);
     } catch (e) {
-      // rollback file if transaction failed
+      // rollback uploaded file if transaction failed
       if (uploadedRef != null) {
         try {
           await uploadedRef.delete();
         } catch (_) {}
       }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed: $e")),
-      );
+      _toast("Failed: $e", error: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -168,17 +214,24 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
               const SizedBox(height: 30),
               _buildTextField(_name, "Full Name", Icons.person),
               const SizedBox(height: 30),
+
               ElevatedButton.icon(
-                onPressed: _loading ? null : _pickId,
-                icon: Icon(_idImage == null ? Icons.badge_outlined : Icons.check_circle),
-                label: Text(_idImage == null ? "Upload Valid ID (optional)" : "ID Selected (Tap to Change)"),
+                onPressed: _loading ? null : _pickIdFile,
+                icon: Icon(_pickedFile == null ? Icons.badge_outlined : Icons.check_circle),
+                label: Text(
+                  _pickedFile == null
+                      ? "Upload Valid ID (optional) - JPG/PNG/PDF"
+                      : "Selected: ${_pickedFile!.name}",
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white10,
                   foregroundColor: Colors.white,
                   minimumSize: const Size(double.infinity, 50),
                 ),
               ),
+
               const SizedBox(height: 40),
+
               SizedBox(
                 width: double.infinity,
                 height: 50,
