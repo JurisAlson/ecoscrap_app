@@ -104,7 +104,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     return true;
   }
-  String _householdId = "";
+  final String _householdId = "";
   String _distanceText = "";
   String _durationText = "";
   int? _durationValueSec; // optional, for logic

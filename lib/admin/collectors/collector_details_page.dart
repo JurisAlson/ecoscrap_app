@@ -45,7 +45,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     // 3) Transaction: restore user + mark request rejected + delete KYC doc pointer
     await db.runTransaction((tx) async {
       final userSnap = await tx.get(userRef);
-      final userData = (userSnap.data() as Map<String, dynamic>?) ?? {};
+      final userData = userSnap.data() ?? {};
 
       final rawRole = userData["role"] ?? userData["Roles"] ?? "user";
       final rawRoleStr = rawRole.toString().trim();
