@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -93,10 +94,18 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
             }
 
             final data = snap.data!.data() ?? {};
+
+            // docId = uid in your flow, but still safe if uid field exists
             final uid = (data["uid"] ?? snap.data!.id).toString().trim();
             final shopName = (data["shopName"] ?? "Unknown").toString();
             final email = (data["emailDisplay"] ?? data["email"] ?? "").toString();
-            final permitPath = (data["permitPath"] ?? "").toString();
+
+            // ✅ NEW: store only filename in Firestore
+            final permitFileName = (data["permitFileName"] ?? "").toString().trim();
+            final hasPermitFile = data["hasPermitFile"] == true;
+
+            // ✅ Reconstruct storage path (NO permitPath stored)
+            final permitPath = permitFileName.isEmpty ? "" : "permits/$uid/$permitFileName";
 
             return Padding(
               padding: const EdgeInsets.all(24),
@@ -112,14 +121,13 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  if (email.isNotEmpty)
-                    Text(email, style: TextStyle(color: Colors.grey.shade300)),
+                  if (email.isNotEmpty) Text(email, style: TextStyle(color: Colors.grey.shade300)),
                   const SizedBox(height: 6),
                   Text("UID: $uid", style: const TextStyle(color: Colors.white54)),
                   const SizedBox(height: 16),
 
-                  if (permitPath.isEmpty)
-                    const Text("No permit file path.", style: TextStyle(color: Colors.white70))
+                  if (!hasPermitFile || permitFileName.isEmpty)
+                    const Text("No permit file uploaded.", style: TextStyle(color: Colors.white70))
                   else
                     FutureBuilder<Uint8List?>(
                       future: FirebaseStorage.instance.ref(permitPath).getData(10 * 1024 * 1024),

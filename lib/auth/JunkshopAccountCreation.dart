@@ -77,9 +77,18 @@ class _JunkshopAccountCreationPageState
 
     try {
       // 1) Upload permit to Storage (private folder)
-      final fileName = "${DateTime.now().millisecondsSinceEpoch}.$ext";
-      final storagePath = 'permits/$uid/$fileName';
-      storageRef = FirebaseStorage.instance.ref(storagePath);
+      // 1) Upload permit to Storage (private folder) - deterministic name
+    final normalizedExt = (ext == "jpeg") ? "jpg" : ext;
+    final permitFileName = "business_permit.$normalizedExt";
+    final storagePath = "permits/$uid/$permitFileName";
+
+    storageRef = FirebaseStorage.instance.ref(storagePath);
+
+    await storageRef.putFile(
+      File(_pickedFile!.path!),
+      SettableMetadata(contentType: _guessContentType(normalizedExt)),
+    );
+      
 
       await storageRef.putFile(
         File(_pickedFile!.path!),
