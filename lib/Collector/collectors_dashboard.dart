@@ -514,23 +514,6 @@ class _AssignedJunkshopChatTab extends StatelessWidget {
                   "Message your assigned junkshop here. This is your main communication channel.",
                   style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.35),
                 ),
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () async => openChat(),
-                    icon: const Icon(Icons.storefront_outlined),
-                    label: const Text("Chat with Junkshop"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryColor,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -856,21 +839,6 @@ class _CollectorProfileTab extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () async => onOpenJunkshopChat(),
-                    icon: const Icon(Icons.storefront_outlined),
-                    label: const Text("Chat with Junkshop"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1FA9A7),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                ),
 
                 const SizedBox(height: 10),
 
@@ -1304,7 +1272,14 @@ class CollectorChatListPage extends StatelessWidget {
       backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: bgColor,
-        title: const Text("Chats"),
+         title: const Text(
+          "Chats",
+          style: TextStyle(
+            color: Colors.white,       // ← force white text
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
