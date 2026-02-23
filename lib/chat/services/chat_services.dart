@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:io';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class ChatService {
   final _db = FirebaseFirestore.instance;
@@ -11,6 +13,43 @@ class ChatService {
         .collection('messages')
         .orderBy('createdAt', descending: false)
         .snapshots();
+  }
+  
+  Future<void> sendImage({
+    required String chatId,
+    required File file,
+  }) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) throw Exception("Not logged in");
+
+    // create message doc id first so we can use it in the filename
+    final msgRef = _db.collection('chats').doc(chatId).collection('messages').doc();
+    final msgId = msgRef.id;
+
+    final storageRef = FirebaseStorage.instance
+        .ref()
+        .child('chat_images')
+        .child(chatId)
+        .child('$msgId.jpg');
+
+    // upload
+    await storageRef.putFile(file);
+    final imageUrl = await storageRef.getDownloadURL();
+
+    // write message
+    await msgRef.set({
+      'senderId': uid,
+      'type': 'image',
+      'imageUrl': imageUrl,
+      'text': '', // keep for compatibility
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    // update chat preview
+    await _db.collection('chats').doc(chatId).set({
+      'lastMessage': '📷 Photo',
+      'lastMessageAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> sendText({
