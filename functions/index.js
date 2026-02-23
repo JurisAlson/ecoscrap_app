@@ -71,6 +71,81 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
   return { ok: true, uid };
 });
 
+exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+
+  const uid = String(request.data?.uid || "").trim();
+  const decision = String(request.data?.decision || "").trim().toLowerCase(); // approved | rejected
+
+  if (!uid) throw new HttpsError("invalid-argument", "uid required");
+  if (!["approved", "rejected"].includes(decision)) {
+    throw new HttpsError("invalid-argument", "decision must be approved|rejected");
+  }
+
+  const db = admin.firestore();
+  const bucket = admin.storage().bucket();
+  const reqRef = db.collection("permitRequests").doc(uid);
+  const userRef = db.collection("Users").doc(uid);
+
+  const reviewedByUid = request.auth.uid;
+
+  // Read request doc
+  const reqSnap = await reqRef.get();
+  if (!reqSnap.exists) throw new HttpsError("not-found", "permit request not found");
+
+  const reqData = reqSnap.data() || {};
+  const permitPath = String(reqData.permitPath || "").trim();
+
+  // Update Firestore (request + user)
+  const batch = db.batch();
+
+  batch.set(reqRef, {
+    status: decision,
+    approved: decision === "approved",
+    reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+    reviewedByUid,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...(decision === "approved" ? { approvedAt: admin.firestore.FieldValue.serverTimestamp() } : {}),
+  }, { merge: true });
+
+  if (decision === "approved") {
+    batch.set(userRef, {
+      role: "junkshop",
+      Roles: "junkshop",
+      junkshopStatus: "approved",
+      verified: true,
+      verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+      activePermitRequestId: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } else {
+    batch.set(userRef, {
+      role: "user",
+      Roles: "user",
+      junkshopStatus: "rejected",
+      activePermitRequestId: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  await batch.commit();
+
+  // Delete file from Storage after decision
+  if (permitPath) {
+    await bucket.file(permitPath).delete({ ignoreNotFound: true });
+  }
+
+  // Sync claims if approved
+  if (decision === "approved") {
+    const user = await admin.auth().getUser(uid);
+    const existing = user.customClaims || {};
+    await admin.auth().setCustomUserClaims(uid, { ...existing, junkshop: true, collector: false });
+  }
+
+  return { ok: true, uid, decision };
+});
+
 /* ====================================================
    OWNER/ADMIN-ONLY: Grant/Revoke admin claim
 ==================================================== */

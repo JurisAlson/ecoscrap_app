@@ -27,7 +27,7 @@ class _JunkshopAccountCreationPageState
   Future<void> _pickFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png'],
+      allowedExtensions: ['jpg', 'jpeg', 'png'],
     );
 
     if (result != null && result.files.isNotEmpty) {
@@ -66,8 +66,8 @@ class _JunkshopAccountCreationPageState
     }
 
     final ext = (_pickedFile!.extension ?? '').toLowerCase();
-    if (!['pdf', 'jpg', 'jpeg', 'png'].contains(ext)) {
-      _showToast("Invalid file type. Use PDF/JPG/PNG only.", isError: true);
+    if (!['jpg', 'jpeg', 'png'].contains(ext)) {
+      _showToast("Invalid file type. Use JPG/PNG only.", isError: true);
       return;
     }
 
@@ -136,8 +136,6 @@ class _JunkshopAccountCreationPageState
 
   String _guessContentType(String ext) {
     switch (ext) {
-      case 'pdf':
-        return 'application/pdf';
       case 'png':
         return 'image/png';
       case 'jpg':
@@ -203,7 +201,7 @@ class _JunkshopAccountCreationPageState
               ),
               label: Text(
                 _pickedFile == null
-                    ? "Upload Business Permit (PDF/Image)"
+                    ? "Upload Business Permit (Image only: JPG/PNG)"
                     : "Selected: ${_pickedFile!.name}",
               ),
               style: ElevatedButton.styleFrom(
