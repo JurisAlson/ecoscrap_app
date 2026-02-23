@@ -1,11 +1,10 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import '../admin_helpers.dart';
-import '../admin_storage_cache.dart';
 import '../admin_theme_page.dart';
 
 class PermitDetailsPage extends StatefulWidget {
@@ -20,39 +19,17 @@ class PermitDetailsPage extends StatefulWidget {
 class _PermitDetailsPageState extends State<PermitDetailsPage> {
   bool _busy = false;
 
-  FirebaseFunctions get _fn =>
-      FirebaseFunctions.instanceFor(region: "asia-southeast1");
+  FirebaseFunctions get _fn => FirebaseFunctions.instanceFor(region: "asia-southeast1");
 
-  Future<void> _callVerifyJunkshop(String uid) async {
-    final callable = _fn.httpsCallable("verifyJunkshop");
-    await callable.call({"uid": uid});
+  Future<void> _reviewPermit(String uid, String decision) async {
+    final callable = _fn.httpsCallable("reviewPermitRequest");
+    await callable.call({
+      "uid": uid,
+      "decision": decision, // "approved" or "rejected"
+    });
   }
 
-  Future<void> _deleteStorageIfAny(String path) async {
-    if (path.trim().isEmpty) return;
-    try {
-      await FirebaseStorage.instance.ref(path).delete();
-    } catch (_) {}
-  }
-
-  /// ✅ Clean revert: do NOT touch user profile fields.
-  /// Only reset role + tracking fields so user remains a normal user.
-  Future<void> _revertApplicantToUserClean(String uid) async {
-    await FirebaseFirestore.instance.collection("Users").doc(uid).set({
-      // Keep the user as a user
-      "role": "user",
-      // If your app still reads this legacy field, keep it too:
-      "Roles": "user",
-
-      // Tracking fields only
-      "junkshopStatus": "rejected", // pending|approved|rejected
-      "activePermitRequestId": FieldValue.delete(),
-
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  void _showImageDialog(String url) {
+  void _showBytesDialog(Uint8List bytes) {
     showDialog(
       context: context,
       barrierColor: Colors.black.withOpacity(0.85),
@@ -67,7 +44,7 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
                 maxScale: 4,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),
-                  child: Image.network(url, fit: BoxFit.contain),
+                  child: Image.memory(bytes, fit: BoxFit.contain),
                 ),
               ),
             ),
@@ -142,30 +119,31 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
                   const SizedBox(height: 16),
 
                   if (permitPath.isEmpty)
-                    const Text("No permit image path.", style: TextStyle(color: Colors.white70))
+                    const Text("No permit file path.", style: TextStyle(color: Colors.white70))
                   else
-                    FutureBuilder<String>(
-                      future: AdminStorageCache.url(permitPath),
-                      builder: (context, urlSnap) {
-                        if (urlSnap.connectionState == ConnectionState.waiting) {
+                    FutureBuilder<Uint8List?>(
+                      future: FirebaseStorage.instance.ref(permitPath).getData(10 * 1024 * 1024),
+                      builder: (context, bytesSnap) {
+                        if (bytesSnap.connectionState == ConnectionState.waiting) {
                           return const SizedBox(
                             height: 220,
                             child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
                           );
                         }
-                        if (urlSnap.hasError || !urlSnap.hasData) {
+                        if (bytesSnap.hasError || bytesSnap.data == null) {
                           return Text(
-                            "Image failed: ${urlSnap.error}",
+                            "File failed to load: ${bytesSnap.error}",
                             style: const TextStyle(color: Colors.redAccent),
                           );
                         }
-                        final url = urlSnap.data!;
+
+                        final bytes = bytesSnap.data!;
                         return GestureDetector(
-                          onTap: () => _showImageDialog(url),
+                          onTap: () => _showBytesDialog(bytes),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(14),
-                            child: Image.network(
-                              url,
+                            child: Image.memory(
+                              bytes,
                               height: 220,
                               width: double.infinity,
                               fit: BoxFit.cover,
@@ -209,35 +187,7 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
-                                    final reviewedBy = FirebaseAuth.instance.currentUser?.uid;
-
-                                    // ✅ Use a batch so request + user update is consistent
-                                    final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
-                                    final batch = FirebaseFirestore.instance.batch();
-
-                                    batch.set(widget.requestRef, {
-                                      "status": "approved",
-                                      "approved": true,
-                                      "reviewedAt": FieldValue.serverTimestamp(),
-                                      "reviewedByUid": reviewedBy,
-                                      "updatedAt": FieldValue.serverTimestamp(),
-                                    }, SetOptions(merge: true));
-
-                                    batch.set(userRef, {
-                                      "role": "junkshop",
-                                      "Roles": "junkshop", // keep if legacy
-                                      "junkshopStatus": "approved",
-                                      "activePermitRequestId": FieldValue.delete(), // optional but clean
-                                      "updatedAt": FieldValue.serverTimestamp(),
-                                    }, SetOptions(merge: true));
-
-                                    await batch.commit();
-
-                                    // Optional: call CF after commit (or before—your choice)
-                                    if (uid.isNotEmpty) {
-                                      await _callVerifyJunkshop(uid);
-                                    }
-
+                                    await _reviewPermit(uid, "approved");
                                     if (mounted) AdminHelpers.toast(context, "Approved $shopName");
                                     if (mounted) Navigator.pop(context);
                                   } catch (e) {
@@ -267,27 +217,8 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
-                                    final reviewedBy = FirebaseAuth.instance.currentUser?.uid;
-
-                                    // ✅ Keep the request doc for history (do NOT delete)
-                                    await widget.requestRef.set({
-                                      "status": "rejected",
-                                      "approved": false,
-                                      "reviewedAt": FieldValue.serverTimestamp(),
-                                      "reviewedByUid": reviewedBy,
-                                      "updatedAt": FieldValue.serverTimestamp(),
-                                      // optional:
-                                      // "rejectionReason": "Incomplete documents",
-                                    }, SetOptions(merge: true));
-
-                                    // Optional: delete the permit file on reject
-                                    await _deleteStorageIfAny(permitPath);
-
-                                    if (uid.isNotEmpty) {
-                                      await _revertApplicantToUserClean(uid);
-                                    }
-
-                                    if (mounted) AdminHelpers.toast(context, "Rejected. User restored.");
+                                    await _reviewPermit(uid, "rejected");
+                                    if (mounted) AdminHelpers.toast(context, "Rejected. File deleted.");
                                     if (mounted) Navigator.pop(context);
                                   } catch (e) {
                                     if (mounted) AdminHelpers.toast(context, "Reject failed: $e");
@@ -301,36 +232,6 @@ class _PermitDetailsPageState extends State<PermitDetailsPage> {
                   ),
 
                   const SizedBox(height: 12),
-
-                  Center(
-                    child: TextButton.icon(
-                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                      label: const Text("Delete Request", style: TextStyle(color: Colors.redAccent)),
-                      onPressed: _busy
-                          ? null
-                          : () async {
-                              final ok = await AdminHelpers.confirm<bool>(
-                                context: context,
-                                title: "Delete request?",
-                                body: "This deletes the request document only.",
-                                yesValue: true,
-                                yesLabel: "Delete",
-                              );
-                              if (ok != true) return;
-
-                              setState(() => _busy = true);
-                              try {
-                                await widget.requestRef.delete();
-                                if (mounted) AdminHelpers.toast(context, "Deleted request");
-                                if (mounted) Navigator.pop(context);
-                              } catch (e) {
-                                if (mounted) AdminHelpers.toast(context, "Delete failed: $e");
-                              } finally {
-                                if (mounted) setState(() => _busy = false);
-                              }
-                            },
-                    ),
-                  ),
                 ],
               ),
             );

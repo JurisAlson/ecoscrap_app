@@ -15,10 +15,10 @@ Future<void> grantMeAdminClaimIfOwner(User user) async {
   final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
       .httpsCallable("setAdminClaim");
 
-  await callable.call({
-    "uid": user.uid,
-    "admin": true,
-  });
+    await callable.call({
+      "uid": user.uid,
+      "makeAdmin": true,
+    });
 
   await user.getIdTokenResult(true); // refresh token
 }
