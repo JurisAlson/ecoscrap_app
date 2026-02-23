@@ -1,21 +1,23 @@
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../services/chat_services.dart';
 
 class ChatPage extends StatefulWidget {
   final String chatId;
   final String title;
-  final String otherUserId; // ✅ ADD THIS
+  final String otherUserId;
 
   const ChatPage({
     super.key,
     required this.chatId,
     required this.title,
-    required this.otherUserId, // ✅ ADD THIS
+    required this.otherUserId,
   });
 
   @override
@@ -29,6 +31,7 @@ class _ChatPageState extends State<ChatPage> {
   final _chat = ChatService();
   final _controller = TextEditingController();
   final _scroll = ScrollController();
+  final _picker = ImagePicker();
 
   String? get _me => FirebaseAuth.instance.currentUser?.uid;
 
@@ -51,6 +54,24 @@ class _ChatPageState extends State<ChatPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Send failed: $e")),
+      );
+    }
+  }
+
+  Future<void> _pickAndSendImage() async {
+    final picked = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+    );
+    if (picked == null) return;
+
+    try {
+      await _chat.sendImage(chatId: widget.chatId, file: File(picked.path));
+      _jumpToBottomSoon();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Image send failed: $e")),
       );
     }
   }
@@ -87,16 +108,12 @@ class _ChatPageState extends State<ChatPage> {
         backgroundColor: bgColor,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
-
         title: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('users')
+              .collection('Users') // ✅ capital U (matches your app)
               .doc(widget.otherUserId)
               .snapshots(),
           builder: (context, snap) {
-            final otherName =
-                widget.title.trim().isEmpty ? "User" : widget.title.trim();
-
             bool isOnline = false;
             Timestamp? lastSeen;
 
@@ -190,21 +207,25 @@ class _ChatPageState extends State<ChatPage> {
                         final text = (data['text'] ?? '').toString();
                         final senderId = (data['senderId'] ?? '').toString();
                         final createdAt = data['createdAt'];
+                        final type = (data['type'] ?? 'text').toString();
+                        final imageUrl = (data['imageUrl'] ?? '').toString();
 
                         final isMe = me != null && senderId == me;
 
-                        // ✅ check previous message sender
-                        final prevSenderId = (i > 0) ? (docs[i - 1].data()['senderId'] ?? '').toString() : null;
+                        final prevSenderId = (i > 0)
+                            ? (docs[i - 1].data()['senderId'] ?? '').toString()
+                            : null;
 
-                        // ✅ show name only when sender changes (start of group), and not me
                         final showName = !isMe && (i == 0 || senderId != prevSenderId);
 
                         return _MessageBubble(
+                          type: type,
+                          imageUrl: imageUrl,
                           text: text,
                           isMe: isMe,
                           timeText: _formatTime(createdAt),
                           otherName: otherName,
-                          showName: showName, // ✅ new
+                          showName: showName,
                         );
                       },
                     );
@@ -221,7 +242,7 @@ class _ChatPageState extends State<ChatPage> {
                     child: BackdropFilter(
                       filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
                       child: Container(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+                        padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.06),
                           border: Border.all(color: Colors.white.withOpacity(0.08)),
@@ -229,6 +250,10 @@ class _ChatPageState extends State<ChatPage> {
                         ),
                         child: Row(
                           children: [
+                            IconButton(
+                              onPressed: _pickAndSendImage,
+                              icon: const Icon(Icons.image_outlined, color: Colors.white70),
+                            ),
                             Expanded(
                               child: TextField(
                                 controller: _controller,
@@ -285,18 +310,22 @@ class _ChatPageState extends State<ChatPage> {
 
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
+    required this.type,
+    required this.imageUrl,
     required this.text,
     required this.isMe,
     required this.timeText,
     required this.otherName,
-    required this.showName, // ✅ add
+    required this.showName,
   });
 
+  final String type;
+  final String imageUrl;
   final String text;
   final bool isMe;
   final String timeText;
   final String otherName;
-  final bool showName; // ✅ add
+  final bool showName;
 
   static const Color primaryColor = Color(0xFF1FA9A7);
 
@@ -314,14 +343,48 @@ class _MessageBubble extends StatelessWidget {
     final bubbleColor =
         isMe ? primaryColor.withOpacity(0.95) : Colors.white.withOpacity(0.10);
 
+    Widget content;
+    if (type == 'image' && imageUrl.isNotEmpty) {
+      content = ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Image.network(
+          imageUrl,
+          width: 240,
+          height: 180,
+          fit: BoxFit.cover,
+          loadingBuilder: (context, child, progress) {
+            if (progress == null) return child;
+            return const SizedBox(
+              width: 240,
+              height: 180,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          },
+          errorBuilder: (_, __, ___) => const SizedBox(
+            width: 240,
+            height: 180,
+            child: Center(
+              child: Text(
+                "Failed to load image",
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+          ),
+        ),
+      );
+    } else {
+      content = Text(
+        text,
+        style: const TextStyle(color: Colors.white, height: 1.25),
+      );
+    }
+
     return Align(
       alignment: align,
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment:
-            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          // ✅ show name ONLY if it's the first message in a group AND it's not me
           if (!isMe && showName)
             Padding(
               padding: const EdgeInsets.only(left: 6, bottom: 4),
@@ -339,7 +402,7 @@ class _MessageBubble extends StatelessWidget {
             constraints: BoxConstraints(
               maxWidth: MediaQuery.of(context).size.width * 0.78,
             ),
-            margin: EdgeInsets.only(bottom: showName ? 10 : 6), // optional spacing
+            margin: EdgeInsets.only(bottom: showName ? 10 : 6),
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
             decoration: BoxDecoration(
               color: bubbleColor,
@@ -350,14 +413,11 @@ class _MessageBubble extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  text,
-                  style: const TextStyle(color: Colors.white, height: 1.25),
-                ),
+                content,
                 const SizedBox(height: 6),
                 Align(
                   alignment: Alignment.centerRight,
-                  widthFactor: 1, // keeps bubble tight
+                  widthFactor: 1,
                   child: Text(
                     timeText,
                     style: TextStyle(
