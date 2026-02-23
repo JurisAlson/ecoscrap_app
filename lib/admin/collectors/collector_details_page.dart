@@ -1,7 +1,7 @@
 import 'dart:ui';
 
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import '../admin_helpers.dart';
@@ -19,16 +19,6 @@ class CollectorDetailsPage extends StatefulWidget {
 class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   bool _busy = false;
 
-  /// ✅ Admin rejects:
-  /// - deletes KYC file if any (from Storage)
-  /// - deletes collectorKYC/{uid} doc (removes pointer)
-  /// - restores Users/{uid} to "user" (keeps base profile)
-  /// - marks collectorRequests/{uid} as rejected (keeps history)
-  ///
-  /// ✅ User can resubmit again because:
-  /// - Users/{uid}.collectorStatus becomes "rejected"
-  /// - collectorRequests/{uid}.status becomes "rejected"
-  /// - acceptedByJunkshopUid reset to ""
   Future<void> _rejectCollectorAndRestoreUser(String uid) async {
     final db = FirebaseFirestore.instance;
 
@@ -36,24 +26,24 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final reqRef = db.collection("collectorRequests").doc(uid);
     final kycRef = db.collection("collectorKYC").doc(uid);
 
-    // 1) Read KYC doc to get permitPath (admin-only)
-    String permitPath = "";
+    // 1) Read KYC doc to get ONLY filename (admin-only)
+    String kycFileName = "";
     try {
       final kycSnap = await kycRef.get();
       final kycData = kycSnap.data() ?? {};
-      permitPath = (kycData["permitPath"] ?? "").toString();
+      kycFileName = (kycData["kycFileName"] ?? "").toString();
     } catch (_) {}
 
-    // 2) Delete uploaded KYC file (if any)
-    if (permitPath.trim().isNotEmpty) {
+    // 2) Delete uploaded KYC file (if any) using reconstructed path
+    if (kycFileName.trim().isNotEmpty) {
+      final path = "kyc/$uid/$kycFileName";
       try {
-        await FirebaseStorage.instance.ref(permitPath).delete();
+        await FirebaseStorage.instance.ref(path).delete();
       } catch (_) {}
     }
 
     // 3) Transaction: restore user + mark request rejected + delete KYC doc pointer
     await db.runTransaction((tx) async {
-      // Read user to preserve role safely (do not downgrade admin/junkshop)
       final userSnap = await tx.get(userRef);
       final userData = (userSnap.data() as Map<String, dynamic>?) ?? {};
 
@@ -61,46 +51,35 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       final rawRoleStr = rawRole.toString().trim();
       final rawLower = rawRoleStr.toLowerCase();
 
-      // If user was collector (or blank), restore to user; otherwise keep exact role
       final roleToSave = (rawLower == "collector" || rawRoleStr.isEmpty) ? "user" : rawRoleStr;
 
-      // ✅ Restore clean user state (keeps base profile fields)
       tx.set(userRef, {
         "collectorStatus": "rejected",
         "collectorSubmittedAt": FieldValue.delete(),
         "collectorUpdatedAt": FieldValue.delete(),
         "collectorKyc": FieldValue.delete(),
 
-        // remove junkshop verification flags if they existed
         "junkshopVerified": FieldValue.delete(),
         "junkshopStatus": FieldValue.delete(),
 
-        // keep role safe
         "role": roleToSave,
         "Roles": roleToSave,
 
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      // ✅ Keep request for history + allow resubmit
       tx.set(reqRef, {
         "status": "rejected",
         "acceptedByJunkshopUid": "",
         "acceptedAt": FieldValue.delete(),
         "rejectedByJunkshops": [],
-
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      // ✅ Remove KYC pointer doc (so next submit is clean)
       tx.delete(kycRef);
     });
   }
 
-  /// ✅ Admin approves (NEW FLOW):
-  /// - collectorRequests/{uid} => status: adminApproved
-  /// - Users/{uid} => collectorStatus: adminApproved
-  /// - DOES NOT promote role to collector (junkshop does final step)
   Future<void> _adminApprove(String uid) async {
     final db = FirebaseFirestore.instance;
     final reqRef = db.collection("collectorRequests").doc(uid);
@@ -192,10 +171,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
             final name = (data["publicName"] ?? "Collector").toString();
             final email = (data["emailDisplay"] ?? "").toString();
             final status = (data["status"] ?? "").toString();
-
             final isPending = status.toLowerCase() == "pending";
 
-            // ✅ KYC is now stored in collectorKYC/{uid} (admin-only)
             final kycRef = FirebaseFirestore.instance.collection("collectorKYC").doc(uid);
 
             final imageBlock = FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -209,11 +186,13 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                 }
 
                 final kycData = kycSnap.data?.data() ?? {};
-                final permitPath = (kycData["permitPath"] ?? "").toString();
+                final kycFileName = (kycData["kycFileName"] ?? "").toString();
 
-                if (permitPath.isEmpty) {
+                if (kycFileName.isEmpty) {
                   return const Text("No ID file uploaded.", style: TextStyle(color: Colors.white70));
                 }
+
+                final permitPath = "kyc/$uid/$kycFileName";
 
                 return FutureBuilder<String>(
                   future: AdminStorageCache.url(permitPath),
@@ -232,20 +211,16 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                     }
 
                     final url = s.data!;
-                    // If it's a PDF, Image.network won't render. Basic UX:
-                    final isPdf = permitPath.toLowerCase().endsWith(".pdf");
+                    final isPdf = kycFileName.toLowerCase().endsWith(".pdf");
 
                     if (isPdf) {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            "KYC file is a PDF.",
-                            style: TextStyle(color: Colors.white70),
-                          ),
+                          const Text("KYC file is a PDF.", style: TextStyle(color: Colors.white70)),
                           const SizedBox(height: 10),
                           ElevatedButton.icon(
-                            onPressed: () => _showImageDialog(url), // still opens (browser will handle pdf)
+                            onPressed: () => _showImageDialog(url),
                             icon: const Icon(Icons.open_in_new),
                             label: const Text("Open PDF"),
                           ),
@@ -299,11 +274,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       padding: EdgeInsets.only(bottom: 10),
                       child: Row(
                         children: [
-                          SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
+                          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                           SizedBox(width: 10),
                           Text("Processing...", style: TextStyle(color: Colors.white)),
                         ],
