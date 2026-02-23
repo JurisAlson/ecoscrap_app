@@ -993,7 +993,7 @@ class _CollectorLogsHome extends StatelessWidget {
                     final docs = resumeSnap.data?.docs ?? [];
                     if (docs.isEmpty) return const SizedBox.shrink();
 
-                    final doc = docs.first as QueryDocumentSnapshot;
+                    final doc = docs.first;
                     final data = doc.data() as Map<String, dynamic>;
 
                     final status = (data['status'] ?? '').toString().toLowerCase();

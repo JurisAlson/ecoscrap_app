@@ -3,11 +3,7 @@ const { logger } = require("firebase-functions/v2");
 const crypto = require("crypto");
 
 const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
-const {
-  onDocumentCreated,
-  onDocumentUpdated,
-  onDocumentWritten,
-} = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 admin.initializeApp();
@@ -71,6 +67,13 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
   return { ok: true, uid };
 });
 
+/* ====================================================
+   ADMIN-ONLY: Review junkshop permit request
+   - updates permitRequests/{uid}
+   - updates Users/{uid}
+   - deletes permit file immediately after decision
+   - NEW: permit file path is reconstructed from permitFileName
+==================================================== */
 exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
   if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
@@ -95,38 +98,73 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
   if (!reqSnap.exists) throw new HttpsError("not-found", "permit request not found");
 
   const reqData = reqSnap.data() || {};
-  const permitPath = String(reqData.permitPath || "").trim();
+
+  // ✅ NEW: only store filename (like collectorKYC)
+  const permitFileName = String(reqData.permitFileName || "").trim();
+  const hasPermitFile = reqData.hasPermitFile === true;
+
+  // ✅ Reconstruct path (we do NOT rely on stored full path)
+  const permitPath = (hasPermitFile && permitFileName) ? `permits/${uid}/${permitFileName}` : "";
 
   // Update Firestore (request + user)
   const batch = db.batch();
 
-  batch.set(reqRef, {
-    status: decision,
-    approved: decision === "approved",
-    reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
-    reviewedByUid,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    ...(decision === "approved" ? { approvedAt: admin.firestore.FieldValue.serverTimestamp() } : {}),
-  }, { merge: true });
+  batch.set(
+    reqRef,
+    {
+      status: decision,
+      approved: decision === "approved",
+      reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+      reviewedByUid,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(decision === "approved"
+        ? { approvedAt: admin.firestore.FieldValue.serverTimestamp() }
+        : {}),
+      // optional: mark file already handled
+      permitExpired: true,
+      permitDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // remove pointer after decision so admin can't open later
+      permitFileName: admin.firestore.FieldValue.delete(),
+      hasPermitFile: false,
+    },
+    { merge: true }
+  );
 
   if (decision === "approved") {
-    batch.set(userRef, {
-      role: "junkshop",
-      Roles: "junkshop",
-      junkshopStatus: "approved",
-      verified: true,
-      verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-      activePermitRequestId: admin.firestore.FieldValue.delete(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    batch.set(
+      userRef,
+      {
+        role: "junkshop",
+        Roles: "junkshop",
+        junkshopStatus: "approved",
+        verified: true,
+        verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        activePermitRequestId: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
   } else {
-    batch.set(userRef, {
-      role: "user",
-      Roles: "user",
-      junkshopStatus: "rejected",
-      activePermitRequestId: admin.firestore.FieldValue.delete(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    batch.set(
+      userRef,
+      {
+        role: "user",
+        Roles: "user",
+        junkshopStatus: "rejected",
+        activePermitRequestId: admin.firestore.FieldValue.serverTimestamp(), // <-- remove if you don’t use it
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    // If you want to always clear it like you did before, use this instead:
+    // batch.set(userRef, {
+    //   role: "user",
+    //   Roles: "user",
+    //   junkshopStatus: "rejected",
+    //   activePermitRequestId: admin.firestore.FieldValue.delete(),
+    //   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // }, { merge: true });
   }
 
   await batch.commit();
@@ -193,7 +231,6 @@ exports.syncRoleClaims = onDocumentWritten(
       const beforeRole = String(before.Roles || before.roles || "").trim().toLowerCase();
       let role = String(after.Roles || after.roles || "").trim().toLowerCase();
 
-      // normalize
       if (role === "users") role = "user";
       if (role === "admins") role = "admin";
       if (role === "collectors") role = "collector";
@@ -235,10 +272,6 @@ async function deleteSubcollection(db, parentRef, subName, batchSize = 250) {
 
 /* ====================================================
    ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
-   - Deletes Users/{uid}
-   - Deletes Users/{uid}/inventory + Users/{uid}/transaction
-   - Deletes permitRequests
-   - Deletes legacy Junkshop/{uid} if still present (safe during migration)
 ==================================================== */
 exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
@@ -252,23 +285,18 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
   try {
     const userRef = db.collection("Users").doc(uid);
 
-    // delete subcollections first
     await deleteSubcollection(db, userRef, "inventory");
     await deleteSubcollection(db, userRef, "transaction");
 
-    // delete Users profile
     await userRef.delete().catch(() => null);
-
-    // legacy cleanup (optional)
     await db.collection("Junkshop").doc(uid).delete().catch(() => null);
 
-    // delete permit requests (docs)
+    // delete permitRequests docs (legacy cleanup)
     const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
     const batch = db.batch();
     permits.docs.forEach((doc) => batch.delete(doc.ref));
     await batch.commit().catch(() => null);
 
-    // delete auth user
     await admin.auth().deleteUser(uid);
 
     return { ok: true, uid };
@@ -279,412 +307,238 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
 });
 
 /* ====================================================
-   KEYS
+   COLLECTOR KYC RETENTION (Option 4)
+   Storage: kyc/{uid}/{kycFileName}
+   Firestore: collectorKYC/{uid}
+   Policy:
+     - pending:         delete after 7 days
+     - adminApproved:   delete after 24 hours
+     - rejected:        delete after 24 hours
+     - junkshopAccepted: delete after 1 hour
 ==================================================== */
-function getKeysOrThrow() {
-  const aesKeyB64 = process.env.PII_AES_KEY_B64;
-  const hmacKeyB64 = process.env.PII_HMAC_KEY_B64;
 
-  if (!aesKeyB64 || !hmacKeyB64) {
-    throw new Error("Missing encryption secrets (PII_AES_KEY_B64 / PII_HMAC_KEY_B64).");
-  }
+// ---- time helpers (future timestamps)
+function hoursFromNow(hours) {
+  return admin.firestore.Timestamp.fromDate(new Date(Date.now() + hours * 60 * 60 * 1000));
+}
+function daysFromNow(days) {
+  return admin.firestore.Timestamp.fromDate(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
+}
 
-  const AES_KEY = Buffer.from(aesKeyB64, "base64");
-  const HMAC_KEY = Buffer.from(hmacKeyB64, "base64");
-
-  if (AES_KEY.length !== 32) throw new Error("AES key must be 32 bytes (AES-256).");
-  if (HMAC_KEY.length < 32) throw new Error("HMAC key too short (recommend >= 32 bytes).");
-
-  return { AES_KEY, HMAC_KEY };
+// ---- retention policy (short because sensitive)
+function computeCollectorKycDeleteAfter(status) {
+  const s = String(status || "").trim().toLowerCase();
+  if (s === "pending") return daysFromNow(7);
+  if (s === "adminapproved") return hoursFromNow(24);
+  if (s === "rejected") return hoursFromNow(24);
+  if (s === "junkshopaccepted") return hoursFromNow(1);
+  return daysFromNow(7);
 }
 
 /* ====================================================
-   NORMALIZERS
+   A) Ensure collectorKYC has defaults (status/deleteAfter/expired)
+   Runs whenever collectorKYC/{uid} is written
 ==================================================== */
-function normalizeText(v) {
-  return String(v).trim();
-}
-function normalizeEmail(v) {
-  return String(v).trim().toLowerCase();
-}
-function normalizeMoney(v) {
-  if (v === undefined || v === null) throw new Error("Missing money value");
-
-  if (typeof v === "number") {
-    if (!Number.isFinite(v)) throw new Error("Invalid money number");
-    return v.toFixed(2);
-  }
-
-  if (typeof v === "string") {
-    const cleaned = v.trim().replace(/[^\d.-]/g, "");
-    const num = Number(cleaned);
-    if (!Number.isFinite(num)) throw new Error(`Invalid money string: "${v}"`);
-    return num.toFixed(2);
-  }
-
-  throw new Error(`Unsupported money type: ${typeof v}`);
-}
-
-/* ====================================================
-   ENCRYPTION HELPERS
-==================================================== */
-function encryptNormalizedToFields(normalized, AES_KEY, HMAC_KEY, fieldPrefix) {
-  const nonce = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", AES_KEY, nonce);
-
-  const ciphertext = Buffer.concat([cipher.update(normalized, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-
-  const lookup = crypto.createHmac("sha256", HMAC_KEY).update(normalized).digest("hex");
-
-  return {
-    [`${fieldPrefix}_enc`]: ciphertext.toString("base64"),
-    [`${fieldPrefix}_nonce`]: nonce.toString("base64"),
-    [`${fieldPrefix}_tag`]: tag.toString("base64"),
-    [`${fieldPrefix}_lookup`]: lookup,
-    piiVersion: 1,
-    [`${fieldPrefix}SetAt`]: admin.firestore.FieldValue.serverTimestamp(),
-  };
-}
-
-function encryptNormalizedToFieldsNoTimestamp(normalized, AES_KEY, HMAC_KEY, fieldPrefix) {
-  const nonce = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", AES_KEY, nonce);
-
-  const ciphertext = Buffer.concat([cipher.update(normalized, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-
-  const lookup = crypto.createHmac("sha256", HMAC_KEY).update(normalized).digest("hex");
-
-  return {
-    [`${fieldPrefix}_enc`]: ciphertext.toString("base64"),
-    [`${fieldPrefix}_nonce`]: nonce.toString("base64"),
-    [`${fieldPrefix}_tag`]: tag.toString("base64"),
-    [`${fieldPrefix}_lookup`]: lookup,
-  };
-}
-
-function encryptStringToFields(plainText, AES_KEY, HMAC_KEY, fieldPrefix) {
-  return encryptNormalizedToFields(normalizeText(plainText), AES_KEY, HMAC_KEY, fieldPrefix);
-}
-function encryptEmailToFields(email, AES_KEY, HMAC_KEY) {
-  return encryptNormalizedToFields(normalizeEmail(email), AES_KEY, HMAC_KEY, "shopEmail");
-}
-function encryptMoneyToFields(value, AES_KEY, HMAC_KEY, fieldPrefix) {
-  return encryptNormalizedToFields(normalizeMoney(value), AES_KEY, HMAC_KEY, fieldPrefix);
-}
-function encryptMoneyToFieldsForArray(value, AES_KEY, HMAC_KEY, fieldPrefix) {
-  return encryptNormalizedToFieldsNoTimestamp(normalizeMoney(value), AES_KEY, HMAC_KEY, fieldPrefix);
-}
-
-/* ====================================================
-   1) AUTO-ENCRYPT Users.email (only if Roles=junkshop)
-==================================================== */
-exports.encryptJunkshopEmailOnWrite = onDocumentWritten(
-  {
-    document: "Users/{uid}",
-    region: "asia-southeast1",
-    secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
-  },
+exports.ensureCollectorKycDefaults = onDocumentWritten(
+  { document: "collectorKYC/{uid}", region: "asia-southeast1" },
   async (event) => {
     const afterSnap = event.data?.after;
     if (!afterSnap?.exists) return;
 
-    const after = afterSnap.data();
+    const after = afterSnap.data() || {};
     const uid = event.params.uid;
 
-    const role = String(after?.Roles || after?.roles || "").toLowerCase();
-    if (role !== "junkshop") return;
+    const kycFileName = String(after.kycFileName || "").trim();
+    if (!kycFileName) return;
 
-    const hasPlainEmail = typeof after?.email === "string" && after.email.trim() !== "";
-    const alreadyEncrypted = !!after?.shopEmail_enc;
-    if (!hasPlainEmail || alreadyEncrypted) return;
+    if (after.expired === true) return;
 
-    try {
-      const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
-      const encFields = encryptEmailToFields(after.email, AES_KEY, HMAC_KEY);
+    const status = String(after.status || "pending").trim().toLowerCase();
+    const needsStatus = after.status == null;
+    const needsDeleteAfter = after.deleteAfter == null;
 
-      await afterSnap.ref.update({
-        ...encFields,
-        email: admin.firestore.FieldValue.delete(),
-      });
+    if (!needsStatus && !needsDeleteAfter && after.expired != null) return;
 
-      logger.info("Encrypted junkshop email on Users doc", { uid });
-    } catch (err) {
-      logger.error("Encryption failed (Users email)", { uid, message: err?.message, stack: err?.stack });
-    }
+    const update = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (needsStatus) update.status = status;
+    if (needsDeleteAfter) update.deleteAfter = computeCollectorKycDeleteAfter(status);
+    if (after.expired == null) update.expired = false;
+
+    await afterSnap.ref.set(update, { merge: true });
+    logger.info("collectorKYC defaults ensured", { uid, update });
   }
 );
 
 /* ====================================================
-   2) AUTO-ENCRYPT Transaction customerName + total + items[].subtotal
-   ✅ Keeps UI fields (avoid Walk-in + ₱0.00)
+   B) When collectorRequests/{uid}.status changes,
+      sync collectorKYC/{uid}.status + deleteAfter
 ==================================================== */
-exports.encryptTransactionCustomerOnWrite = onDocumentWritten(
-  {
-    document: "Users/{uid}/transaction/{txId}",
-    region: "asia-southeast1",
-    secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
-  },
+exports.syncCollectorKycFromRequestStatus = onDocumentUpdated(
+  { document: "collectorRequests/{uid}", region: "asia-southeast1" },
   async (event) => {
-    const afterSnap = event.data?.after;
-    if (!afterSnap?.exists) return;
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    const uid = event.params.uid;
 
-    const after = afterSnap.data();
-    const { uid, txId } = event.params;
+    const beforeStatus = String(before.status || "").trim().toLowerCase();
+    const afterStatus = String(after.status || "").trim().toLowerCase();
+    if (!afterStatus || beforeStatus === afterStatus) return;
 
-    const hasTotalAmount = after?.totalAmount !== undefined && after?.totalAmount !== null;
-    const hasTotalPrice = after?.totalPrice !== undefined && after?.totalPrice !== null;
+    const allowed = new Set(["pending", "adminapproved", "rejected", "junkshopaccepted"]);
+    if (!allowed.has(afterStatus)) return;
 
-    const updatePayload = {};
+    const db = admin.firestore();
+    const kycRef = db.collection("collectorKYC").doc(uid);
 
-    try {
-      const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
-
-      // customerName (PII)
-      if (!after?.customerName_enc && after?.customerName != null) {
-        if (typeof after.customerName === "string" && after.customerName.trim() !== "") {
-          Object.assign(updatePayload, encryptStringToFields(after.customerName, AES_KEY, HMAC_KEY, "customerName"));
-
-          // UI-safe display
-          updatePayload.customerNameDisplay = after.customerName;
-
-          // remove plaintext PII
-          updatePayload.customerName = admin.firestore.FieldValue.delete();
-        } else {
-          logger.warn("Skipping customerName (not a non-empty string)", {
-            uid,
-            txId,
-            type: typeof after.customerName,
-          });
-        }
-      }
-
-      // totalAmount (keep plaintext for UI)
-      if (hasTotalAmount && !after?.totalAmount_enc) {
-        Object.assign(updatePayload, encryptMoneyToFields(after.totalAmount, AES_KEY, HMAC_KEY, "totalAmount"));
-      }
-
-      // totalPrice (keep plaintext for UI)
-      if (hasTotalPrice && !after?.totalPrice_enc) {
-        Object.assign(updatePayload, encryptMoneyToFields(after.totalPrice, AES_KEY, HMAC_KEY, "totalPrice"));
-      }
-
-      // items[].subtotal (array-safe)
-      if (Array.isArray(after.items) && after.items.length > 0) {
-        const newItems = after.items.map((it) => {
-          const copy = { ...(it || {}) };
-
-          if (copy.subtotal != null && !copy.subtotal_enc) {
-            Object.assign(copy, encryptMoneyToFieldsForArray(copy.subtotal, AES_KEY, HMAC_KEY, "subtotal"));
-            copy.subtotalSetAtMs = Date.now(); // array-safe timestamp
-          }
-          return copy;
-        });
-
-        const itemsChanged = JSON.stringify(newItems) !== JSON.stringify(after.items);
-        if (itemsChanged) updatePayload.items = newItems;
-      }
-
-      if (Object.keys(updatePayload).length === 0) return;
-
-      await afterSnap.ref.update(updatePayload);
-      logger.info("Encrypted transaction fields successfully", { uid, txId });
-    } catch (err) {
-      logger.error("Encryption failed (transaction)", {
-        uid,
-        txId,
-        message: err?.message,
-        stack: err?.stack,
-      });
+    const kycSnap = await kycRef.get();
+    if (!kycSnap.exists) {
+      logger.info("collectorKYC missing, skip status sync", { uid, afterStatus });
+      return;
     }
+
+    const kyc = kycSnap.data() || {};
+    if (kyc.expired === true) {
+      logger.info("collectorKYC already expired, skip status sync", { uid, afterStatus });
+      return;
+    }
+
+    const deleteAfter = computeCollectorKycDeleteAfter(afterStatus);
+
+    await kycRef.set(
+      {
+        status: afterStatus,
+        deleteAfter,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        expired: false,
+      },
+      { merge: true }
+    );
+
+    logger.info("collectorKYC status synced from collectorRequests", {
+      uid,
+      beforeStatus,
+      afterStatus,
+      deleteAfter: deleteAfter.toDate().toISOString(),
+    });
   }
 );
 
 /* ====================================================
-   ADMIN-ONLY: SET/ENCRYPT junkshop email into Users/{uid}
+   Cleanup implementation (used by scheduled + manual)
 ==================================================== */
-exports.setJunkshopEmail = onCall(
-  {
-    region: "asia-southeast1",
-    secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
-  },
-  async (request) => {
-    if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
-    if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+async function cleanupCollectorKyc() {
+  const db = admin.firestore();
+  const bucket = admin.storage().bucket();
+  const now = admin.firestore.Timestamp.now();
 
-    const shopId = request.data?.shopId;
-    const email = request.data?.email;
+  // 1) Backfill deleteAfter for docs missing it (migration-safe)
+  const missingSnap = await db
+    .collection("collectorKYC")
+    .where("deleteAfter", "==", null)
+    .limit(200)
+    .get()
+    .catch(() => null);
 
-    if (!shopId || typeof shopId !== "string") throw new HttpsError("invalid-argument", "shopId is required.");
-    if (!email || typeof email !== "string") throw new HttpsError("invalid-argument", "email is required.");
+  if (missingSnap && !missingSnap.empty) {
+    const batch = db.batch();
+    for (const doc of missingSnap.docs) {
+      const d = doc.data() || {};
+      const status = String(d.status || "pending").trim().toLowerCase();
+      batch.set(
+        doc.ref,
+        {
+          status,
+          deleteAfter: computeCollectorKycDeleteAfter(status),
+          expired: false,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+    await batch.commit().catch(() => null);
+  }
+
+  // 2) Find eligible docs
+  const snap = await db
+    .collection("collectorKYC")
+    .where("expired", "==", false)
+    .where("deleteAfter", "<=", now)
+    .limit(200)
+    .get();
+
+  if (snap.empty) {
+    logger.info("collectorKYC cleanup: nothing eligible");
+    return { deleted: 0 };
+  }
+
+  const batch = db.batch();
+  let deleted = 0;
+
+  for (const doc of snap.docs) {
+    const uid = doc.id;
+    const data = doc.data() || {};
+    const fileName = String(data.kycFileName || "").trim();
+
+    // Reconstruct storage path (we do NOT store full path)
+    const path = fileName ? `kyc/${uid}/${fileName}` : "";
 
     try {
-      const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
-      const encFields = encryptEmailToFields(email, AES_KEY, HMAC_KEY);
+      if (path) {
+        await bucket.file(path).delete({ ignoreNotFound: true });
+      }
 
-      const ref = admin.firestore().collection("Users").doc(shopId);
-
-      await ref.set(
+      batch.set(
+        doc.ref,
         {
-          Roles: "junkshop", // optional, helpful for admin-set
-          ...encFields,
-          email: admin.firestore.FieldValue.delete(),
+          expired: true,
+          deletedAt: admin.firestore.FieldValue.serverTimestamp(),
+          kycFileName: admin.firestore.FieldValue.delete(),
         },
         { merge: true }
       );
 
-      return { ok: true };
-    } catch (err) {
-      throw new HttpsError("internal", String(err));
-    }
-  }
-);
-
-/* ====================================================
-   Helper — subtract days
-==================================================== */
-function daysAgo(days) {
-  const ms = days * 24 * 60 * 60 * 1000;
-  return admin.firestore.Timestamp.fromDate(new Date(Date.now() - ms));
-}
-
-/* ====================================================
-   AUTO add approvedAt when admin approves permit
-==================================================== */
-exports.setApprovedAtOnApprove = onDocumentUpdated(
-  {
-    document: "permitRequests/{requestId}",
-    region: "asia-southeast1",
-  },
-  async (event) => {
-    const before = event.data?.before?.data();
-    const after = event.data?.after?.data();
-    if (!before || !after) return;
-
-    if (before.approved !== true && after.approved === true) {
-      v2_1.logger.info("Approved -> notify user", { requestId: event.params.requestId });
-
-      // 1) set approvedAt once
-      if (!after.approvedAt) {
-        await afterSnap.ref.update({
-          approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-
-      // 2) send push notification
-      const uid = after.uid; // you already use "uid" in adminDeleteUser permit query
-      if (uid) {
-        await sendPushToUser(
-          uid,
-          "Application Approved ✅",
-          "Your application has been approved by the admin.",
-          { type: "application_approved", requestId: event.params.requestId }
-        );
-      }
-    }
-  }
-);
-
-/* ====================================================
-   SHARED CLEANUP LOGIC (batch update + safe file delete)
-   - Unapproved older than 30 days -> mark expired + delete permit file
-   - Approved older than 15 days -> mark expired + delete permit file
-==================================================== */
-async function cleanupPermits() {
-  const db = admin.firestore();
-  const bucket = admin.storage().bucket();
-
-  const cutoffUnapproved = daysAgo(30);
-  const cutoffApproved = daysAgo(15);
-
-  logger.info("Starting permit cleanup", {
-    cutoffUnapproved: cutoffUnapproved.toDate().toISOString(),
-    cutoffApproved: cutoffApproved.toDate().toISOString(),
-  });
-
-  const unapprovedSnap = await db
-    .collection("permitRequests")
-    .where("approved", "==", false)
-    .where("submittedAt", "<=", cutoffUnapproved)
-    .limit(200)
-    .get();
-
-  const approvedSnap = await db
-    .collection("permitRequests")
-    .where("approved", "==", true)
-    .where("approvedAt", "<=", cutoffApproved)
-    .limit(200)
-    .get();
-
-  const docsToDelete = [...unapprovedSnap.docs, ...approvedSnap.docs];
-
-  if (docsToDelete.length === 0) {
-    logger.info("No permits eligible for cleanup");
-    return { deleted: 0 };
-  }
-
-  logger.info("Permits eligible", {
-    total: docsToDelete.length,
-    unapproved: unapprovedSnap.size,
-    approved: approvedSnap.size,
-  });
-
-  // delete files sequentially (safe) + batch update docs
-  const batch = db.batch();
-  let deleted = 0;
-
-  for (const doc of docsToDelete) {
-    const data = doc.data();
-    const permitPath = data.permitPath;
-
-    try {
-      if (permitPath) {
-        await bucket.file(permitPath).delete({ ignoreNotFound: true });
-      }
-
-      batch.update(doc.ref, {
-        permitExpired: true,
-        permitDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
       deleted++;
-      logger.info("Permit file removed", { requestId: doc.id, permitPath });
+      logger.info("collectorKYC file deleted", { uid, path });
     } catch (err) {
-      logger.error("Permit deletion failed", { requestId: doc.id, err: String(err) });
+      logger.error("collectorKYC delete failed", { uid, err: String(err) });
     }
   }
 
-  await batch.commit().catch((e) => logger.error("Permit batch update failed", { err: String(e) }));
+  await batch.commit().catch((e) =>
+    logger.error("collectorKYC batch update failed", { err: String(e) })
+  );
 
-  logger.info("Cleanup finished", { deleted });
+  logger.info("collectorKYC cleanup finished", { deleted });
   return { deleted };
 }
 
 /* ====================================================
-   SCHEDULED CLEANUP (Runs every 24h)
+   SCHEDULED CLEANUP: collectorKYC (Runs every 24h)
 ==================================================== */
-exports.cleanupPermitsByRetention = onSchedule(
+exports.cleanupCollectorKycByRetention = onSchedule(
   {
     schedule: "every 24 hours",
     region: "asia-southeast1",
     timeZone: "Asia/Manila",
   },
   async () => {
-    const result = await cleanupPermits();
-    logger.info("Scheduled cleanup result", result);
+    const result = await cleanupCollectorKyc();
+    logger.info("Scheduled collectorKYC cleanup result", result);
   }
 );
 
 /* ====================================================
-   MANUAL CLEANUP (FOR TESTING)
+   MANUAL CLEANUP: collectorKYC (FOR TESTING)
 ==================================================== */
-exports.runPermitCleanupNow = onRequest({ region: "asia-southeast1" }, async (req, res) => {
+exports.runCollectorKycCleanupNow = onRequest({ region: "asia-southeast1" }, async (req, res) => {
   try {
-    const result = await cleanupPermits();
+    const result = await cleanupCollectorKyc();
     res.status(200).json({ ok: true, ...result });
   } catch (err) {
-    logger.error("Manual cleanup crashed", { err: String(err) });
+    logger.error("Manual collectorKYC cleanup crashed", { err: String(err) });
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
