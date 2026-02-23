@@ -80,7 +80,7 @@ class ChatListPage extends StatelessWidget {
                 return const Center(
                   child: Text(
                     "No chats yet.",
-                    style: TextStyle(color: Colors.white70),
+                    style: TextStyle(color: Color.fromARGB(179, 255, 255, 255)),
                   ),
                 );
               }
