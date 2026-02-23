@@ -512,10 +512,12 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     final query = FirebaseFirestore.instance
-        .collection('pickupRequests')
-        .where('householdId', isEqualTo: user.uid)
-        .orderBy('updatedAt', descending: true)
-        .limit(30);
+      .collection('requests')
+      .where('type', isEqualTo: 'pickup')
+      .where('householdId', isEqualTo: user.uid)
+      .where('active', isEqualTo: false)
+      .orderBy('updatedAt', descending: true)
+      .limit(30);
 
     return StreamBuilder<QuerySnapshot>(
       stream: query.snapshots(),

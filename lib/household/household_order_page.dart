@@ -16,12 +16,11 @@ class HouseholdOrderPage extends StatelessWidget {
 
     // Active order = anything not finished/cancelled
     // (You can add/remove statuses if needed)
-    final activeStatuses = ['pending', 'accepted', 'scheduled'];
-
     final query = FirebaseFirestore.instance
-        .collection('pickupRequests')
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
         .where('householdId', isEqualTo: user.uid)
-        .where('status', whereIn: activeStatuses)
+        .where('active', isEqualTo: true)
         .orderBy('updatedAt', descending: true)
         .limit(1);
 
@@ -102,7 +101,7 @@ class _OrderCard extends StatelessWidget {
     final windowStart = data['windowStart'] is Timestamp ? data['windowStart'] as Timestamp : null;
     final windowEnd = data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
 
-    final canCancel = status != 'completed' && status != 'cancelled';
+    final canCancel = !['completed', 'cancelled', 'declined'].contains(status);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -161,7 +160,7 @@ class _OrderCard extends StatelessWidget {
 
             const SizedBox(height: 10),
             Text(
-              "Note: Cancelling updates your request in Firestore (pickupRequests).",
+              "Note: Cancelling updates your request in Firestore (requests).",
               style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
             ),
           ],
@@ -216,58 +215,42 @@ class _OrderCard extends StatelessWidget {
 
     if (confirmed != true) return;
 
-    await FirebaseFirestore.instance.collection('pickupRequests').doc(requestId).update({
-      'status': 'cancelled',
-      'cancelledAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-    
-    if (confirmed != true) return;
-
     try {
-      debugPrint("🟡 Cancelling pickupRequests/$requestId");
+      debugPrint("🟡 Cancelling requests/$requestId");
 
       await FirebaseFirestore.instance
-          .collection('pickupRequests')
+          .collection('requests')
           .doc(requestId)
           .update({
         'status': 'cancelled',
+        'active': false,
         'cancelledAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
-
-      // ✅ Verify immediately (forces server read)
-      final after = await FirebaseFirestore.instance
-          .collection('pickupRequests')
-          .doc(requestId)
-          .get(const GetOptions(source: Source.server));
-
-      debugPrint("🟢 After cancel status = ${after.data()?['status']}");
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Pickup order cancelled.")),
       );
-    } 
-    on FirebaseException catch (e, st) {
-    debugPrint("🔴 Cancel failed (FirebaseException)");
-    debugPrint("code=${e.code}");
-    debugPrint("message=${e.message}");
-    debugPrint(st.toString());
+    } on FirebaseException catch (e, st) {
+      debugPrint("🔴 Cancel failed (FirebaseException)");
+      debugPrint("code=${e.code}");
+      debugPrint("message=${e.message}");
+      debugPrint(st.toString());
 
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Cancel failed: ${e.code} • ${e.message ?? ''}")),
-    );
-  } catch (e, st) {
-    debugPrint("🔴 Cancel failed (unknown): $e");
-    debugPrint(st.toString());
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Cancel failed: ${e.code} • ${e.message ?? ''}")),
+      );
+    } catch (e, st) {
+      debugPrint("🔴 Cancel failed (unknown): $e");
+      debugPrint(st.toString());
 
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Cancel failed: $e")),
-    );
-  }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Cancel failed: $e")),
+      );
+    }
   }
   String _formatDateTime(Timestamp ts) {
     final dt = ts.toDate();
