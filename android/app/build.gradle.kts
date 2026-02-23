@@ -8,6 +8,10 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:34.9.0"))
+}
+
 android {
     namespace = "com.example.ecoscrap_app"
     compileSdk = flutter.compileSdkVersion

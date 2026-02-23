@@ -1,11 +1,17 @@
 import 'dart:convert';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+// ✅ ADD: chat imports (adjust path if your folders differ)
+import '../chat/services/chat_services.dart';
+import '../chat/screens/chat_page.dart';
 
 class CollectorPickupMapPage extends StatefulWidget {
   final String requestId;
@@ -25,6 +31,10 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   String _householdName = "Household";
   String _status = "";
 
+  // ✅ NEW: store IDs from request doc
+  String _householdId = "";
+  String _collectorId = "";
+
   static const Color _bg = Color(0xFF0F172A);
   static const Color _accent = Color(0xFF1FA9A7);
 
@@ -36,11 +46,20 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   List<LatLng> _route = [];
 
+  // route stats
+  String _distanceText = "";
+  String _durationText = "";
+  int? _durationValueSec;
+
+  // ✅ NEW: chat service
+  final ChatService _chat = ChatService();
+
   LatLng get _pickup {
     final gp = _pickupGp;
-    if (gp == null) return const LatLng(0, 0); // or a fallback
+    if (gp == null) return const LatLng(0, 0); // fallback
     return LatLng(gp.latitude, gp.longitude);
   }
+
   LatLng get _origin => _pos == null ? _pickup : LatLng(_pos!.latitude, _pos!.longitude);
 
   @override
@@ -52,11 +71,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   Future<void> _loadRequestInfo() async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(widget.requestId)
-          .get();
-
+      final doc = await FirebaseFirestore.instance.collection('requests').doc(widget.requestId).get();
       final data = doc.data() ?? {};
       final gp = data['pickupLocation'];
 
@@ -67,9 +82,13 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         _pickupAddress = (data['pickupAddress'] ?? '').toString();
         _status = (data['status'] ?? '').toString();
         _pickupGp = (gp is GeoPoint) ? gp : null;
+
+        // ✅ NEW: IDs
+        _householdId = (data['householdId'] ?? '').toString();
+        _collectorId = (data['collectorId'] ?? '').toString();
       });
 
-      // ✅ Now that pickup is known, build route if we already have our location
+      // build route if possible
       if (_pickupGp != null && _pos != null) {
         await _buildRoute();
         _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));
@@ -78,7 +97,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       // optional: show snackbar
     }
   }
-
 
   Future<void> _initLocation() async {
     final ok = await _ensureLocationPermission();
@@ -104,18 +122,12 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     return true;
   }
-  String _householdId = "";
-  String _distanceText = "";
-  String _durationText = "";
-  int? _durationValueSec; // optional, for logic
-
 
   Future<void> _buildRoute() async {
     if (_directionsKey == "YOUR_DIRECTIONS_API_KEY") return;
 
     final o = _origin;
     final d = _pickup;
-
 
     final uri = Uri.parse(
       "https://maps.googleapis.com/maps/api/directions/json"
@@ -145,7 +157,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
       final route0 = routes.first as Map<String, dynamic>;
 
-      // ✅ distance + duration from first leg
+      // distance + duration from first leg
       final legs = (route0["legs"] as List<dynamic>);
       if (legs.isNotEmpty) {
         final leg0 = legs.first as Map<String, dynamic>;
@@ -178,8 +190,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
-  
-
   Future<void> _openGoogleMapsNavigation() async {
     final gp = _pickupGp;
     if (gp == null) {
@@ -205,8 +215,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       );
     }
   }
-
-
 
   List<LatLng> _decodePolyline(String encoded) {
     final points = <LatLng>[];
@@ -237,52 +245,126 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return points;
   }
 
-@override
-Widget build(BuildContext context) {
-  final markers = <Marker>{
-    Marker(
-      markerId: const MarkerId("pickup"),
-      position: _pickup,
-      infoWindow: InfoWindow(title: "Pickup", snippet: _pickupAddress),
-    ),
-    if (_pos != null)
-      Marker(
-        markerId: const MarkerId("me"),
-        position: _origin,
-        infoWindow: const InfoWindow(title: "You"),
-      ),
-  }; // ✅ IMPORTANT: close the set here
+  // ✅ NEW: open pickup chat (only after accepted/arrived/completed)
+  Future<void> _openPickupChat() async {
+    final s = _status.toLowerCase();
+    final canChat = s == "accepted" || s == "arrived" || s == "completed";
 
-  final polylines = _route.isEmpty
-      ? <Polyline>{}
-      : {
-          Polyline(
-            polylineId: const PolylineId("route"),
-            points: _route,
-            width: 6,
-            color: _accent,
-          )
-        };
+    if (!canChat) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Chat is available once pickup is accepted.")),
+      );
+      return;
+    }
 
-  return Scaffold(
-    backgroundColor: _bg,
-    appBar: AppBar(
-      backgroundColor: _bg,
-      title: const Text("Go to Pickup"),
-    ),
-    body: Stack(
-      children: [
-        Positioned.fill(
-          child: GoogleMap(
-            initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
-            onMapCreated: (c) => _map = c,
-            myLocationEnabled: _pos != null,
-            markers: markers,
-            polylines: polylines,
-            zoomControlsEnabled: false,
-          ),
+    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final householdUid = _householdId;
+    final collectorUid = _collectorId.isNotEmpty ? _collectorId : me;
+
+    if (householdUid.isEmpty || collectorUid.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Chat IDs not loaded yet. Please try again.")),
+      );
+      return;
+    }
+
+    final chatId = await _chat.ensurePickupChat(
+      requestId: widget.requestId,
+      householdUid: householdUid,
+      collectorUid: collectorUid,
+    );
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatPage(
+          chatId: chatId,
+          title: _householdName.isEmpty ? "Chat" : _householdName,
+          otherUserId: householdUid, // ✅ use the local variable
         ),
-  
+      ),
+    );
+  }
+
+  Future<void> _markArrivedOrComplete() async {
+    final s = _status.toLowerCase();
+
+    if (s == 'arrived') {
+      await _markCompleted();
+      return;
+    }
+
+    // default: mark arrived
+    try {
+      await FirebaseFirestore.instance.collection('requests').doc(widget.requestId).update({
+        'status': 'arrived',
+        'arrived': true,
+        'arrivedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      setState(() => _status = 'arrived'); // update UI instantly
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Marked as arrived.")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e")),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final markers = <Marker>{
+      Marker(
+        markerId: const MarkerId("pickup"),
+        position: _pickup,
+        infoWindow: InfoWindow(title: "Pickup", snippet: _pickupAddress),
+      ),
+      if (_pos != null)
+        Marker(
+          markerId: const MarkerId("me"),
+          position: _origin,
+          infoWindow: const InfoWindow(title: "You"),
+        ),
+    };
+
+    final polylines = _route.isEmpty
+        ? <Polyline>{}
+        : {
+            Polyline(
+              polylineId: const PolylineId("route"),
+              points: _route,
+              width: 6,
+              color: _accent,
+            )
+          };
+
+    return Scaffold(
+      backgroundColor: _bg,
+      appBar: AppBar(
+        backgroundColor: _bg,
+        title: const Text("Go to Pickup"),
+      ),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: GoogleMap(
+              initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
+              onMapCreated: (c) => _map = c,
+              myLocationEnabled: _pos != null,
+              markers: markers,
+              polylines: polylines,
+              zoomControlsEnabled: false,
+            ),
+          ),
+
           Positioned(
             left: 16,
             right: 16,
@@ -365,7 +447,7 @@ Widget build(BuildContext context) {
 
                       const SizedBox(height: 12),
 
-                      // Actions
+                      // Actions (NAVIGATE / CHAT / ARRIVED-COMPLETE)
                       Row(
                         children: [
                           Expanded(
@@ -385,42 +467,30 @@ Widget build(BuildContext context) {
                             ),
                           ),
                           const SizedBox(width: 10),
+
                           Expanded(
                             child: SizedBox(
                               height: 48,
                               child: ElevatedButton.icon(
-                                onPressed: () async {
-                                  final s = _status.toLowerCase();
+                                onPressed: _openPickupChat,
+                                icon: const Icon(Icons.chat_bubble_outline),
+                                label: const Text("CHAT"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  foregroundColor: _bg,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  elevation: 0,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
 
-                                  if (s == 'arrived') {
-                                    await _markCompleted();
-                                    return;
-                                  }
-
-                                  // default: mark arrived
-                                  try {
-                                    await FirebaseFirestore.instance
-                                        .collection('requests')
-                                        .doc(widget.requestId)
-                                        .update({
-                                      'status': 'arrived',
-                                      'arrived': true,
-                                      'arrivedAt': FieldValue.serverTimestamp(),
-                                      'updatedAt': FieldValue.serverTimestamp(),
-                                    });
-
-                                    if (!mounted) return;
-                                    setState(() => _status = 'arrived'); // ✅ update UI instantly
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text("Marked as arrived.")),
-                                    );
-                                  } catch (e) {
-                                    if (!mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text("Error: $e")),
-                                    );
-                                  }
-                                },
+                          Expanded(
+                            child: SizedBox(
+                              height: 48,
+                              child: ElevatedButton.icon(
+                                onPressed: _markArrivedOrComplete,
                                 icon: Icon(_status.toLowerCase() == 'arrived'
                                     ? Icons.check_circle
                                     : Icons.location_on_outlined),
@@ -446,6 +516,7 @@ Widget build(BuildContext context) {
       ),
     );
   }
+
   Widget _miniStat(IconData icon, String value) {
     return Row(
       children: [
@@ -462,12 +533,10 @@ Widget build(BuildContext context) {
       ],
     );
   }
+
   Future<void> _markCompleted() async {
     try {
-      await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(widget.requestId)
-          .update({
+      await FirebaseFirestore.instance.collection('requests').doc(widget.requestId).update({
         'status': 'completed',
         'active': false,
         'completedAt': FieldValue.serverTimestamp(),
@@ -479,7 +548,6 @@ Widget build(BuildContext context) {
         const SnackBar(content: Text("Marked as completed.")),
       );
 
-      // optional: pop back to dashboard so it disappears immediately
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
@@ -488,6 +556,8 @@ Widget build(BuildContext context) {
       );
     }
   }
+
+  // (unchanged, kept from your file)
   Widget _resumeCard(BuildContext context, QueryDocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
     final status = (data['status'] ?? '').toString().toLowerCase();
