@@ -693,7 +693,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
           "Send pickup request?\n\n"
           "Address: ${pickupAddress ?? "Unknown"}\n"
           "Collector: $collectorName\n"
-          "Destination: ${_destinationTitle}\n"
+          "Destination: $_destinationTitle\n"
           "$_scheduleSummary",
         ),
         actions: [

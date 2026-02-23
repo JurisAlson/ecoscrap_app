@@ -131,7 +131,7 @@ Future<void> _submitCollector() async {
     // Firestore transaction: Users + collectorRequests + collectorKYC
     await db.runTransaction((tx) async {
       final userSnap = await tx.get(userRef);
-      final existing = (userSnap.data() as Map<String, dynamic>?) ?? {};
+      final existing = userSnap.data() ?? {};
 
       final status = (existing["collectorStatus"] ?? "").toString().toLowerCase();
       final isActive = status == "pending" || status == "adminapproved" || status == "junkshopaccepted";
