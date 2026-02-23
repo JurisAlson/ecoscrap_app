@@ -20,30 +20,43 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   bool _busy = false;
 
   /// ✅ Admin rejects:
-  /// - deletes permit file if any
-  /// - restores Users/{uid} back to normal user state (keeps base profile)
+  /// - deletes KYC file if any (from Storage)
+  /// - deletes collectorKYC/{uid} doc (removes pointer)
+  /// - restores Users/{uid} to "user" (keeps base profile)
   /// - marks collectorRequests/{uid} as rejected (keeps history)
-  /// - clears stale permit pointers so next re-submit won't show broken image
-  Future<void> _rejectCollectorAndRestoreUser(
-    String uid, {
-    String permitPath = "",
-  }) async {
-    // 1) delete uploaded ID file (optional)
+  ///
+  /// ✅ User can resubmit again because:
+  /// - Users/{uid}.collectorStatus becomes "rejected"
+  /// - collectorRequests/{uid}.status becomes "rejected"
+  /// - acceptedByJunkshopUid reset to ""
+  Future<void> _rejectCollectorAndRestoreUser(String uid) async {
+    final db = FirebaseFirestore.instance;
+
+    final userRef = db.collection("Users").doc(uid);
+    final reqRef = db.collection("collectorRequests").doc(uid);
+    final kycRef = db.collection("collectorKYC").doc(uid);
+
+    // 1) Read KYC doc to get permitPath (admin-only)
+    String permitPath = "";
+    try {
+      final kycSnap = await kycRef.get();
+      final kycData = kycSnap.data() ?? {};
+      permitPath = (kycData["permitPath"] ?? "").toString();
+    } catch (_) {}
+
+    // 2) Delete uploaded KYC file (if any)
     if (permitPath.trim().isNotEmpty) {
       try {
         await FirebaseStorage.instance.ref(permitPath).delete();
       } catch (_) {}
     }
 
-    final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
-    final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(uid);
-
-    await FirebaseFirestore.instance.runTransaction((tx) async {
+    // 3) Transaction: restore user + mark request rejected + delete KYC doc pointer
+    await db.runTransaction((tx) async {
       // Read user to preserve role safely (do not downgrade admin/junkshop)
       final userSnap = await tx.get(userRef);
       final userData = (userSnap.data() as Map<String, dynamic>?) ?? {};
 
-      // preserve exact previous role string if it was admin/junkshop/user etc.
       final rawRole = userData["role"] ?? userData["Roles"] ?? "user";
       final rawRoleStr = rawRole.toString().trim();
       final rawLower = rawRoleStr.toLowerCase();
@@ -51,11 +64,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       // If user was collector (or blank), restore to user; otherwise keep exact role
       final roleToSave = (rawLower == "collector" || rawRoleStr.isEmpty) ? "user" : rawRoleStr;
 
-      // 2) restore clean user state but keep base profile fields
+      // ✅ Restore clean user state (keeps base profile fields)
       tx.set(userRef, {
         "collectorStatus": "rejected",
-
-        // remove application-only fields
         "collectorSubmittedAt": FieldValue.delete(),
         "collectorUpdatedAt": FieldValue.delete(),
         "collectorKyc": FieldValue.delete(),
@@ -71,29 +82,31 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      // 3) mark request rejected (keeps history + allows resubmit)
-      // and clear stale permit pointers (so admin doesn't see broken image later)
+      // ✅ Keep request for history + allow resubmit
       tx.set(reqRef, {
         "status": "rejected",
         "acceptedByJunkshopUid": "",
         "acceptedAt": FieldValue.delete(),
         "rejectedByJunkshops": [],
-        "permitPath": FieldValue.delete(),
-        "permitUrl": FieldValue.delete(),
+
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      // ✅ Remove KYC pointer doc (so next submit is clean)
+      tx.delete(kycRef);
     });
   }
 
   /// ✅ Admin approves (NEW FLOW):
-  /// - collectorRequests/{uid} => status: adminApproved (junkshops can see it)
+  /// - collectorRequests/{uid} => status: adminApproved
   /// - Users/{uid} => collectorStatus: adminApproved
   /// - DOES NOT promote role to collector (junkshop does final step)
   Future<void> _adminApprove(String uid) async {
-    final reqRef = FirebaseFirestore.instance.collection("collectorRequests").doc(uid);
-    final userRef = FirebaseFirestore.instance.collection("Users").doc(uid);
+    final db = FirebaseFirestore.instance;
+    final reqRef = db.collection("collectorRequests").doc(uid);
+    final userRef = db.collection("Users").doc(uid);
 
-    final batch = FirebaseFirestore.instance.batch();
+    final batch = db.batch();
 
     batch.set(reqRef, {
       "status": "adminApproved",
@@ -176,65 +189,86 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
             final data = snap.data!.data() ?? {};
             final uid = snap.data!.id;
 
-            // ✅ from collectorRequests
             final name = (data["publicName"] ?? "Collector").toString();
             final email = (data["emailDisplay"] ?? "").toString();
             final status = (data["status"] ?? "").toString();
 
-            final permitPath = (data["permitPath"] ?? "").toString();
-            final permitUrlOld = (data["permitUrl"] ?? "").toString(); // optional legacy
-
-            Widget imageBlock;
-            if (permitPath.isNotEmpty) {
-              imageBlock = FutureBuilder<String>(
-                future: AdminStorageCache.url(permitPath),
-                builder: (context, s) {
-                  if (s.connectionState == ConnectionState.waiting) {
-                    return const SizedBox(
-                      height: 220,
-                      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                    );
-                  }
-                  if (s.hasError || !s.hasData) {
-                    return Text(
-                      "Image failed: ${s.error}",
-                      style: const TextStyle(color: Colors.redAccent),
-                    );
-                  }
-                  final url = s.data!;
-                  return GestureDetector(
-                    onTap: () => _showImageDialog(url),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Image.network(
-                        url,
-                        height: 220,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  );
-                },
-              );
-            } else if (permitUrlOld.isNotEmpty) {
-              imageBlock = GestureDetector(
-                onTap: () => _showImageDialog(permitUrlOld),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: Image.network(
-                    permitUrlOld,
-                    height: 220,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-              );
-            } else {
-              imageBlock =
-                  const Text("No ID image uploaded.", style: TextStyle(color: Colors.white70));
-            }
-
             final isPending = status.toLowerCase() == "pending";
+
+            // ✅ KYC is now stored in collectorKYC/{uid} (admin-only)
+            final kycRef = FirebaseFirestore.instance.collection("collectorKYC").doc(uid);
+
+            final imageBlock = FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              future: kycRef.get(),
+              builder: (context, kycSnap) {
+                if (kycSnap.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 220,
+                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  );
+                }
+
+                final kycData = kycSnap.data?.data() ?? {};
+                final permitPath = (kycData["permitPath"] ?? "").toString();
+
+                if (permitPath.isEmpty) {
+                  return const Text("No ID file uploaded.", style: TextStyle(color: Colors.white70));
+                }
+
+                return FutureBuilder<String>(
+                  future: AdminStorageCache.url(permitPath),
+                  builder: (context, s) {
+                    if (s.connectionState == ConnectionState.waiting) {
+                      return const SizedBox(
+                        height: 220,
+                        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                      );
+                    }
+                    if (s.hasError || !s.hasData) {
+                      return Text(
+                        "File failed: ${s.error}",
+                        style: const TextStyle(color: Colors.redAccent),
+                      );
+                    }
+
+                    final url = s.data!;
+                    // If it's a PDF, Image.network won't render. Basic UX:
+                    final isPdf = permitPath.toLowerCase().endsWith(".pdf");
+
+                    if (isPdf) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "KYC file is a PDF.",
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                          const SizedBox(height: 10),
+                          ElevatedButton.icon(
+                            onPressed: () => _showImageDialog(url), // still opens (browser will handle pdf)
+                            icon: const Icon(Icons.open_in_new),
+                            label: const Text("Open PDF"),
+                          ),
+                        ],
+                      );
+                    }
+
+                    return GestureDetector(
+                      onTap: () => _showImageDialog(url),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: Image.network(
+                          url,
+                          height: 220,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            );
 
             return Padding(
               padding: const EdgeInsets.all(24),
@@ -326,10 +360,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
-                                    await _rejectCollectorAndRestoreUser(
-                                      uid,
-                                      permitPath: permitPath,
-                                    );
+                                    await _rejectCollectorAndRestoreUser(uid);
                                     if (mounted) {
                                       AdminHelpers.toast(context, "Rejected $name. User restored.");
                                       Navigator.pop(context);
