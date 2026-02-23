@@ -210,7 +210,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       _scheduleDate = DateTime.now();
     });
   }
-  final nowTs = Timestamp.fromDate(DateTime.now());
 
 
   String formatCountdown(DateTime target) {
@@ -664,9 +663,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     // ✅ OPTIONAL: block if household already has an active order
     try {
       final active = await FirebaseFirestore.instance
-          .collection('pickupRequests')
+          .collection('requests')
           .where('householdId', isEqualTo: user.uid)
-          .where('status', whereIn: ['pending', 'accepted', 'scheduled'])
+          .where('active', isEqualTo: true)
           .limit(1)
           .get();
 
@@ -713,7 +712,10 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     if (confirmed != true) return;
 
     try {
-      await FirebaseFirestore.instance.collection('pickupRequests').add({
+      await FirebaseFirestore.instance.collection('requests').add({
+        'type': 'pickup',
+        'active': true,
+
         'householdId': user.uid,
         'householdName': householdName,
 
@@ -757,6 +759,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     if (!mounted) return;
     _snack("Pickup request sent!", bg: _accent);
   }
+
+  
 
   Future<String> _getUserName(String uid, {String fallback = "Unknown"}) async {
     try {

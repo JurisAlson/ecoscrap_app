@@ -264,9 +264,35 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                           ),
                           _iconButton(
                             Icons.map_outlined,
-                            onTap: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text("Open a pickup from Notifications first.")),
+                            onTap: () async {
+                              final uid = FirebaseAuth.instance.currentUser!.uid;
+
+                              final snap = await FirebaseFirestore.instance
+                                  .collection('requests')
+                                  .where('type', isEqualTo: 'pickup')
+                                  .where('collectorId', isEqualTo: uid)
+                                  .where('active', isEqualTo: true)
+                                  .where('status', whereIn: ['pending', 'accepted', 'arrived', 'scheduled'])
+                                  .orderBy('updatedAt', descending: true)
+                                  .limit(1)
+                                  .get();
+
+                              if (!context.mounted) return;
+
+                              if (snap.docs.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("No active pickup to resume.")),
+                                );
+                                return;
+                              }
+
+                              final doc = snap.docs.first;
+
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => CollectorPickupMapPage(requestId: doc.id),
+                                ),
                               );
                             },
                           ),
@@ -329,7 +355,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.05),
-          shape: BoxShape.circle,
+          shape: BoxShape.circle, 
         ),
         child: Icon(icon, color: Colors.grey.shade300),
       ),
@@ -428,59 +454,205 @@ class _CollectorLogsHome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final query = FirebaseFirestore.instance
-        .collection('pickupRequests')
+    final activeQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId) 
+        .where('active', isEqualTo: true)
+        .orderBy('updatedAt', descending: true)
+        .limit(10);
+
+    final historyQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
         .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: false)
         .orderBy('updatedAt', descending: true)
         .limit(25);
 
+    final resumeQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: ['accepted', 'arrived', 'scheduled']) // optional
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+
     return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
+      stream: activeQuery.snapshots(),
+      builder: (context, activeSnap) {
+        if (activeSnap.connectionState == ConnectionState.waiting) {
           return const Padding(
             padding: EdgeInsets.only(top: 24),
             child: Center(child: CircularProgressIndicator()),
           );
         }
 
-        if (snap.hasError) {
+        if (activeSnap.hasError) {
           return Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              "Error loading logs: ${snap.error}",
+              "Error loading logs: ${activeSnap.error}",
               style: const TextStyle(color: Colors.white70),
             ),
           );
         }
 
-        final docs = snap.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text("No logs yet.", style: TextStyle(color: Colors.white70)),
-          );
-        }
+        final activeDocs = activeSnap.data?.docs ?? [];
 
-        return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Logs",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+        return StreamBuilder<QuerySnapshot>(
+          stream: historyQuery.snapshots(),
+          builder: (context, historySnap) {
+            if (historySnap.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+
+            if (historySnap.hasError) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  "Error loading logs: ${historySnap.error}",
+                  style: const TextStyle(color: Colors.white70),
                 ),
+              );
+            }
+
+            final historyDocs = historySnap.data?.docs ?? [];
+
+            if (activeDocs.isEmpty && historyDocs.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text("No logs yet.", style: TextStyle(color: Colors.white70)),
+              );
+            }
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Logs",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+                  StreamBuilder<QuerySnapshot>(
+                    stream: resumeQuery.snapshots(),
+                    builder: (context, resumeSnap) {
+                      final docs = resumeSnap.data?.docs ?? [];
+                      if (docs.isEmpty) return const SizedBox.shrink();
+
+                      final doc = docs.first as QueryDocumentSnapshot;
+                      final data = doc.data() as Map<String, dynamic>;
+
+                      final status = (data['status'] ?? '').toString().toLowerCase();
+                      final name = (data['householdName'] ?? 'Household').toString();
+                      final address = (data['pickupAddress'] ?? '').toString();
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 14),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: Colors.white.withOpacity(0.10)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.play_arrow_rounded, color: Colors.green),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    "Resume current pickup",
+                                    style: TextStyle(
+                                        color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    "$name • $status",
+                                    style: TextStyle(
+                                        color: Colors.grey.shade300, fontSize: 12),
+                                  ),
+                                  if (address.isNotEmpty)
+                                    Text(
+                                      address,
+                                      style: TextStyle(
+                                          color: Colors.grey.shade400, fontSize: 11),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            ElevatedButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        CollectorPickupMapPage(requestId: doc.id),
+                                  ),
+                                );
+                              },
+                              child: const Text("OPEN"),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+
+                  const SizedBox(height: 6),
+                  // ===== ACTIVE =====
+                  const Text(
+                    "Active",
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (activeDocs.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 10),
+                      child: Text("No active pickups.", style: TextStyle(color: Colors.white54)),
+                    )
+                  else
+                    for (final d in activeDocs) _buildLogCard(d as QueryDocumentSnapshot),
+
+                  const SizedBox(height: 14),
+
+                  // ===== HISTORY =====
+                  const Text(
+                    "History",
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (historyDocs.isEmpty)
+                    const Text("No history yet.", style: TextStyle(color: Colors.white54))
+                  else
+                    for (final d in historyDocs) _buildLogCard(d as QueryDocumentSnapshot),
+                ],
               ),
-              const SizedBox(height: 10),
-              for (final d in docs) ...[
-                _buildLogCard(d),
-              ],
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -516,8 +688,6 @@ class _CollectorLogsHome extends StatelessWidget {
         return "Pickup completed";
       case 'accepted':
         return "Pickup request accepted";
-      case 'transferred':
-        return "Transferred to junkshop";
       case 'pending':
         return "Pickup request received";
       case 'cancelled':

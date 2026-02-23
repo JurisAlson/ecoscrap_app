@@ -9,17 +9,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 class CollectorPickupMapPage extends StatefulWidget {
   final String requestId;
-  final double pickupLat;
-  final double pickupLng;
-  final String pickupAddress;
-  
 
   const CollectorPickupMapPage({
     super.key,
     required this.requestId,
-    required this.pickupLat,
-    required this.pickupLng,
-    required this.pickupAddress,
   });
 
   @override
@@ -27,6 +20,11 @@ class CollectorPickupMapPage extends StatefulWidget {
 }
 
 class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
+  GeoPoint? _pickupGp;
+  String _pickupAddress = "";
+  String _householdName = "Household";
+  String _status = "";
+
   static const Color _bg = Color(0xFF0F172A);
   static const Color _accent = Color(0xFF1FA9A7);
 
@@ -38,7 +36,11 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   List<LatLng> _route = [];
 
-  LatLng get _pickup => LatLng(widget.pickupLat, widget.pickupLng);
+  LatLng get _pickup {
+    final gp = _pickupGp;
+    if (gp == null) return const LatLng(0, 0); // or a fallback
+    return LatLng(gp.latitude, gp.longitude);
+  }
   LatLng get _origin => _pos == null ? _pickup : LatLng(_pos!.latitude, _pos!.longitude);
 
   @override
@@ -51,19 +53,29 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   Future<void> _loadRequestInfo() async {
     try {
       final doc = await FirebaseFirestore.instance
-          .collection('pickupRequests')
+          .collection('requests')
           .doc(widget.requestId)
           .get();
 
       final data = doc.data() ?? {};
+      final gp = data['pickupLocation'];
+
       if (!mounted) return;
 
       setState(() {
         _householdName = (data['householdName'] ?? 'Household').toString();
-        _householdId = (data['householdId'] ?? '').toString();
+        _pickupAddress = (data['pickupAddress'] ?? '').toString();
+        _status = (data['status'] ?? '').toString();
+        _pickupGp = (gp is GeoPoint) ? gp : null;
       });
-    } catch (_) {
-      // keep fallback values
+
+      // ✅ Now that pickup is known, build route if we already have our location
+      if (_pickupGp != null && _pos != null) {
+        await _buildRoute();
+        _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));
+      }
+    } catch (e) {
+      // optional: show snackbar
     }
   }
 
@@ -76,9 +88,10 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     if (!mounted) return;
     setState(() => _pos = p);
 
-    await _buildRoute();
-
-    _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));
+    if (_pickupGp != null) {
+      await _buildRoute();
+      _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));
+    }
   }
 
   Future<bool> _ensureLocationPermission() async {
@@ -91,7 +104,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     return true;
   }
-  String _householdName = "Household";
   String _householdId = "";
   String _distanceText = "";
   String _durationText = "";
@@ -103,6 +115,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     final o = _origin;
     final d = _pickup;
+
 
     final uri = Uri.parse(
       "https://maps.googleapis.com/maps/api/directions/json"
@@ -165,10 +178,21 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
+  
+
   Future<void> _openGoogleMapsNavigation() async {
+    final gp = _pickupGp;
+    if (gp == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Pickup location not loaded yet.")),
+      );
+      return;
+    }
+
     final url = Uri.parse(
       "https://www.google.com/maps/dir/?api=1"
-      "&destination=${widget.pickupLat},${widget.pickupLng}"
+      "&destination=${gp.latitude},${gp.longitude}"
       "&travelmode=driving",
     );
 
@@ -213,42 +237,51 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return points;
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final markers = <Marker>{
-      Marker(markerId: const MarkerId("pickup"), position: _pickup, infoWindow: InfoWindow(title: "Pickup", snippet: widget.pickupAddress)),
-      if (_pos != null) Marker(markerId: const MarkerId("me"), position: _origin, infoWindow: const InfoWindow(title: "You")),
-    };
-
-    final polylines = _route.isEmpty
-        ? <Polyline>{}
-        : {
-            Polyline(
-              polylineId: const PolylineId("route"),
-              points: _route,
-              width: 6,
-              color: _accent,
-            )
-          };
-
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _bg,
-        title: const Text("Go to Pickup"),
+@override
+Widget build(BuildContext context) {
+  final markers = <Marker>{
+    Marker(
+      markerId: const MarkerId("pickup"),
+      position: _pickup,
+      infoWindow: InfoWindow(title: "Pickup", snippet: _pickupAddress),
+    ),
+    if (_pos != null)
+      Marker(
+        markerId: const MarkerId("me"),
+        position: _origin,
+        infoWindow: const InfoWindow(title: "You"),
       ),
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: GoogleMap(
-              initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
-              onMapCreated: (c) => _map = c,
-              myLocationEnabled: _pos != null,
-              markers: markers,
-              polylines: polylines,
-              zoomControlsEnabled: false,
-            ),
+  }; // ✅ IMPORTANT: close the set here
+
+  final polylines = _route.isEmpty
+      ? <Polyline>{}
+      : {
+          Polyline(
+            polylineId: const PolylineId("route"),
+            points: _route,
+            width: 6,
+            color: _accent,
+          )
+        };
+
+  return Scaffold(
+    backgroundColor: _bg,
+    appBar: AppBar(
+      backgroundColor: _bg,
+      title: const Text("Go to Pickup"),
+    ),
+    body: Stack(
+      children: [
+        Positioned.fill(
+          child: GoogleMap(
+            initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
+            onMapCreated: (c) => _map = c,
+            myLocationEnabled: _pos != null,
+            markers: markers,
+            polylines: polylines,
+            zoomControlsEnabled: false,
           ),
+        ),
   
           Positioned(
             left: 16,
@@ -294,9 +327,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                const SizedBox(height: 2),
                                 Text(
-                                  widget.pickupAddress.isEmpty ? "Unknown address" : widget.pickupAddress,
+                                  _pickupAddress.isEmpty ? "Unknown address" : _pickupAddress,
                                   style: TextStyle(
                                     color: Colors.grey.shade300,
                                     fontSize: 12,
@@ -358,10 +390,18 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                               height: 48,
                               child: ElevatedButton.icon(
                                 onPressed: () async {
+                                  final s = _status.toLowerCase();
+
+                                  if (s == 'arrived') {
+                                    await _markCompleted();
+                                    return;
+                                  }
+
+                                  // default: mark arrived
                                   try {
                                     await FirebaseFirestore.instance
-                                        .collection('pickupRequests')
-                                        .doc(widget.requestId) // ✅ THIS is the correct one
+                                        .collection('requests')
+                                        .doc(widget.requestId)
                                         .update({
                                       'status': 'arrived',
                                       'arrived': true,
@@ -369,19 +409,22 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                                       'updatedAt': FieldValue.serverTimestamp(),
                                     });
 
-                                    if (!context.mounted) return;
+                                    if (!mounted) return;
+                                    setState(() => _status = 'arrived'); // ✅ update UI instantly
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(content: Text("Marked as arrived.")),
                                     );
                                   } catch (e) {
-                                    if (!context.mounted) return;
+                                    if (!mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(content: Text("Error: $e")),
                                     );
                                   }
                                 },
-                                icon: const Icon(Icons.check_circle),
-                                label: const Text("ARRIVED"),
+                                icon: Icon(_status.toLowerCase() == 'arrived'
+                                    ? Icons.check_circle
+                                    : Icons.location_on_outlined),
+                                label: Text(_status.toLowerCase() == 'arrived' ? "COMPLETE" : "ARRIVED"),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _accent,
                                   foregroundColor: _bg,
@@ -417,6 +460,104 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
           ),
         ),
       ],
+    );
+  }
+  Future<void> _markCompleted() async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(widget.requestId)
+          .update({
+        'status': 'completed',
+        'active': false,
+        'completedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Marked as completed.")),
+      );
+
+      // optional: pop back to dashboard so it disappears immediately
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Complete failed: $e")),
+      );
+    }
+  }
+  Widget _resumeCard(BuildContext context, QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final status = (data['status'] ?? '').toString().toLowerCase();
+    final name = (data['householdName'] ?? 'Household').toString();
+    final address = (data['pickupAddress'] ?? '').toString();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.10)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.play_arrow_rounded, color: Colors.green),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Resume current pickup",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "$name • ${status.isEmpty ? "in progress" : status}",
+                  style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (address.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    address,
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            height: 40,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CollectorPickupMapPage(requestId: doc.id),
+                  ),
+                );
+              },
+              child: const Text("OPEN"),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -44,52 +44,26 @@ class CollectorNotificationsPage extends StatelessWidget {
       // ✅ Update pickup request to accepted
       await doc.reference.update({
         'status': 'accepted',
+        'active': true,
         'acceptedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
 
-        // keep these if available so junkshop routing is reliable
-        if (junkshopId.isNotEmpty) 'junkshopId': junkshopId,
-        if (junkshopName.isNotEmpty) 'junkshopName': junkshopName,
       });
 
-      // ✅ Create junkshop notification
-      if (junkshopId.isNotEmpty) {
-        await db
-            .collection('Users')
-            .doc(junkshopId)
-            .collection('notifications')
-            .doc(doc.id) // ✅ prevent duplicate notifs
-            .set({
-          'type': 'pickup_accepted',
-          'pickupRequestId': doc.id,
-
-          'residentId': householdId,
-          'residentName': householdName,
-
-          'collectorId': user.uid,
-          'collectorName': collectorName,
-
-          'read': false,
-          'createdAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      } else {
-        // helpful debug (means pickupRequests lacks junkshopId)
-        debugPrint("⚠️ junkshopId missing. No notification created for request=${doc.id}");
-      }
 
       if (!context.mounted) return;
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => CollectorPickupMapPage(
-            requestId: doc.id,
-            pickupLat: gp.latitude,
-            pickupLng: gp.longitude,
-            pickupAddress: (data['pickupAddress'] ?? '').toString(),
-          ),
-        ),
-      );
+      // Navigator.pushReplacement(
+      //   context,
+      //   MaterialPageRoute(
+      //     builder: (_) => CollectorPickupMapPage(
+      //       requestId: doc.id,
+      //       pickupLat: gp.latitude,
+      //       pickupLng: gp.longitude,
+      //       pickupAddress: (data['pickupAddress'] ?? '').toString(),
+      //     ),
+      //   ),
+      // );
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -105,6 +79,7 @@ class CollectorNotificationsPage extends StatelessWidget {
     try {
       await doc.reference.update({
         'status': 'declined',
+        'active': false,
         'declinedBy': FieldValue.arrayUnion([user.uid]),
         'declinedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
@@ -147,6 +122,21 @@ class CollectorNotificationsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF0F172A),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF0F172A),
+          title: const Text("Notifications"),
+        ),
+        body: const Center(
+          child: Text("Please sign in.", style: TextStyle(color: Colors.white)),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
@@ -154,12 +144,12 @@ class CollectorNotificationsPage extends StatelessWidget {
         title: const Text("Notifications"),
       ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-        .collection('pickupRequests')
-        .where('collectorId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
-        .where('status', whereIn: ['pending', 'scheduled'])
-        .snapshots(),
-
+        stream: FirebaseFirestore.instance
+            .collection('requests')
+            .where('type', isEqualTo: 'pickup')
+            .where('collectorId', isEqualTo: FirebaseAuth.instance.currentUser!.uid)
+            .where('status', whereIn: ['pending', 'scheduled'])
+            .snapshots(),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -174,7 +164,7 @@ class CollectorNotificationsPage extends StatelessWidget {
             );
           }
 
-          final uid = FirebaseAuth.instance.currentUser!.uid;
+          final uid = user.uid;
           final allDocs = snap.data?.docs ?? [];
 
           final docs = allDocs.where((d) {
@@ -182,6 +172,7 @@ class CollectorNotificationsPage extends StatelessWidget {
             final declinedBy = (data['declinedBy'] as List?) ?? [];
             return !declinedBy.contains(uid);
           }).toList();
+
           if (docs.isEmpty) {
             return const Center(
               child: Text("No pending pickup requests.", style: TextStyle(color: Colors.white)),
