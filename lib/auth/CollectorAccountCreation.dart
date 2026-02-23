@@ -74,119 +74,127 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     }
   }
 
-  Future<void> _submitCollector() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    if (!_formKey.currentState!.validate()) return;
+Future<void> _submitCollector() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+  if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _loading = true);
+  setState(() => _loading = true);
 
-    Reference? uploadedRef;
+  Reference? uploadedRef;
 
-    try {
-      final uid = user.uid;
-      final email = user.email ?? "";
+  try {
+    final uid = user.uid;
+    final email = user.email ?? "";
 
-      final db = FirebaseFirestore.instance;
-      final userRef = db.collection("Users").doc(uid);
-      final reqRef = db.collection("collectorRequests").doc(uid);
-      final kycRef = db.collection("collectorKYC").doc(uid);
+    final db = FirebaseFirestore.instance;
+    final userRef = db.collection("Users").doc(uid);
+    final reqRef = db.collection("collectorRequests").doc(uid);
+    final kycRef = db.collection("collectorKYC").doc(uid);
 
-      // quick check: block if active
-      final snap0 = await userRef.get();
-      final existing0 = snap0.data() ?? {};
-      final status0 = (existing0["collectorStatus"] ?? "").toString().toLowerCase();
-      final isActive0 = status0 == "pending" || status0 == "adminapproved" || status0 == "junkshopaccepted";
+    // Block if active
+    final snap0 = await userRef.get();
+    final existing0 = snap0.data() ?? {};
+    final status0 = (existing0["collectorStatus"] ?? "").toString().toLowerCase();
+    final isActive0 = status0 == "pending" || status0 == "adminapproved" || status0 == "junkshopaccepted";
+    if (isActive0) {
+      _toast("You already have an active request ($status0).", error: true);
+      return;
+    }
 
-      if (isActive0) {
-        _toast("You already have an active request ($status0).", error: true);
+    // Upload optional ID (NO URL stored; only stable filename)
+    String? kycFileName; // e.g. collector_id.jpg
+    if (_pickedFile != null) {
+      final ext = (_pickedFile!.extension ?? "").toLowerCase();
+      if (!['jpg', 'jpeg', 'png', 'pdf'].contains(ext)) {
+        _toast("Invalid file type. Use JPG/PNG/PDF only.", error: true);
         return;
       }
 
-      // Upload optional ID
-      String? permitPath;
-      if (_pickedFile != null) {
-        final ext = (_pickedFile!.extension ?? "").toLowerCase();
-        if (!['jpg', 'jpeg', 'png', 'pdf'].contains(ext)) {
-          _toast("Invalid file type. Use JPG/PNG/PDF only.", error: true);
-          return;
-        }
+      // Normalize extension
+      final normalizedExt = (ext == "jpeg") ? "jpg" : ext;
 
-        final fileName = "collector_id_${DateTime.now().millisecondsSinceEpoch}.$ext";
-        final path = "kyc/$uid/$fileName";
+      // Deterministic file name (overwrite on resubmit)
+      kycFileName = "collector_id.$normalizedExt";
 
-        uploadedRef = FirebaseStorage.instance.ref(path);
-        await uploadedRef.putFile(
-          File(_pickedFile!.path!),
-          SettableMetadata(contentType: _guessContentType(ext)),
-        );
+      // Deterministic path (NO timestamp needed)
+      final path = "kyc/$uid/$kycFileName";
 
-        permitPath = path;
-      }
+      uploadedRef = FirebaseStorage.instance.ref(path);
 
-      // Transaction: Users + collectorRequests + collectorKYC (if file uploaded)
-      await db.runTransaction((tx) async {
-        final userSnap = await tx.get(userRef);
-        final existing = (userSnap.data() as Map<String, dynamic>?) ?? {};
+      await uploadedRef.putFile(
+        File(_pickedFile!.path!),
+        SettableMetadata(contentType: _guessContentType(normalizedExt)),
+      );
+    }
 
-        final status = (existing["collectorStatus"] ?? "").toString().toLowerCase();
-        final isActive = status == "pending" || status == "adminapproved" || status == "junkshopaccepted";
-        if (isActive) throw Exception("Already has active request ($status)");
+    // Firestore transaction: Users + collectorRequests + collectorKYC
+    await db.runTransaction((tx) async {
+      final userSnap = await tx.get(userRef);
+      final existing = userSnap.data() ?? {};
 
-        // Users doc (no permitPath stored here)
-        tx.set(userRef, {
+      final status = (existing["collectorStatus"] ?? "").toString().toLowerCase();
+      final isActive = status == "pending" || status == "adminapproved" || status == "junkshopaccepted";
+      if (isActive) throw Exception("Already has active request ($status)");
+
+      // Users doc (role stays USER until accepted by junkshop)
+      tx.set(userRef, {
+        "uid": uid,
+        "emailDisplay": email,
+        "name": _name.text.trim(),
+
+        "collectorStatus": "pending",
+        "collectorSubmittedAt": FieldValue.serverTimestamp(),
+        "collectorUpdatedAt": FieldValue.serverTimestamp(),
+
+        if (!existing.containsKey("createdAt")) "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // collectorRequests (junkshop-visible, public fields ONLY)
+      tx.set(reqRef, {
+        "collectorUid": uid,
+        "publicName": _name.text.trim(),
+        "emailDisplay": email,
+
+        "hasKycFile": kycFileName != null, // ✅ boolean only
+        "status": "pending",
+        "submittedAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+
+        "acceptedByJunkshopUid": "",
+        "acceptedAt": FieldValue.delete(),
+        "rejectedByJunkshops": [],
+      }, SetOptions(merge: true));
+
+      // collectorKYC (admin-only)
+      // Store ONLY filename, NOT URL, NOT path.
+      if (kycFileName != null) {
+        tx.set(kycRef, {
           "uid": uid,
-          "emailDisplay": email,
-          "name": _name.text.trim(),
-
-          "collectorStatus": "pending",
-          "collectorSubmittedAt": FieldValue.serverTimestamp(),
-          "collectorUpdatedAt": FieldValue.serverTimestamp(),
-
-          if (!existing.containsKey("createdAt")) "createdAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-
-        // collectorRequests (junkshop-visible, NO KYC fields)
-        tx.set(reqRef, {
-          "publicName": _name.text.trim(),
-          "emailDisplay": email,
-
-          "status": "pending",
+          "hasKycFile": true,
+          "kycFileName": kycFileName, // ✅ only ID reference
           "submittedAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
-
-          // routing fields (reset every submit)
-          "acceptedByJunkshopUid": "",
-          "acceptedAt": FieldValue.delete(),
-          "rejectedByJunkshops": [],
         }, SetOptions(merge: true));
-
-        // collectorKYC (admin-only)
-        if (permitPath != null) {
-          tx.set(kycRef, {
-            "uid": uid,
-            "permitPath": permitPath,
-            "submittedAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-        }
-      });
-
-      _toast("Submitted! Pending admin review.");
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      // rollback uploaded file if transaction failed
-      if (uploadedRef != null) {
-        try {
-          await uploadedRef.delete();
-        } catch (_) {}
+      } else {
+        // If no file: keep doc absent or mark hasKycFile false (your choice)
+        tx.delete(kycRef);
       }
-      _toast("Failed: $e", error: true);
-    } finally {
-      if (mounted) setState(() => _loading = false);
+    });
+
+    _toast("Submitted! Pending admin review.");
+    if (mounted) Navigator.pop(context);
+  } catch (e) {
+    // rollback uploaded file if Firestore failed
+    if (uploadedRef != null) {
+      try { await uploadedRef.delete(); } catch (_) {}
     }
+    _toast("Failed: $e", error: true);
+  } finally {
+    if (mounted) setState(() => _loading = false);
   }
+}
 
   @override
   Widget build(BuildContext context) {

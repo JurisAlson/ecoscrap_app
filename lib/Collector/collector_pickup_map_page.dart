@@ -122,6 +122,11 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     return true;
   }
+  final String _householdId = "";
+  String _distanceText = "";
+  String _durationText = "";
+  int? _durationValueSec; // optional, for logic
+
 
   Future<void> _buildRoute() async {
     if (_directionsKey == "YOUR_DIRECTIONS_API_KEY") return;

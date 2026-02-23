@@ -46,7 +46,7 @@ class HouseholdOrderPage extends StatelessWidget {
           return const _EmptyOrderState();
         }
 
-        final d = docs.first as QueryDocumentSnapshot;
+        final d = docs.first;
         final data = d.data() as Map<String, dynamic>;
 
         return _OrderCard(
