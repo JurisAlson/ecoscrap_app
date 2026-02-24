@@ -702,7 +702,7 @@ class _CollectorMapTab extends StatelessWidget {
                 );
               }
 
-              final doc = docs.first as QueryDocumentSnapshot;
+              final doc = docs.first;
               final data = doc.data() as Map<String, dynamic>;
 
               final status = (data['status'] ?? '').toString().toLowerCase();
@@ -1039,7 +1039,7 @@ class _CollectorLogsHome extends StatelessWidget {
                     child: Text("No active pickups.", style: TextStyle(color: Colors.white54)),
                   )
                 else
-                  for (final d in activeDocs) _buildLogCard(d as QueryDocumentSnapshot),
+                  for (final d in activeDocs) _buildLogCard(d),
 
                 const SizedBox(height: 14),
 
@@ -1056,7 +1056,7 @@ class _CollectorLogsHome extends StatelessWidget {
                 if (historyDocs.isEmpty)
                   const Text("No history yet.", style: TextStyle(color: Colors.white54))
                 else
-                  for (final d in historyDocs) _buildLogCard(d as QueryDocumentSnapshot),
+                  for (final d in historyDocs) _buildLogCard(d),
               ],
             );
           },

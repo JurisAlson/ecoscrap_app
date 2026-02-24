@@ -5,12 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../image_detection.dart';
 import '../auth/JunkshopAccountCreation.dart';
 import 'household_order_page.dart';
 import '../auth/CollectorAccountCreation.dart';
 import '../services/notification_service.dart';
-
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -31,24 +31,25 @@ class _DashboardPageState extends State<DashboardPage> {
   int _promoIndex = 0;
   Timer? _promoTimer;
 
-  // ✅ FIXED bottom bar height (nav + room for camera action bar)
-  static const double _bottomBarHeight = 140;
+  // ✅ Bottom bar heights
+  static const double _bottomBarClosedHeight = 140;
+  static const double _bottomBarOpenHeight = 230;
 
   // ===== CAMERA BAR STATE =====
   bool _cameraBarOpen = false;
 
   // ================= TAB SCREENS =================
   List<Widget> get _tabScreens => [
-    _householdHome(),
-    _historyScreen(),
-    const HouseholdOrderPage(),
-    const Center(
-      child: Text(
-        "Chat Screen",
-        style: TextStyle(color: Colors.white, fontSize: 22),
-      ),
-    ),
-  ];
+        _householdHome(),
+        _historyScreen(),
+        const HouseholdOrderPage(),
+        const Center(
+          child: Text(
+            "Chat Screen",
+            style: TextStyle(color: Colors.white, fontSize: 22),
+          ),
+        ),
+      ];
 
   @override
   void initState() {
@@ -129,14 +130,17 @@ class _DashboardPageState extends State<DashboardPage> {
 
         body: Stack(
           children: [
-            _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
-            _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
+            _blurCircle(primaryColor.withOpacity(0.15), 300,
+                top: -100, right: -100),
+            _blurCircle(Colors.green.withOpacity(0.1), 350,
+                bottom: 100, left: -100),
             SafeArea(
               child: Column(
                 children: [
                   // ===== HEADER =====
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 20),
                     child: Row(
                       children: [
                         // ✅ LEFT PROFILE ICON
@@ -149,7 +153,8 @@ class _DashboardPageState extends State<DashboardPage> {
                             width: 45,
                             height: 45,
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(colors: [primaryColor, Colors.green]),
+                              gradient: LinearGradient(
+                                  colors: [primaryColor, Colors.green]),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: const Icon(Icons.person, color: Colors.white),
@@ -212,12 +217,13 @@ class _DashboardPageState extends State<DashboardPage> {
           ],
         ),
 
-        // ✅ FIXED BOTTOM NAV (NO DROPDOWN / NO AUTO-HIDE)
+        // ✅ FIXED BOTTOM NAV + CAMERA BAR (CLEAN)
         bottomNavigationBar: SizedBox(
-          height: _bottomBarHeight,
+          height: _cameraBarOpen ? _bottomBarOpenHeight : _bottomBarClosedHeight,
           child: Stack(
+            clipBehavior: Clip.none, // ✅ prevents clipping
             children: [
-              // ===== BOTTOM NAV BAR (FIXED) =====
+              // ===== BOTTOM NAV BAR =====
               Positioned(
                 left: 0,
                 right: 0,
@@ -226,7 +232,9 @@ class _DashboardPageState extends State<DashboardPage> {
                   height: 90,
                   decoration: BoxDecoration(
                     color: bgColor.withOpacity(0.86),
-                    border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
+                    border: Border(
+                      top: BorderSide(color: Colors.white.withOpacity(0.08)),
+                    ),
                   ),
                   child: ClipRRect(
                     child: BackdropFilter(
@@ -246,7 +254,42 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
 
-              // ===== CENTER CAMERA BUTTON (FIXED) =====
+              // ===== SLIDING CAMERA BAR (ABOVE BUTTON, NOT COVERED) =====
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOut,
+                left: 16,
+                right: 16,
+                bottom: _cameraBarOpen ? 140 : 40, // ✅ above center button
+                child: IgnorePointer(
+                  ignoring: !_cameraBarOpen,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 200),
+                    opacity: _cameraBarOpen ? 1 : 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: bgColor.withOpacity(0.92),
+                        borderRadius: BorderRadius.circular(18),
+                        border:
+                            Border.all(color: Colors.white.withOpacity(0.08)),
+                      ),
+                      child: _cameraAction(
+                        icon: Icons.camera_alt,
+                        title: "Scan",
+                        subtitle: "Use camera",
+                        onTap: () async {
+                          _closeCameraBar();
+                          await _openLens(context);
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ===== CENTER CAMERA BUTTON (ON TOP) =====
               Positioned(
                 left: 0,
                 right: 0,
@@ -278,39 +321,6 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                 ),
               ),
-
-              // ===== SLIDING CAMERA BAR (ONLY THIS SLIDES) =====
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOut,
-                left: 16,
-                right: 16,
-                bottom: _cameraBarOpen ? 94 : 40,
-                child: IgnorePointer(
-                  ignoring: !_cameraBarOpen,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 200),
-                    opacity: _cameraBarOpen ? 1 : 0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: bgColor.withOpacity(0.92),
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.white.withOpacity(0.08)),
-                      ),
-                      child: _cameraAction(
-                        icon: Icons.camera_alt,
-                        title: "Scan",
-                        subtitle: "Use camera",
-                        onTap: () async {
-                          _closeCameraBar();
-                          await _openLens(context);
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              ),
             ],
           ),
         ),
@@ -327,7 +337,6 @@ class _DashboardPageState extends State<DashboardPage> {
         children: [
           _topSlider(),
           const SizedBox(height: 18),
-
           GestureDetector(
             onTap: () async {
               _closeCameraBar();
@@ -357,9 +366,7 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
           ),
-
           const SizedBox(height: 30),
-
           const Text(
             "Why this matters",
             style: TextStyle(
@@ -369,27 +376,22 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
           ),
           const SizedBox(height: 12),
-
           _infoCard(
             "Stronger communities (SDG 11)",
             "Segregating waste and tracking recyclable materials helps keep neighborhoods clean, "
-            "reduces landfill overflow, and supports community-based collectors.",
+                "reduces landfill overflow, and supports community-based collectors.",
           ),
-
           const SizedBox(height: 18),
-
           _infoCard(
             "Community impact",
             "Every scan improves awareness and can help connect households with local collectors—"
-            "making recycling more accessible for everyone.",
+                "making recycling more accessible for everyone.",
           ),
-
           const SizedBox(height: 30),
-
           _infoCard(
             "Did you know?",
             "Only 9% of plastic waste is recycled globally. "
-            "Proper segregation helps reduce landfill waste.",
+                "Proper segregation helps reduce landfill waste.",
           ),
         ],
       ),
@@ -512,12 +514,12 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     final query = FirebaseFirestore.instance
-      .collection('requests')
-      .where('type', isEqualTo: 'pickup')
-      .where('householdId', isEqualTo: user.uid)
-      .where('active', isEqualTo: false)
-      .orderBy('updatedAt', descending: true)
-      .limit(30);
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('householdId', isEqualTo: user.uid)
+        .where('active', isEqualTo: false)
+        .orderBy('updatedAt', descending: true)
+        .limit(30);
 
     return StreamBuilder<QuerySnapshot>(
       stream: query.snapshots(),
@@ -539,7 +541,8 @@ class _DashboardPageState extends State<DashboardPage> {
         final docs = snap.data?.docs ?? [];
         if (docs.isEmpty) {
           return const Center(
-            child: Text("No history yet.", style: TextStyle(color: Colors.white70)),
+            child:
+                Text("No history yet.", style: TextStyle(color: Colors.white70)),
           );
         }
 
@@ -550,7 +553,10 @@ class _DashboardPageState extends State<DashboardPage> {
             children: [
               const Text(
                 "Transaction History",
-                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 10),
               for (final d in docs) _pickupHistoryCard(d),
@@ -568,17 +574,19 @@ class _DashboardPageState extends State<DashboardPage> {
     final status = (data['status'] ?? '').toString().toLowerCase();
     final pickupType = (data['pickupType'] ?? '').toString().toLowerCase();
 
-    // Prefer createdAt if you have it; otherwise use updatedAt
-    final createdAt = data['createdAt'] is Timestamp ? data['createdAt'] as Timestamp : null;
-    final updatedAt = data['updatedAt'] is Timestamp ? data['updatedAt'] as Timestamp : null;
+    final createdAt =
+        data['createdAt'] is Timestamp ? data['createdAt'] as Timestamp : null;
+    final updatedAt =
+        data['updatedAt'] is Timestamp ? data['updatedAt'] as Timestamp : null;
     final ts = createdAt ?? updatedAt;
 
-    final windowStart = data['windowStart'] is Timestamp ? data['windowStart'] as Timestamp : null;
-    final windowEnd = data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
+    final windowStart =
+        data['windowStart'] is Timestamp ? data['windowStart'] as Timestamp : null;
+    final windowEnd =
+        data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
 
     final title = _statusToTitle(status);
 
-    // Multiline subtitle exactly like your example fields
     final subtitle = [
       "Collector: $collectorName",
       "Created: ${_formatDateTime(ts)}",
@@ -591,7 +599,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return _historyCard(
       title: title,
       subtitle: subtitle,
-      rightText: _formatShortTime(ts), // small time on the right
+      rightText: _formatShortTime(ts),
       icon: _statusToIcon(status),
       iconBg: _statusToIconBg(status),
       iconColor: _statusToIconColor(status),
@@ -670,12 +678,24 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  // Formats: "20 Feb 2026 • 3:05 PM"
   String _formatDateTime(Timestamp? ts) {
     if (ts == null) return "—";
     final dt = ts.toDate();
 
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
     final m = months[dt.month - 1];
 
     int hour = dt.hour % 12;
@@ -686,7 +706,6 @@ class _DashboardPageState extends State<DashboardPage> {
     return "${dt.day} $m ${dt.year} • $hour:$mm $ampm";
   }
 
-  // Formats: "3:05 PM"
   String _formatShortTime(Timestamp? ts) {
     if (ts == null) return "—";
     final dt = ts.toDate();
@@ -697,7 +716,6 @@ class _DashboardPageState extends State<DashboardPage> {
     return "$hour:$mm $ampm";
   }
 
-  // Formats: "5:00 PM"
   String _formatTime(Timestamp ts) {
     final dt = ts.toDate();
     int hour = dt.hour % 12;
@@ -740,11 +758,14 @@ class _DashboardPageState extends State<DashboardPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(title,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 Text(
                   subtitle,
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11, height: 1.35),
+                  style: TextStyle(
+                      color: Colors.grey.shade400, fontSize: 11, height: 1.35),
                 ),
               ],
             ),
@@ -755,16 +776,6 @@ class _DashboardPageState extends State<DashboardPage> {
             style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
           ),
         ],
-      ),
-    );
-  }
-
-  // ================= COLLECTORS TAB =================
-  Widget _collectorsTab() {
-    return const Center(
-      child: Text(
-        "Collector Screen",
-        style: TextStyle(color: Colors.white, fontSize: 22),
       ),
     );
   }
@@ -785,7 +796,10 @@ class _DashboardPageState extends State<DashboardPage> {
               const SizedBox(width: 8),
               const Text(
                 "Notifications",
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold),
               ),
             ],
           ),
@@ -799,7 +813,8 @@ class _DashboardPageState extends State<DashboardPage> {
           _notificationTile(
             icon: Icons.eco_outlined,
             title: "Community",
-            subtitle: "Your actions help support cleaner, safer neighborhoods (SDG 11).",
+            subtitle:
+                "Your actions help support cleaner, safer neighborhoods (SDG 11).",
           ),
           const SizedBox(height: 12),
           _notificationTile(
@@ -832,9 +847,13 @@ class _DashboardPageState extends State<DashboardPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(title,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
-                Text(subtitle, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                Text(subtitle,
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 13)),
               ],
             ),
           ),
@@ -844,165 +863,178 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   // ================= PROFILE DRAWER (LEFT) =================
-Widget _profileDrawer() {
-  final user = FirebaseAuth.instance.currentUser;
+  Widget _profileDrawer() {
+    final user = FirebaseAuth.instance.currentUser;
 
-  return SingleChildScrollView(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.close, color: Colors.white),
-              onPressed: () => Navigator.pop(context),
-            ),
-            const SizedBox(width: 8),
-            const Text(
-              "Profile",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        const Icon(Icons.person, size: 80, color: Colors.white54),
-        const SizedBox(height: 16),
-        Text(
-          user?.email ?? "Household User",
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 30),
-
-        _howToUseCard(),
-
-        const SizedBox(height: 20),
-
-        // ===== REGISTER AS JUNKSHOP =====
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Row(
             children: [
-              const Icon(Icons.storefront_outlined, color: Color(0xFF1FA9A7), size: 32),
-              const SizedBox(height: 12),
-              const Text(
-                "Register as Junkshop",
-                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(width: 8),
               const Text(
-                "Submit your business permit and create a business account.",
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 45,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1FA9A7),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const JunkshopAccountCreationPage()),
-                    );
-                  },
-                  child: const Text("Apply Now", style: TextStyle(color: Colors.white)),
+                "Profile",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ],
           ),
-        ),
-
-        const SizedBox(height: 20),
-
-        // ===== APPLY AS COLLECTOR (NEW) =====
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            children: [
-              const Icon(Icons.local_shipping_outlined, color: Colors.green, size: 32),
-              const SizedBox(height: 12),
-              const Text(
-                "Apply as Collector",
-                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                "Create a collector account and submit requirements to start collecting.",
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 45,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const CollectorAccountCreation()),
-                    );
-                  },
-                  child: const Text("Apply Now", style: TextStyle(color: Colors.white)),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 30),
-
-        // ===== LOGOUT =====
-        SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: ElevatedButton.icon(
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              if (!mounted) return;
-              Navigator.pushReplacementNamed(context, '/login');
-            },
-            icon: const Icon(Icons.logout),
-            label: const Text("Logout"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: primaryColor,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          const SizedBox(height: 20),
+          const Icon(Icons.person, size: 80, color: Colors.white54),
+          const SizedBox(height: 16),
+          Text(
+            user?.email ?? "Household User",
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
             ),
           ),
-        ),
-      ],
-    ),
-  );
-}
+          const SizedBox(height: 30),
+          _howToUseCard(),
+          const SizedBox(height: 20),
+
+          // ===== REGISTER AS JUNKSHOP =====
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.storefront_outlined,
+                    color: Color(0xFF1FA9A7), size: 32),
+                const SizedBox(height: 12),
+                const Text(
+                  "Register as Junkshop",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  "Submit your business permit and create a business account.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 45,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1FA9A7),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const JunkshopAccountCreationPage()),
+                      );
+                    },
+                    child: const Text("Apply Now",
+                        style: TextStyle(color: Colors.white)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // ===== APPLY AS COLLECTOR =====
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.local_shipping_outlined,
+                    color: Colors.green, size: 32),
+                const SizedBox(height: 12),
+                const Text(
+                  "Apply as Collector",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  "Create a collector account and submit requirements to start collecting.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 45,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const CollectorAccountCreation()),
+                      );
+                    },
+                    child: const Text("Apply Now",
+                        style: TextStyle(color: Colors.white)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 30),
+
+          // ===== LOGOUT =====
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              onPressed: () async {
+                await FirebaseAuth.instance.signOut();
+                if (!mounted) return;
+                Navigator.pushReplacementNamed(context, '/login');
+              },
+              icon: const Icon(Icons.logout),
+              label: const Text("Logout"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryColor,
+                foregroundColor: Colors.white,
+                shape:
+                    RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   // ================= HOW TO USE CARD =================
   Widget _howToUseCard() {
@@ -1018,7 +1050,8 @@ Widget _profileDrawer() {
         children: [
           Text(
             "How to Use",
-            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           SizedBox(height: 12),
           _HowToRow(icon: Icons.camera_alt, text: "Tap Scan to check if an item is recyclable."),
@@ -1090,9 +1123,13 @@ Widget _profileDrawer() {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  Text(title,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                  Text(subtitle,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12)),
                 ],
               ),
             ),
@@ -1112,7 +1149,9 @@ Widget _profileDrawer() {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          Text(title,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(content, style: TextStyle(color: Colors.grey.shade400)),
         ],
@@ -1120,7 +1159,8 @@ Widget _profileDrawer() {
     );
   }
 
-  Widget _iconButton(IconData icon, {bool badge = false, required VoidCallback onTap}) {
+  Widget _iconButton(IconData icon,
+      {bool badge = false, required VoidCallback onTap}) {
     return Stack(
       children: [
         GestureDetector(
@@ -1141,7 +1181,8 @@ Widget _profileDrawer() {
             child: Container(
               width: 8,
               height: 8,
-              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+              decoration:
+                  const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
             ),
           ),
       ],

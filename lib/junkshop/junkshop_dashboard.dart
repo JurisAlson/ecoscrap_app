@@ -73,7 +73,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       final reqSnap = await tx.get(reqRef);
       if (!reqSnap.exists) throw Exception("Request not found.");
 
-      final req = (reqSnap.data() as Map<String, dynamic>?) ?? {};
+      final req = reqSnap.data() ?? {};
       final status = (req["status"] ?? "").toString();
       final acceptedBy = (req["acceptedByJunkshopUid"] ?? "").toString();
 

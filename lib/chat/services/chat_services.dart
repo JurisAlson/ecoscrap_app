@@ -155,7 +155,7 @@ class ChatService {
     final snap = await ref.get();
     if (!snap.exists) return;
 
-    final data = (snap.data() as Map<String, dynamic>?) ?? {};
+    final data = snap.data() ?? {};
 
     final hasCollectorUid = (data['collectorUid'] ?? '').toString().trim().isNotEmpty;
     final hasJunkshopUid = (data['junkshopUid'] ?? '').toString().trim().isNotEmpty;
