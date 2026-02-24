@@ -3,7 +3,11 @@ const { logger } = require("firebase-functions/v2");
 const crypto = require("crypto");
 
 const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
-const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
+const {
+  onDocumentCreated,
+  onDocumentUpdated,
+  onDocumentWritten,
+} = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 admin.initializeApp();
@@ -13,7 +17,8 @@ admin.initializeApp();
 ==================================================== */
 exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+  if (request.auth.token?.admin !== true)
+    throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = request.data?.uid;
   let role = String(request.data?.role || "").trim().toLowerCase();
@@ -25,10 +30,16 @@ exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
   if (role === "junkshops") role = "junkshop";
 
   const allowed = ["user", "collector", "junkshop", "admin"];
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
-  if (!allowed.includes(role)) throw new HttpsError("invalid-argument", "Invalid role");
+  if (!uid || typeof uid !== "string")
+    throw new HttpsError("invalid-argument", "uid required");
+  if (!allowed.includes(role))
+    throw new HttpsError("invalid-argument", "Invalid role");
 
-  await admin.firestore().collection("Users").doc(uid).set({ Roles: role }, { merge: true });
+  await admin
+    .firestore()
+    .collection("Users")
+    .doc(uid)
+    .set({ Roles: role }, { merge: true });
 
   return { ok: true, uid, role };
 });
@@ -38,10 +49,12 @@ exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
 ==================================================== */
 exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+  if (request.auth.token?.admin !== true)
+    throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = request.data?.uid;
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
+  if (!uid || typeof uid !== "string")
+    throw new HttpsError("invalid-argument", "uid required");
 
   // 1) Mark junkshop verified in Users/{uid}
   await admin.firestore().collection("Users").doc(uid).set(
@@ -71,12 +84,12 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
    ADMIN-ONLY: Review junkshop permit request
    - updates permitRequests/{uid}
    - updates Users/{uid}
-   - deletes permit file immediately after decision
-   - NEW: permit file path is reconstructed from permitFileName
+   ✅ CHANGED: removed auto-delete/auto-expire of junkshop permits/files
 ==================================================== */
 exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+  if (request.auth.token?.admin !== true)
+    throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = String(request.data?.uid || "").trim();
   const decision = String(request.data?.decision || "").trim().toLowerCase(); // approved | rejected
@@ -87,7 +100,6 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
   }
 
   const db = admin.firestore();
-  const bucket = admin.storage().bucket();
   const reqRef = db.collection("permitRequests").doc(uid);
   const userRef = db.collection("Users").doc(uid);
 
@@ -97,18 +109,10 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
   const reqSnap = await reqRef.get();
   if (!reqSnap.exists) throw new HttpsError("not-found", "permit request not found");
 
-  const reqData = reqSnap.data() || {};
-
-  // ✅ NEW: only store filename (like collectorKYC)
-  const permitFileName = String(reqData.permitFileName || "").trim();
-  const hasPermitFile = reqData.hasPermitFile === true;
-
-  // ✅ Reconstruct path (we do NOT rely on stored full path)
-  const permitPath = (hasPermitFile && permitFileName) ? `permits/${uid}/${permitFileName}` : "";
-
   // Update Firestore (request + user)
   const batch = db.batch();
 
+  // ✅ Keep permit file fields as-is (no deleting / expiring)
   batch.set(
     reqRef,
     {
@@ -120,12 +124,6 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
       ...(decision === "approved"
         ? { approvedAt: admin.firestore.FieldValue.serverTimestamp() }
         : {}),
-      // optional: mark file already handled
-      permitExpired: true,
-      permitDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
-      // remove pointer after decision so admin can't open later
-      permitFileName: admin.firestore.FieldValue.delete(),
-      hasPermitFile: false,
     },
     { merge: true }
   );
@@ -151,13 +149,13 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
         role: "user",
         Roles: "user",
         junkshopStatus: "rejected",
-        activePermitRequestId: admin.firestore.FieldValue.serverTimestamp(), // <-- remove if you don’t use it
+        activePermitRequestId: admin.firestore.FieldValue.serverTimestamp(), // keep your existing behavior
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
 
-    // If you want to always clear it like you did before, use this instead:
+    // If you want to always clear it like before, use this instead:
     // batch.set(userRef, {
     //   role: "user",
     //   Roles: "user",
@@ -169,16 +167,17 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
 
   await batch.commit();
 
-  // Delete file from Storage after decision
-  if (permitPath) {
-    await bucket.file(permitPath).delete({ ignoreNotFound: true });
-  }
+  // ✅ REMOVED: deleting permit file from Storage after decision
 
   // Sync claims if approved
   if (decision === "approved") {
     const user = await admin.auth().getUser(uid);
     const existing = user.customClaims || {};
-    await admin.auth().setCustomUserClaims(uid, { ...existing, junkshop: true, collector: false });
+    await admin.auth().setCustomUserClaims(uid, {
+      ...existing,
+      junkshop: true,
+      collector: false,
+    });
   }
 
   return { ok: true, uid, decision };
@@ -189,13 +188,16 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
 ==================================================== */
 exports.setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+  if (request.auth.token?.admin !== true)
+    throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = request.data?.uid;
   const makeAdmin = request.data?.makeAdmin;
 
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
-  if (typeof makeAdmin !== "boolean") throw new HttpsError("invalid-argument", "makeAdmin must be boolean");
+  if (!uid || typeof uid !== "string")
+    throw new HttpsError("invalid-argument", "uid required");
+  if (typeof makeAdmin !== "boolean")
+    throw new HttpsError("invalid-argument", "makeAdmin must be boolean");
 
   try {
     const user = await admin.auth().getUser(uid);
@@ -228,8 +230,12 @@ exports.syncRoleClaims = onDocumentWritten(
       const after = afterSnap.data() || {};
       const uid = event.params.uid;
 
-      const beforeRole = String(before.Roles || before.roles || "").trim().toLowerCase();
-      let role = String(after.Roles || after.roles || "").trim().toLowerCase();
+      const beforeRole = String(before.Roles || before.roles || "")
+        .trim()
+        .toLowerCase();
+      let role = String(after.Roles || after.roles || "")
+        .trim()
+        .toLowerCase();
 
       if (role === "users") role = "user";
       if (role === "admins") role = "admin";
@@ -275,10 +281,12 @@ async function deleteSubcollection(db, parentRef, subName, batchSize = 250) {
 ==================================================== */
 exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+  if (request.auth.token?.admin !== true)
+    throw new HttpsError("permission-denied", "Admin only.");
 
   const uid = request.data?.uid;
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
+  if (!uid || typeof uid !== "string")
+    throw new HttpsError("invalid-argument", "uid required");
 
   const db = admin.firestore();
 
@@ -533,15 +541,18 @@ exports.cleanupCollectorKycByRetention = onSchedule(
 /* ====================================================
    MANUAL CLEANUP: collectorKYC (FOR TESTING)
 ==================================================== */
-exports.runCollectorKycCleanupNow = onRequest({ region: "asia-southeast1" }, async (req, res) => {
-  try {
-    const result = await cleanupCollectorKyc();
-    res.status(200).json({ ok: true, ...result });
-  } catch (err) {
-    logger.error("Manual collectorKYC cleanup crashed", { err: String(err) });
-    res.status(500).json({ ok: false, error: String(err) });
+exports.runCollectorKycCleanupNow = onRequest(
+  { region: "asia-southeast1" },
+  async (req, res) => {
+    try {
+      const result = await cleanupCollectorKyc();
+      res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      logger.error("Manual collectorKYC cleanup crashed", { err: String(err) });
+      res.status(500).json({ ok: false, error: String(err) });
+    }
   }
-});
+);
 
 /* ====================================================
    INVENTORY DEDUCTION (UNCHANGED logic, updated path)

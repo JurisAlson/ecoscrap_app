@@ -88,7 +88,6 @@ class _OrderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bgColor = const Color(0xFF0F172A);
-    final primaryColor = const Color(0xFF1FA9A7);
 
     final collectorName = (data['collectorName'] ?? '—').toString();
     final status = (data['status'] ?? '—').toString().toLowerCase();

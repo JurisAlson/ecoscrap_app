@@ -12,7 +12,7 @@ class AdminCollectorRequestsTab extends StatefulWidget {
 }
 
 class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
-  final String _query = ""; // unused (safe to keep)
+  //final String _query = ""; // unused (safe to keep)
 
   @override
   Widget build(BuildContext context) {
