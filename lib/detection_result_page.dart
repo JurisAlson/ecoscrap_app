@@ -1,43 +1,59 @@
+// lib/pages/detection_result_page.dart
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import 'geomapping.dart';
 
+enum DetectionStatus { recyclable, nonRecyclable, uncertain }
+
 class DetectionResultPage extends StatelessWidget {
-  final bool isRecyclable;
+  final DetectionStatus status;
   final String itemName;
-  final double confidence;
+  final double confidence; // 0..1
 
   const DetectionResultPage({
     super.key,
-    required this.isRecyclable,
+    required this.status,
     required this.itemName,
     required this.confidence,
   });
+
+  bool get isRecyclable => status == DetectionStatus.recyclable;
+  bool get isUncertain => status == DetectionStatus.uncertain;
 
   @override
   Widget build(BuildContext context) {
     final Color primaryColor = const Color(0xFF1FA9A7);
     final Color bgColor = const Color(0xFF0F172A);
 
+    final Color statusColor = isUncertain
+        ? Colors.amber
+        : (isRecyclable ? Colors.green : Colors.red);
+
+    final IconData statusIcon = isUncertain
+        ? Icons.help_outline
+        : (isRecyclable ? Icons.check_circle : Icons.cancel);
+
+    final String subtitleText = isUncertain
+        ? "We’re not sure about this photo.\nTry again with better lighting and closer framing."
+        : (isRecyclable
+            ? "This item is recyclable."
+            : "This item is not recyclable.\nPlease dispose of it responsibly.");
+
     return Scaffold(
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
-          _blurCircle(
-            (isRecyclable ? Colors.green : Colors.red).withOpacity(0.1),
-            350,
-            bottom: 100,
-            left: -100,
-          ),
-
+          _blurCircle(primaryColor.withOpacity(0.15), 300,
+              top: -100, right: -100),
+          _blurCircle(statusColor.withOpacity(0.10), 350,
+              bottom: 100, left: -100),
           SafeArea(
             child: Column(
               children: [
-                // ===== TOP BAR =====
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
                       IconButton(
@@ -56,8 +72,6 @@ class DetectionResultPage extends StatelessWidget {
                     ],
                   ),
                 ),
-
-                // ===== RESULT CONTENT =====
                 Expanded(
                   child: Center(
                     child: Padding(
@@ -65,13 +79,8 @@ class DetectionResultPage extends StatelessWidget {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            isRecyclable ? Icons.check_circle : Icons.cancel,
-                            color: isRecyclable ? Colors.green : Colors.red,
-                            size: 100,
-                          ),
+                          Icon(statusIcon, color: statusColor, size: 100),
                           const SizedBox(height: 24),
-
                           Text(
                             itemName,
                             textAlign: TextAlign.center,
@@ -81,46 +90,57 @@ class DetectionResultPage extends StatelessWidget {
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-
                           const SizedBox(height: 8),
-
                           Text(
                             "Confidence: ${(confidence * 100).toStringAsFixed(1)}%",
                             style: TextStyle(color: Colors.grey.shade400),
                           ),
+                          const SizedBox(height: 18),
+                          Text(
+                            subtitleText,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.grey.shade400,
+                              fontSize: 14,
+                              height: 1.35,
+                            ),
+                          ),
+                          const SizedBox(height: 26),
 
-                          const SizedBox(height: 30),
-
+                          // ✅ Only show junkshop button when confidently recyclable
                           if (isRecyclable) ...[
-                            // ✅ ONLY FEATURE YOU WANT
                             _actionButton(
                               icon: Icons.location_on,
                               label: "Find Nearest Junkshop",
                               onTap: () {
                                 Navigator.push(
                                   context,
-                                  MaterialPageRoute(builder: (_) => const GeoMappingPage()),
+                                  MaterialPageRoute(
+                                    builder: (_) => const GeoMappingPage(),
+                                  ),
                                 );
                               },
                               outlined: true,
                               color: primaryColor,
                               textColor: primaryColor,
                             ),
-                          ] else ...[
-                            Text(
-                              "This item is not recyclable.\nPlease dispose of it responsibly.",
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.grey.shade400,
-                                fontSize: 14,
-                              ),
-                            ),
+                            const SizedBox(height: 12),
                           ],
 
-                          const SizedBox(height: 30),
+                          // ✅ Always allow Scan Again
+                          _actionButton(
+                            icon: Icons.camera_alt,
+                            label: "Scan Again",
+                            onTap: () => Navigator.pop(context),
+                            outlined: true,
+                            color: Colors.white.withOpacity(0.85),
+                            textColor: Colors.white,
+                          ),
 
+                          const SizedBox(height: 18),
                           TextButton(
-                            onPressed: () => Navigator.popUntil(context, (r) => r.isFirst),
+                            onPressed: () =>
+                                Navigator.popUntil(context, (r) => r.isFirst),
                             child: const Text(
                               "Back to Dashboard",
                               style: TextStyle(
@@ -142,7 +162,6 @@ class DetectionResultPage extends StatelessWidget {
     );
   }
 
-  // ===== BUTTON HELPER =====
   Widget _actionButton({
     required IconData icon,
     required String label,
@@ -182,7 +201,6 @@ class DetectionResultPage extends StatelessWidget {
     );
   }
 
-  // ===== BLUR HELPER =====
   Widget _blurCircle(
     Color color,
     double size, {

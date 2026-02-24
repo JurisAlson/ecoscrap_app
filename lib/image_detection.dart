@@ -1,10 +1,11 @@
+// lib/pages/image_detection_page.dart
 import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import 'detection_result_page.dart';
+import 'detection_result_page.dart'; // must contain DetectionResultPage + DetectionStatus enum
 import '../services/tflite_service.dart';
 
 class ImageDetectionPage extends StatefulWidget {
@@ -35,10 +36,15 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
           builder: (ctx, setLocalState) {
             return AlertDialog(
               backgroundColor: bgColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
               title: const Text(
                 "Before you scan",
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               content: SingleChildScrollView(
                 child: Column(
@@ -47,25 +53,40 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                   children: [
                     const Text(
                       "This scanner detects PLASTICS.",
-                      style: TextStyle(color: Colors.white, fontSize: 14, height: 1.3),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        height: 1.3,
+                      ),
                     ),
                     const SizedBox(height: 10),
                     Text(
                       "It will tell you if the item is recyclable and likely accepted by nearby junkshops.",
-                      style: TextStyle(color: Colors.grey.shade300, fontSize: 13, height: 1.35),
+                      style: TextStyle(
+                        color: Colors.grey.shade300,
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
                     ),
                     const SizedBox(height: 14),
                     const Text(
                       "For best results:",
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       "• Take a clear photo in good lighting.\n"
                       "• Fill the frame with the item.\n"
                       "• Avoid blur and reflections.\n"
-                      "• If show 1 item ONLY.",
-                      style: TextStyle(color: Colors.grey.shade300, fontSize: 13, height: 1.35),
+                      "• Show 1 item ONLY.",
+                      style: TextStyle(
+                        color: Colors.grey.shade300,
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
                     ),
                     const SizedBox(height: 14),
                     Container(
@@ -73,17 +94,27 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.06),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.08),
+                        ),
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.info_outline, color: primaryColor, size: 18),
+                          Icon(
+                            Icons.info_outline,
+                            color: primaryColor,
+                            size: 18,
+                          ),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
                               "Tip: If the result looks wrong, try again with a closer and brighter photo.",
-                              style: TextStyle(color: Colors.grey.shade300, fontSize: 12, height: 1.3),
+                              style: TextStyle(
+                                color: Colors.grey.shade300,
+                                fontSize: 12,
+                                height: 1.3,
+                              ),
                             ),
                           ),
                         ],
@@ -109,13 +140,18 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text("Cancel", style: TextStyle(color: Colors.grey.shade300)),
+                  child: Text(
+                    "Cancel",
+                    style: TextStyle(color: Colors.grey.shade300),
+                  ),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: bgColor,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                   onPressed: agreed ? () => Navigator.pop(ctx, true) : null,
                   child: const Text("Continue"),
@@ -130,7 +166,6 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
     return result ?? false;
   }
 
-  // ✅ CAMERA FLOW: show instructions -> open camera -> run model -> go result page
   Future<void> _captureImageWithCamera() async {
     if (_isPickingImage) return;
 
@@ -140,7 +175,8 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
     _isPickingImage = true;
 
     try {
-      final XFile? capturedFile = await _picker.pickImage(source: ImageSource.camera);
+      final XFile? capturedFile =
+          await _picker.pickImage(source: ImageSource.camera);
       if (capturedFile == null) return;
 
       setState(() {
@@ -155,30 +191,49 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
         builder: (_) => const Center(child: CircularProgressIndicator()),
       );
 
-      final score = await TFLiteService.runModel(_image!.path);
+      final double p = await TFLiteService.runModel(_image!.path);
 
-      const double threshold = 0.80;
-      final isRecyclable = score >= threshold;
-      final confidence = isRecyclable ? score : (1.0 - score);
+      // ✅ Conservative YES + Uncertain band (recommended for current model)
+      const double yesThreshold = 0.80; // strong YES
+      const double noThreshold = 0.35; // strong NO
+
+      DetectionStatus status;
+      String itemName;
+      double confidence;
+
+      if (p >= yesThreshold) {
+        status = DetectionStatus.recyclable;
+        itemName = "Recyclable Plastic";
+        confidence = p;
+      } else if (p <= noThreshold) {
+        status = DetectionStatus.nonRecyclable;
+        itemName = "Non-Recyclable Item";
+        confidence = 1.0 - p;
+      } else {
+        status = DetectionStatus.uncertain;
+        itemName = "Uncertain Result";
+        confidence = (p - 0.5).abs() * 2.0; // 0..1 strength
+      }
 
       if (!mounted) return;
 
-      Navigator.pop(context); // ✅ close loading dialog
+      // ✅ close loading dialog safely
+      Navigator.of(context, rootNavigator: true).pop();
 
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => DetectionResultPage(
-            isRecyclable: isRecyclable,
-            itemName: isRecyclable ? "Recyclable Plastic" : "Non-Recyclable Item",
+            status: status,
+            itemName: itemName,
             confidence: confidence,
           ),
         ),
       );
     } catch (e) {
-      // Close loader if it's open
       if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
+        // close loader if open
+        Navigator.of(context, rootNavigator: true).maybePop();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('$e')),
         );
@@ -194,14 +249,16 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
-          _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
+          _blurCircle(primaryColor.withOpacity(0.15), 300,
+              top: -100, right: -100),
+          _blurCircle(Colors.green.withOpacity(0.1), 350,
+              bottom: 100, left: -100),
           SafeArea(
             child: Column(
               children: [
-                // ===== TOP BAR =====
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
                       IconButton(
@@ -220,40 +277,43 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                     ],
                   ),
                 ),
-
-                // ===== CONTENT =====
                 Expanded(
                   child: Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        // IMAGE PREVIEW
                         Container(
                           width: 260,
                           height: 260,
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.05),
                             borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: Colors.white.withOpacity(0.1)),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.1),
+                            ),
                           ),
                           child: _image != null
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(24),
-                                  child: Image.file(_image!, fit: BoxFit.cover),
+                                  child: Image.file(
+                                    _image!,
+                                    fit: BoxFit.cover,
+                                  ),
                                 )
                               : Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: const [
-                                    Icon(Icons.image_outlined, size: 60, color: Colors.grey),
+                                    Icon(Icons.image_outlined,
+                                        size: 60, color: Colors.grey),
                                     SizedBox(height: 12),
-                                    Text("No image captured", style: TextStyle(color: Colors.grey)),
+                                    Text(
+                                      "No image captured",
+                                      style: TextStyle(color: Colors.grey),
+                                    ),
                                   ],
                                 ),
                         ),
-
                         const SizedBox(height: 30),
-
-                        // OPEN CAMERA BUTTON
                         SizedBox(
                           width: 220,
                           height: 54,
@@ -269,13 +329,14 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                             icon: const Icon(Icons.camera_alt),
                             label: const Text(
                               "Open Camera",
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),
-
                         const SizedBox(height: 20),
-
                         if (_image != null)
                           Text(
                             "Image captured. Ready to analyze...",
@@ -293,7 +354,6 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
     );
   }
 
-  // ================= BLUR HELPER =================
   Widget _blurCircle(
     Color color,
     double size, {
