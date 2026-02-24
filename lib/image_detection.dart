@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
 import 'detection_result_page.dart';
 import '../services/tflite_service.dart';
-
-
 
 class ImageDetectionPage extends StatefulWidget {
   const ImageDetectionPage({super.key});
@@ -13,7 +13,6 @@ class ImageDetectionPage extends StatefulWidget {
   @override
   State<ImageDetectionPage> createState() => _ImageDetectionPageState();
 }
-
 
 class _ImageDetectionPageState extends State<ImageDetectionPage> {
   final ImagePicker _picker = ImagePicker();
@@ -24,57 +23,170 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  // ================= CAMERA =================
-Future<void> _captureImageWithCamera() async {
-  if (_isPickingImage) return;
-  _isPickingImage = true;
+  // ✅ Show instructions BEFORE opening camera
+  Future<bool> _showScanInstructions() async {
+    bool agreed = false;
 
-  try {
-    final XFile? capturedFile =
-        await _picker.pickImage(source: ImageSource.camera);
-
-    if (capturedFile == null) return;
-
-    setState(() {
-      _image = File(capturedFile.path);
-    });
-
-    if (!mounted) return;
-
-    showDialog(
+    final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocalState) {
+            return AlertDialog(
+              backgroundColor: bgColor,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              title: const Text(
+                "Before you scan",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      "This scanner detects PLASTICS.",
+                      style: TextStyle(color: Colors.white, fontSize: 14, height: 1.3),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      "It will tell you if the item is recyclable and likely accepted by nearby junkshops.",
+                      style: TextStyle(color: Colors.grey.shade300, fontSize: 13, height: 1.35),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      "For best results:",
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "• Take a clear photo in good lighting.\n"
+                      "• Fill the frame with the item.\n"
+                      "• Avoid blur and reflections.\n"
+                      "• If show 1 item ONLY.",
+                      style: TextStyle(color: Colors.grey.shade300, fontSize: 13, height: 1.35),
+                    ),
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline, color: primaryColor, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "Tip: If the result looks wrong, try again with a closer and brighter photo.",
+                              style: TextStyle(color: Colors.grey.shade300, fontSize: 12, height: 1.3),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    CheckboxListTile(
+                      value: agreed,
+                      onChanged: (v) => setLocalState(() => agreed = v ?? false),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      dense: true,
+                      activeColor: primaryColor,
+                      checkColor: bgColor,
+                      title: const Text(
+                        "I understand and want to continue",
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text("Cancel", style: TextStyle(color: Colors.grey.shade300)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryColor,
+                    foregroundColor: bgColor,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: agreed ? () => Navigator.pop(ctx, true) : null,
+                  child: const Text("Continue"),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
 
-   final score = await TFLiteService.runModel(_image!.path);
-
-const double threshold = 0.80; // ✅ recommended from your test results
-final isRecyclable = score >= threshold;
-final confidence = isRecyclable ? score : (1.0 - score);
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => DetectionResultPage(
-          isRecyclable: isRecyclable,
-          itemName: isRecyclable
-              ? "Recyclable Plastic"
-              : "Non-Recyclable Item",
-          confidence: confidence,
-        ),
-      ),
-    );
-  } catch (e) {
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('$e')));
-  } finally {
-    _isPickingImage = false;
+    return result ?? false;
   }
-}
 
+  // ✅ CAMERA FLOW: show instructions -> open camera -> run model -> go result page
+  Future<void> _captureImageWithCamera() async {
+    if (_isPickingImage) return;
 
+    final ok = await _showScanInstructions();
+    if (!ok) return;
+
+    _isPickingImage = true;
+
+    try {
+      final XFile? capturedFile = await _picker.pickImage(source: ImageSource.camera);
+      if (capturedFile == null) return;
+
+      setState(() {
+        _image = File(capturedFile.path);
+      });
+
+      if (!mounted) return;
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+
+      final score = await TFLiteService.runModel(_image!.path);
+
+      const double threshold = 0.80;
+      final isRecyclable = score >= threshold;
+      final confidence = isRecyclable ? score : (1.0 - score);
+
+      if (!mounted) return;
+
+      Navigator.pop(context); // ✅ close loading dialog
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => DetectionResultPage(
+            isRecyclable: isRecyclable,
+            itemName: isRecyclable ? "Recyclable Plastic" : "Non-Recyclable Item",
+            confidence: confidence,
+          ),
+        ),
+      );
+    } catch (e) {
+      // Close loader if it's open
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
+    } finally {
+      _isPickingImage = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,33 +194,28 @@ final confidence = isRecyclable ? score : (1.0 - score);
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          // ===== BACKGROUND BLUR =====
-          _blurCircle(primaryColor.withOpacity(0.15), 300,
-              top: -100, right: -100),
-          _blurCircle(Colors.green.withOpacity(0.1), 350,
-              bottom: 100, left: -100),
-
+          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
+          _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
           SafeArea(
             child: Column(
               children: [
                 // ===== TOP BAR =====
                 Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.arrow_back,
-                            color: Colors.white),
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
                         onPressed: () => Navigator.pop(context),
                       ),
                       const SizedBox(width: 8),
                       const Text(
                         "Image Detection",
                         style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold),
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ],
                   ),
@@ -127,27 +234,19 @@ final confidence = isRecyclable ? score : (1.0 - score);
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.05),
                             borderRadius: BorderRadius.circular(24),
-                            border: Border.all(
-                                color: Colors.white.withOpacity(0.1)),
+                            border: Border.all(color: Colors.white.withOpacity(0.1)),
                           ),
                           child: _image != null
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(24),
-                                  child: Image.file(
-                                    _image!,
-                                    fit: BoxFit.cover,
-                                  ),
+                                  child: Image.file(_image!, fit: BoxFit.cover),
                                 )
                               : Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: const [
-                                    Icon(Icons.image_outlined,
-                                        size: 60, color: Colors.grey),
+                                    Icon(Icons.image_outlined, size: 60, color: Colors.grey),
                                     SizedBox(height: 12),
-                                    Text(
-                                      "No image captured",
-                                      style: TextStyle(color: Colors.grey),
-                                    ),
+                                    Text("No image captured", style: TextStyle(color: Colors.grey)),
                                   ],
                                 ),
                         ),
@@ -170,9 +269,7 @@ final confidence = isRecyclable ? score : (1.0 - score);
                             icon: const Icon(Icons.camera_alt),
                             label: const Text(
                               "Open Camera",
-                              style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold),
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                             ),
                           ),
                         ),
@@ -181,9 +278,8 @@ final confidence = isRecyclable ? score : (1.0 - score);
 
                         if (_image != null)
                           Text(
-                            "Analyzing image...",
-                            style:
-                                TextStyle(color: Colors.grey.shade400),
+                            "Image captured. Ready to analyze...",
+                            style: TextStyle(color: Colors.grey.shade400),
                           ),
                       ],
                     ),
@@ -198,8 +294,14 @@ final confidence = isRecyclable ? score : (1.0 - score);
   }
 
   // ================= BLUR HELPER =================
-  Widget _blurCircle(Color color, double size,
-      {double? top, double? bottom, double? left, double? right}) {
+  Widget _blurCircle(
+    Color color,
+    double size, {
+    double? top,
+    double? bottom,
+    double? left,
+    double? right,
+  }) {
     return Positioned(
       top: top,
       bottom: bottom,
