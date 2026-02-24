@@ -7,7 +7,6 @@ import 'admin/admin_home_page.dart';
 import 'auth/login_page.dart';
 import 'Collector/collectors_dashboard.dart';
 import 'household/household_dashboard.dart';
-import 'junkshop/junkshop_dashboard.dart';
 
 Future<void> grantMeAdminClaimIfOwner(User user) async {
   if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
@@ -15,10 +14,10 @@ Future<void> grantMeAdminClaimIfOwner(User user) async {
   final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
       .httpsCallable("setAdminClaim");
 
-    await callable.call({
-      "uid": user.uid,
-      "makeAdmin": true,
-    });
+  await callable.call({
+    "uid": user.uid,
+    "makeAdmin": true,
+  });
 
   await user.getIdTokenResult(true); // refresh token
 }
@@ -35,8 +34,9 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final s = (raw ?? "").toString().trim().toLowerCase();
     if (s == "admins" || s == "admin") return "admin";
     if (s == "collectors" || s == "collector") return "collector";
-    if (s == "junkshops" || s == "junkshop") return "junkshop";
-    if (s == "users" || s == "user" || s == "household" || s == "households") return "user";
+    if (s == "users" || s == "user" || s == "household" || s == "households") {
+      return "user";
+    }
     return "unknown";
   }
 
@@ -50,7 +50,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
   }
 
   Future<void> _logout(BuildContext context) async {
-    await _setOnline(false); // ✅ set offline on logout
+    await _setOnline(false); // set offline on logout
     await FirebaseAuth.instance.signOut();
     if (context.mounted) {
       Navigator.of(context).pushAndRemoveUntil(
@@ -75,7 +75,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // ✅ set online when RoleGate shows
+    // set online when RoleGate shows
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setOnline(true);
     });
@@ -104,11 +104,16 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return const LoginPage();
 
+    // Optional: auto-grant claim for the owner email (safe to ignore if CF not deployed)
+    // grantMeAdminClaimIfOwner(user);
+
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       future: _getUserDoc(user.uid),
       builder: (context, docSnap) {
         if (docSnap.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
 
         if (docSnap.hasError) {
@@ -132,12 +137,15 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
         final data = docSnap.data!.data() ?? {};
         final role = _normRole(data['Roles'] ?? data['roles'] ?? data['role']);
 
+        // ===== ADMIN =====
         if (role == 'admin') {
           return FutureBuilder<bool>(
             future: _hasAdminClaim(user),
             builder: (context, claimSnap) {
               if (claimSnap.connectionState == ConnectionState.waiting) {
-                return const Scaffold(body: Center(child: CircularProgressIndicator()));
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
               }
 
               if (claimSnap.hasError) {
@@ -164,55 +172,21 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
           );
         }
 
+        // ===== COLLECTOR =====
         if (role == 'collector') {
-          final ok = data["junkshopVerified"] == true ||
-              (data["junkshopStatus"] ?? "").toString().toLowerCase() == "verified";
-
-          if (!ok) {
-            final status = (data["junkshopStatus"] ?? "pending").toString();
-            return _RoleErrorPage(
-              message:
-                  "Collector is not yet verified by a junkshop.\n\n"
-                  "Status: $status\n\n"
-                  "Please wait for a junkshop to accept you.",
-              actionLabel: "Logout",
-              onAction: () => _logout(context),
-            );
-          }
-
           return const CollectorsDashboardPage();
         }
 
+        // ===== HOUSEHOLD USER =====
         if (role == 'user') {
           return const DashboardPage();
         }
 
-        if (role == 'junkshop') {
-          final verified = data["verified"] == true;
-          final shopName = (data["shopName"] ?? data["name"] ?? "Junkshop").toString();
-
-          if (!verified) {
-            final status = (data["junkshopStatus"] ?? "pending").toString();
-            return _RoleErrorPage(
-              message:
-                  "Junkshop application is not verified yet.\n\n"
-                  "Status: $status\n\n"
-                  "Please wait for admin approval.",
-              actionLabel: "Logout",
-              onAction: () => _logout(context),
-            );
-          }
-
-          return JunkshopDashboardPage(
-            shopID: user.uid,
-            shopName: shopName,
-          );
-        }
-
+        // ===== UNKNOWN =====
         return _RoleErrorPage(
           message:
               "No valid role found for this account.\n\n"
-              "Fix Users/{uid}.Roles to one of: admin, user, junkshop, collector.",
+              "Fix Users/{uid}.Roles to one of: admin, user, collector.",
           actionLabel: "Logout",
           onAction: () => _logout(context),
         );
@@ -220,6 +194,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     );
   }
 }
+
 class _RoleErrorPage extends StatelessWidget {
   final String message;
   final String? actionLabel;
@@ -254,4 +229,3 @@ class _RoleErrorPage extends StatelessWidget {
     );
   }
 }
-

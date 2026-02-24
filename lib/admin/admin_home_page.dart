@@ -5,7 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../auth/login_page.dart';
 
 import 'admin_overview_tab.dart';
-import 'permits/admin_junkshop_permits_tab.dart';
 import 'collectors/admin_collector_requests.dart';
 import 'users/admin_users_management_tab.dart';
 
@@ -24,12 +23,11 @@ class _AdminHomePageState extends State<AdminHomePage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  // Custom bottom bar height (same “feel” as your dashboard, but smaller than household)
   static const double _bottomBarHeight = 92;
 
+  // ✅ Removed Permits/Junkshop tab
   final _pages = const [
     AdminOverviewTab(),
-    AdminJunkshopPermitsTab(),
     AdminCollectorRequestsTab(),
     AdminUsersManagementTab(),
   ];
@@ -52,13 +50,11 @@ class _AdminHomePageState extends State<AdminHomePage> {
       backgroundColor: bgColor,
       extendBody: true,
 
-      // ✅ LEFT SLIDE = PROFILE
       drawer: Drawer(
         backgroundColor: bgColor,
         child: SafeArea(child: _profileDrawer(user)),
       ),
 
-      // ✅ RIGHT SLIDE = NOTIFICATIONS
       endDrawer: Drawer(
         backgroundColor: bgColor,
         child: SafeArea(child: _notificationsDrawer()),
@@ -68,16 +64,13 @@ class _AdminHomePageState extends State<AdminHomePage> {
         children: [
           _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
           _blurCircle(Colors.green.withOpacity(0.10), 350, bottom: 100, left: -100),
-
           SafeArea(
             child: Column(
               children: [
-                // ===== HEADER (uniform with DashboardPage) =====
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
-                      // LEFT PROFILE ICON -> OPEN LEFT DRAWER
                       GestureDetector(
                         onTap: () => _scaffoldKey.currentState?.openDrawer(),
                         child: Container(
@@ -90,10 +83,7 @@ class _AdminHomePageState extends State<AdminHomePage> {
                           child: const Icon(Icons.person, color: Colors.white),
                         ),
                       ),
-
                       const SizedBox(width: 12),
-
-                      // TITLE
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -117,8 +107,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
                           ],
                         ),
                       ),
-
-                      // RIGHT NOTIFICATIONS ICON -> OPEN RIGHT DRAWER
                       _iconButton(
                         Icons.notifications_outlined,
                         badge: false,
@@ -128,7 +116,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
                   ),
                 ),
 
-                // ===== TAB CONTENT =====
                 Expanded(
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 220),
@@ -144,7 +131,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
         ],
       ),
 
-      // ✅ UNIFORM BOTTOM NAV (color/blur like DashboardPage)
       bottomNavigationBar: SizedBox(
         height: _bottomBarHeight,
         child: Container(
@@ -162,9 +148,8 @@ class _AdminHomePageState extends State<AdminHomePage> {
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _navItem(0, Icons.dashboard_outlined, "Overview"),
-                    _navItem(1, Icons.store_outlined, "Permits"),
-                    _navItem(2, Icons.local_shipping_outlined, "Collectors"),
-                    _navItem(3, Icons.people_alt_outlined, "Users"),
+                    _navItem(1, Icons.local_shipping_outlined, "Collectors"),
+                    _navItem(2, Icons.people_alt_outlined, "Users"),
                   ],
                 ),
               ),
@@ -175,7 +160,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
-  // ================= NAV ITEM =================
   Widget _navItem(int index, IconData icon, String label) {
     final isActive = _index == index;
     return GestureDetector(
@@ -198,7 +182,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
-  // ================= RIGHT NOTIFICATIONS DRAWER =================
   Widget _notificationsDrawer() {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -219,7 +202,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
             ],
           ),
           const SizedBox(height: 20),
-
           _notificationTile(
             icon: Icons.info_outline,
             title: "Admin",
@@ -261,7 +243,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
-  // ================= LEFT PROFILE DRAWER =================
   Widget _profileDrawer(User? user) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -293,10 +274,9 @@ class _AdminHomePageState extends State<AdminHomePage> {
             "UID: ${user?.uid ?? "-"}",
             style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
           ),
-
           const SizedBox(height: 24),
 
-          // optional info card
+          // ✅ Updated text: removed "permits"
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(18),
@@ -307,11 +287,13 @@ class _AdminHomePageState extends State<AdminHomePage> {
             child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("Admin Tools",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                Text(
+                  "Admin Tools",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
                 SizedBox(height: 8),
                 Text(
-                  "• Review permits\n• Approve collectors\n• Manage users",
+                  "• Review collectors\n• Manage users",
                   style: TextStyle(color: Colors.white70, height: 1.35, fontSize: 13),
                 ),
               ],
@@ -342,7 +324,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
-  // ================= HELPERS =================
   Widget _iconButton(IconData icon, {bool badge = false, required VoidCallback onTap}) {
     return Stack(
       children: [

@@ -10,12 +10,6 @@ class AdminOverviewTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final permitsPending = _countStream(
-      FirebaseFirestore.instance
-          .collection("permitRequests")
-          .where("status", isEqualTo: "pending"),
-    );
-
     final collectorsPending = _countStream(
       FirebaseFirestore.instance
           .collection("Users")
@@ -48,9 +42,7 @@ class AdminOverviewTab extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 14),
-
-          _statCard("Pending Permit Requests", permitsPending, icon: Icons.store),
+  
           const SizedBox(height: 10),
           _statCard("Pending Collector Requests", collectorsPending, icon: Icons.local_shipping),
 
