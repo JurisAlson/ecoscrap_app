@@ -194,7 +194,7 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
       final double p = await TFLiteService.runModel(_image!.path);
 
       // ✅ Conservative YES + Uncertain band (recommended for current model)
-      const double yesThreshold = 0.80; // strong YES
+      const double yesThreshold = 0.70; // strong YES
       const double noThreshold = 0.35; // strong NO
 
       DetectionStatus status;
@@ -207,7 +207,7 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
         confidence = p;
       } else if (p <= noThreshold) {
         status = DetectionStatus.nonRecyclable;
-        itemName = "Non-Recyclable Item";
+        itemName = "Non-Recyclabl e Item";
         confidence = 1.0 - p;
       } else {
         status = DetectionStatus.uncertain;
