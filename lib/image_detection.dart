@@ -207,7 +207,7 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
         confidence = p;
       } else if (p <= noThreshold) {
         status = DetectionStatus.nonRecyclable;
-        itemName = "Non-Recyclabl e Item";
+        itemName = "Non-Recyclable Item";
         confidence = 1.0 - p;
       } else {
         status = DetectionStatus.uncertain;
