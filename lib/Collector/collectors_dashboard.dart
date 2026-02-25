@@ -10,7 +10,6 @@ import 'collector_pickup_map_page.dart';
 // ✅ Chat (pickup list + junkshop direct chat)
 import '../chat/services/chat_services.dart';
 import '../chat/screens/chat_page.dart';
-import '../chat/screens/chat_list_page.dart';
 
 class CollectorsDashboardPage extends StatefulWidget {
   const CollectorsDashboardPage({super.key});
