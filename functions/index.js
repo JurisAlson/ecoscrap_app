@@ -35,12 +35,7 @@ exports.setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!allowed.includes(role))
     throw new HttpsError("invalid-argument", "Invalid role");
 
-  await admin
-    .firestore()
-    .collection("Users")
-    .doc(uid)
-    .set({ Roles: role }, { merge: true });
-
+  await admin.firestore().collection("Users").doc(uid).set({ Roles: role }, { merge: true });
   return { ok: true, uid, role };
 });
 
@@ -82,9 +77,6 @@ exports.verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) =
 
 /* ====================================================
    ADMIN-ONLY: Review junkshop permit request
-   - updates permitRequests/{uid}
-   - updates Users/{uid}
-   ✅ CHANGED: removed auto-delete/auto-expire of junkshop permits/files
 ==================================================== */
 exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
@@ -105,14 +97,11 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
 
   const reviewedByUid = request.auth.uid;
 
-  // Read request doc
   const reqSnap = await reqRef.get();
   if (!reqSnap.exists) throw new HttpsError("not-found", "permit request not found");
 
-  // Update Firestore (request + user)
   const batch = db.batch();
 
-  // ✅ Keep permit file fields as-is (no deleting / expiring)
   batch.set(
     reqRef,
     {
@@ -149,27 +138,15 @@ exports.reviewPermitRequest = onCall({ region: "asia-southeast1" }, async (reque
         role: "user",
         Roles: "user",
         junkshopStatus: "rejected",
-        activePermitRequestId: admin.firestore.FieldValue.serverTimestamp(), // keep your existing behavior
+        activePermitRequestId: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
-
-    // If you want to always clear it like before, use this instead:
-    // batch.set(userRef, {
-    //   role: "user",
-    //   Roles: "user",
-    //   junkshopStatus: "rejected",
-    //   activePermitRequestId: admin.firestore.FieldValue.delete(),
-    //   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    // }, { merge: true });
   }
 
   await batch.commit();
 
-  // ✅ REMOVED: deleting permit file from Storage after decision
-
-  // Sync claims if approved
   if (decision === "approved") {
     const user = await admin.auth().getUser(uid);
     const existing = user.customClaims || {};
@@ -230,12 +207,8 @@ exports.syncRoleClaims = onDocumentWritten(
       const after = afterSnap.data() || {};
       const uid = event.params.uid;
 
-      const beforeRole = String(before.Roles || before.roles || "")
-        .trim()
-        .toLowerCase();
-      let role = String(after.Roles || after.roles || "")
-        .trim()
-        .toLowerCase();
+      const beforeRole = String(before.Roles || before.roles || "").trim().toLowerCase();
+      let role = String(after.Roles || after.roles || "").trim().toLowerCase();
 
       if (role === "users") role = "user";
       if (role === "admins") role = "admin";
@@ -299,14 +272,12 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
     await userRef.delete().catch(() => null);
     await db.collection("Junkshop").doc(uid).delete().catch(() => null);
 
-    // delete permitRequests docs (legacy cleanup)
     const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
     const batch = db.batch();
     permits.docs.forEach((doc) => batch.delete(doc.ref));
     await batch.commit().catch(() => null);
 
     await admin.auth().deleteUser(uid);
-
     return { ok: true, uid };
   } catch (err) {
     console.error("adminDeleteUser error:", err);
@@ -315,37 +286,44 @@ exports.adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) 
 });
 
 /* ====================================================
-   COLLECTOR KYC RETENTION (Option 4)
-   Storage: kyc/{uid}/{kycFileName}
-   Firestore: collectorKYC/{uid}
-   Policy:
-     - pending:         delete after 7 days
-     - adminApproved:   delete after 24 hours
-     - rejected:        delete after 24 hours
-     - junkshopAccepted: delete after 1 hour
+   COLLECTOR KYC RETENTION (AUTO-DELETE)
+   POLICY:
+     - pending        -> delete after 24 hours
+     - adminApproved  -> delete after 7 days
+     - rejected       -> delete immediately
+     - junkshopAccepted -> delete after 7 days
+   Deletes:
+     ✅ Storage object
+     ✅ collectorKYC/{uid} doc
 ==================================================== */
 
-// ---- time helpers (future timestamps)
+// ---- time helpers
 function hoursFromNow(hours) {
-  return admin.firestore.Timestamp.fromDate(new Date(Date.now() + hours * 60 * 60 * 1000));
-}
-function daysFromNow(days) {
-  return admin.firestore.Timestamp.fromDate(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
+  return admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() + hours * 60 * 60 * 1000)
+  );
 }
 
-// ---- retention policy (short because sensitive)
+function daysFromNow(days) {
+  return admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() + days * 24 * 60 * 60 * 1000)
+  );
+}
+
+// ---- retention policy
 function computeCollectorKycDeleteAfter(status) {
   const s = String(status || "").trim().toLowerCase();
-  if (s === "pending") return daysFromNow(7);
-  if (s === "adminapproved") return hoursFromNow(24);
-  if (s === "rejected") return hoursFromNow(24);
-  if (s === "junkshopaccepted") return hoursFromNow(1);
-  return daysFromNow(7);
+
+  if (s === "pending") return hoursFromNow(24);
+  if (s === "adminapproved") return daysFromNow(7);
+  if (s === "rejected") return hoursFromNow(0);
+  if (s === "junkshopaccepted") return daysFromNow(7);
+
+  return hoursFromNow(24);
 }
 
 /* ====================================================
-   A) Ensure collectorKYC has defaults (status/deleteAfter/expired)
-   Runs whenever collectorKYC/{uid} is written
+   Ensure collectorKYC has status + deleteAfter
 ==================================================== */
 exports.ensureCollectorKycDefaults = onDocumentWritten(
   { document: "collectorKYC/{uid}", region: "asia-southeast1" },
@@ -356,33 +334,28 @@ exports.ensureCollectorKycDefaults = onDocumentWritten(
     const after = afterSnap.data() || {};
     const uid = event.params.uid;
 
-    const kycFileName = String(after.kycFileName || "").trim();
-    if (!kycFileName) return;
-
-    if (after.expired === true) return;
-
     const status = String(after.status || "pending").trim().toLowerCase();
     const needsStatus = after.status == null;
     const needsDeleteAfter = after.deleteAfter == null;
 
-    if (!needsStatus && !needsDeleteAfter && after.expired != null) return;
+    if (!needsStatus && !needsDeleteAfter) return;
 
     const update = {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
     if (needsStatus) update.status = status;
-    if (needsDeleteAfter) update.deleteAfter = computeCollectorKycDeleteAfter(status);
-    if (after.expired == null) update.expired = false;
+    if (needsDeleteAfter)
+      update.deleteAfter = computeCollectorKycDeleteAfter(status);
 
     await afterSnap.ref.set(update, { merge: true });
+
     logger.info("collectorKYC defaults ensured", { uid, update });
   }
 );
 
 /* ====================================================
-   B) When collectorRequests/{uid}.status changes,
-      sync collectorKYC/{uid}.status + deleteAfter
+   Sync status from collectorRequests/{uid}
 ==================================================== */
 exports.syncCollectorKycFromRequestStatus = onDocumentUpdated(
   { document: "collectorRequests/{uid}", region: "asia-southeast1" },
@@ -393,26 +366,41 @@ exports.syncCollectorKycFromRequestStatus = onDocumentUpdated(
 
     const beforeStatus = String(before.status || "").trim().toLowerCase();
     const afterStatus = String(after.status || "").trim().toLowerCase();
+
     if (!afterStatus || beforeStatus === afterStatus) return;
 
     const allowed = new Set(["pending", "adminapproved", "rejected", "junkshopaccepted"]);
     if (!allowed.has(afterStatus)) return;
 
     const db = admin.firestore();
+    const bucket = admin.storage().bucket();
+
     const kycRef = db.collection("collectorKYC").doc(uid);
-
     const kycSnap = await kycRef.get();
-    if (!kycSnap.exists) {
-      logger.info("collectorKYC missing, skip status sync", { uid, afterStatus });
+    if (!kycSnap.exists) return;
+
+    const kycData = kycSnap.data() || {};
+    const storagePath = String(kycData.storagePath || "").trim();
+
+    // ✅ IMMEDIATE DELETE on reject
+    if (afterStatus === "rejected") {
+      try {
+        if (storagePath) {
+          await bucket.file(storagePath).delete({ ignoreNotFound: true });
+        }
+      } catch (err) {
+        logger.error("Immediate Storage delete failed", { uid, storagePath, err: String(err) });
+      }
+
+      await kycRef.delete().catch((e) => {
+        logger.error("Immediate Firestore delete failed", { uid, err: String(e) });
+      });
+
+      logger.info("collectorKYC deleted immediately (rejected)", { uid, storagePath });
       return;
     }
 
-    const kyc = kycSnap.data() || {};
-    if (kyc.expired === true) {
-      logger.info("collectorKYC already expired, skip status sync", { uid, afterStatus });
-      return;
-    }
-
+    // ✅ otherwise: just set status + deleteAfter for scheduled cleanup
     const deleteAfter = computeCollectorKycDeleteAfter(afterStatus);
 
     await kycRef.set(
@@ -420,14 +408,12 @@ exports.syncCollectorKycFromRequestStatus = onDocumentUpdated(
         status: afterStatus,
         deleteAfter,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        expired: false,
       },
       { merge: true }
     );
 
-    logger.info("collectorKYC status synced from collectorRequests", {
+    logger.info("collectorKYC status synced", {
       uid,
-      beforeStatus,
       afterStatus,
       deleteAfter: deleteAfter.toDate().toISOString(),
     });
@@ -435,44 +421,15 @@ exports.syncCollectorKycFromRequestStatus = onDocumentUpdated(
 );
 
 /* ====================================================
-   Cleanup implementation (used by scheduled + manual)
+   Cleanup worker (deletes file + Firestore doc)
 ==================================================== */
 async function cleanupCollectorKyc() {
   const db = admin.firestore();
   const bucket = admin.storage().bucket();
   const now = admin.firestore.Timestamp.now();
 
-  // 1) Backfill deleteAfter for docs missing it (migration-safe)
-  const missingSnap = await db
-    .collection("collectorKYC")
-    .where("deleteAfter", "==", null)
-    .limit(200)
-    .get()
-    .catch(() => null);
-
-  if (missingSnap && !missingSnap.empty) {
-    const batch = db.batch();
-    for (const doc of missingSnap.docs) {
-      const d = doc.data() || {};
-      const status = String(d.status || "pending").trim().toLowerCase();
-      batch.set(
-        doc.ref,
-        {
-          status,
-          deleteAfter: computeCollectorKycDeleteAfter(status),
-          expired: false,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-    }
-    await batch.commit().catch(() => null);
-  }
-
-  // 2) Find eligible docs
   const snap = await db
     .collection("collectorKYC")
-    .where("expired", "==", false)
     .where("deleteAfter", "<=", now)
     .limit(200)
     .get();
@@ -488,58 +445,55 @@ async function cleanupCollectorKyc() {
   for (const doc of snap.docs) {
     const uid = doc.id;
     const data = doc.data() || {};
-    const fileName = String(data.kycFileName || "").trim();
 
-    // Reconstruct storage path (we do NOT store full path)
-    const path = fileName ? `kyc/${uid}/${fileName}` : "";
+    const storagePath =
+      String(data.storagePath || "").trim() ||
+      (String(data.kycFileName || "").trim()
+        ? `kyc/${uid}/${String(data.kycFileName).trim()}`
+        : "");
 
     try {
-      if (path) {
-        await bucket.file(path).delete({ ignoreNotFound: true });
+      if (storagePath) {
+        await bucket.file(storagePath).delete({ ignoreNotFound: true });
       }
-
-      batch.set(
-        doc.ref,
-        {
-          expired: true,
-          deletedAt: admin.firestore.FieldValue.serverTimestamp(),
-          kycFileName: admin.firestore.FieldValue.delete(),
-        },
-        { merge: true }
-      );
-
-      deleted++;
-      logger.info("collectorKYC file deleted", { uid, path });
     } catch (err) {
-      logger.error("collectorKYC delete failed", { uid, err: String(err) });
+      logger.error("Storage delete failed", {
+        uid,
+        storagePath,
+        err: String(err),
+      });
     }
+
+    batch.delete(doc.ref);
+    deleted++;
+
+    logger.info("collectorKYC deleted", { uid, storagePath });
   }
 
-  await batch.commit().catch((e) =>
-    logger.error("collectorKYC batch update failed", { err: String(e) })
-  );
+  await batch.commit();
 
   logger.info("collectorKYC cleanup finished", { deleted });
+
   return { deleted };
 }
 
 /* ====================================================
-   SCHEDULED CLEANUP: collectorKYC (Runs every 24h)
+   Scheduled cleanup (every hour)
 ==================================================== */
 exports.cleanupCollectorKycByRetention = onSchedule(
   {
-    schedule: "every 24 hours",
+    schedule: "every 60 minutes",
     region: "asia-southeast1",
     timeZone: "Asia/Manila",
   },
   async () => {
     const result = await cleanupCollectorKyc();
-    logger.info("Scheduled collectorKYC cleanup result", result);
+    logger.info("Scheduled cleanup result", result);
   }
 );
 
 /* ====================================================
-   MANUAL CLEANUP: collectorKYC (FOR TESTING)
+   Manual cleanup (for testing)
 ==================================================== */
 exports.runCollectorKycCleanupNow = onRequest(
   { region: "asia-southeast1" },
@@ -548,14 +502,13 @@ exports.runCollectorKycCleanupNow = onRequest(
       const result = await cleanupCollectorKyc();
       res.status(200).json({ ok: true, ...result });
     } catch (err) {
-      logger.error("Manual collectorKYC cleanup crashed", { err: String(err) });
+      logger.error("Manual cleanup crashed", { err: String(err) });
       res.status(500).json({ ok: false, error: String(err) });
     }
   }
 );
-
 /* ====================================================
-   INVENTORY DEDUCTION (UNCHANGED logic, updated path)
+   INVENTORY DEDUCTION
 ==================================================== */
 exports.deductInventoryOnTransactionCreate = onDocumentCreated(
   {
@@ -574,11 +527,7 @@ exports.deductInventoryOnTransactionCreate = onDocumentCreated(
 
     await db.runTransaction(async (t) => {
       for (const item of data.items) {
-        const inventoryRef = db
-          .collection("Users")
-          .doc(uid)
-          .collection("inventory")
-          .doc(item.inventoryDocId);
+        const inventoryRef = db.collection("Users").doc(uid).collection("inventory").doc(item.inventoryDocId);
 
         const inventorySnap = await t.get(inventoryRef);
         if (!inventorySnap.exists) continue;

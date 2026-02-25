@@ -1,4 +1,4 @@
-import 'dart:ui';
+import 'dart:ui'; 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -25,12 +25,16 @@ class _AdminHomePageState extends State<AdminHomePage> {
 
   static const double _bottomBarHeight = 92;
 
-  // ✅ Removed Permits/Junkshop tab
   final _pages = const [
     AdminOverviewTab(),
     AdminCollectorRequestsTab(),
     AdminUsersManagementTab(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+  }
 
   Future<void> _logout() async {
     await FirebaseAuth.instance.signOut();
@@ -90,10 +94,7 @@ class _AdminHomePageState extends State<AdminHomePage> {
                           children: [
                             Text(
                               "Admin Panel",
-                              style: TextStyle(
-                                color: Colors.grey.shade400,
-                                fontSize: 12,
-                              ),
+                              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                             ),
                             Text(
                               user?.email ?? "Admin",
@@ -275,8 +276,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
             style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
           ),
           const SizedBox(height: 24),
-
-          // ✅ Updated text: removed "permits"
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(18),
@@ -299,9 +298,7 @@ class _AdminHomePageState extends State<AdminHomePage> {
               ],
             ),
           ),
-
           const SizedBox(height: 22),
-
           SizedBox(
             width: double.infinity,
             height: 50,

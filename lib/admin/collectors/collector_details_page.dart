@@ -1,11 +1,17 @@
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/material.dart';
 
 import '../admin_helpers.dart';
-import '../admin_storage_cache.dart';
 import '../admin_theme_page.dart';
+
+// 🔐 Crypto (ADMIN APP)
+import 'package:ecoscrap_app/security/admin_keys.dart';
+import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
+import 'package:ecoscrap_app/security/kyc_shared_key.dart';
 
 class CollectorDetailsPage extends StatefulWidget {
   final DocumentReference<Map<String, dynamic>> requestRef;
@@ -18,6 +24,9 @@ class CollectorDetailsPage extends StatefulWidget {
 class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   bool _busy = false;
 
+  // ✅ Reject:
+  // DO NOT delete Storage here (encrypted file).
+  // Just mark statuses, and let your retention/cleanup handle actual deletion.
   Future<void> _rejectCollectorAndRestoreUser(String uid) async {
     final db = FirebaseFirestore.instance;
 
@@ -25,23 +34,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final reqRef = db.collection("collectorRequests").doc(uid);
     final kycRef = db.collection("collectorKYC").doc(uid);
 
-    // 1) Read KYC doc to get ONLY filename (admin-only)
-    String kycFileName = "";
-    try {
-      final kycSnap = await kycRef.get();
-      final kycData = kycSnap.data() ?? {};
-      kycFileName = (kycData["kycFileName"] ?? "").toString();
-    } catch (_) {}
-
-    // 2) Delete uploaded KYC file (if any) using reconstructed path
-    if (kycFileName.trim().isNotEmpty) {
-      final path = "kyc/$uid/$kycFileName";
-      try {
-        await FirebaseStorage.instance.ref(path).delete();
-      } catch (_) {}
-    }
-
-    // 3) Transaction: restore user + mark request rejected + delete KYC doc pointer
     await db.runTransaction((tx) async {
       final userSnap = await tx.get(userRef);
       final userData = userSnap.data() ?? {};
@@ -49,20 +41,17 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       final rawRole = userData["role"] ?? userData["Roles"] ?? "user";
       final rawRoleStr = rawRole.toString().trim();
       final rawLower = rawRoleStr.toLowerCase();
-
-      final roleToSave = (rawLower == "collector" || rawRoleStr.isEmpty) ? "user" : rawRoleStr;
+      //final roleToSave =
+          (rawLower == "collector" || rawRoleStr.isEmpty) ? "user" : rawRoleStr;
 
       tx.set(userRef, {
         "collectorStatus": "rejected",
         "collectorSubmittedAt": FieldValue.delete(),
-        "collectorUpdatedAt": FieldValue.delete(),
+        "collectorUpdatedAt": FieldValue.serverTimestamp(),
         "collectorKyc": FieldValue.delete(),
 
         "junkshopVerified": FieldValue.delete(),
         "junkshopStatus": FieldValue.delete(),
-
-        "role": roleToSave,
-        "Roles": roleToSave,
 
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -74,8 +63,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
         "rejectedByJunkshops": [],
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-
-      tx.delete(kycRef);
     });
   }
 
@@ -83,6 +70,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final db = FirebaseFirestore.instance;
     final reqRef = db.collection("collectorRequests").doc(uid);
     final userRef = db.collection("Users").doc(uid);
+    final kycRef = db.collection("collectorKYC").doc(uid);
 
     final batch = db.batch();
 
@@ -97,11 +85,69 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       "collectorUpdatedAt": FieldValue.serverTimestamp(),
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
-
     await batch.commit();
   }
 
-  void _showImageDialog(String url) {
+  // =====================================================
+  // 🔓 ADMIN: download encrypted bytes -> decrypt -> return bytes
+  // Works for JPG/PNG. For PDF you still get bytes, but preview needs a PDF widget.
+  // =====================================================
+  Future<_DecryptedKyc?> _downloadAndDecryptKyc(String uid) async {
+    final db = FirebaseFirestore.instance;
+    final kycSnap = await db.collection("collectorKYC").doc(uid).get();
+    final kyc = kycSnap.data() ?? {};
+
+    final storagePath = (kyc["storagePath"] ?? "").toString();
+    if (storagePath.isEmpty) return null;
+
+    final originalFileName = (kyc["originalFileName"] ?? "").toString();
+
+    final ephPubKeyB64 = (kyc["ephPubKeyB64"] ?? "").toString();
+    final saltB64 = (kyc["saltB64"] ?? "").toString();
+    final nonceB64 = (kyc["nonceB64"] ?? "").toString();
+    final macB64 = (kyc["macB64"] ?? "").toString();
+
+    if (ephPubKeyB64.isEmpty || saltB64.isEmpty || nonceB64.isEmpty || macB64.isEmpty) {
+      throw Exception("Missing crypto metadata in collectorKYC/$uid");
+    }
+
+    // 1) download encrypted blob
+    final ref = FirebaseStorage.instance.ref(storagePath);
+
+    // max 12MB (your rules allow 10MB; add small buffer)
+    final encryptedBytes = await ref.getData(12 * 1024 * 1024);
+    if (encryptedBytes == null) throw Exception("Failed to download encrypted file.");
+
+    // 2) derive AES key using Admin private + collector ephemeral public
+    final collectorEphPubBytes = base64Decode(ephPubKeyB64);
+    final salt = base64Decode(saltB64);
+
+    final aesKey = await KycSharedKey.deriveForAdmin(
+      adminPrivateKeyB64: AdminKeys.adminPrivateKeyB64,
+      collectorEphemeralPubKeyBytes: Uint8List.fromList(collectorEphPubBytes),
+      salt: salt,
+    );
+
+    // 3) decrypt
+    final nonce = Uint8List.fromList(base64Decode(nonceB64));
+    final macBytes = Uint8List.fromList(base64Decode(macB64));
+
+    final plain = await KycCrypto.decryptBytes(
+      cipherText: Uint8List.fromList(encryptedBytes),
+      macBytes: macBytes,
+      nonce: nonce,
+      key: aesKey,
+      aad: utf8.encode(uid),
+    );
+
+    return _DecryptedKyc(
+      bytes: plain,
+      originalFileName: originalFileName,
+      storagePath: storagePath,
+    );
+  }
+
+  void _showDecryptedImageDialog(Uint8List bytes) {
     showDialog(
       context: context,
       barrierColor: Colors.black.withOpacity(0.85),
@@ -116,7 +162,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                 maxScale: 4,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),
-                  child: Image.network(url, fit: BoxFit.contain),
+                  child: Image.memory(bytes, fit: BoxFit.contain),
                 ),
               ),
             ),
@@ -149,10 +195,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
           builder: (context, snap) {
             if (snap.hasError) {
               return Center(
-                child: Text(
-                  "Error: ${snap.error}",
-                  style: const TextStyle(color: Colors.redAccent),
-                ),
+                child: Text("Error: ${snap.error}",
+                    style: const TextStyle(color: Colors.redAccent)),
               );
             }
             if (!snap.hasData) {
@@ -172,10 +216,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
             final status = (data["status"] ?? "").toString();
             final isPending = status.toLowerCase() == "pending";
 
-            final kycRef = FirebaseFirestore.instance.collection("collectorKYC").doc(uid);
-
-            final imageBlock = FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              future: kycRef.get(),
+            // ✅ This block now DECRYPTS (no AdminStorageCache.url)
+            final kycBlock = FutureBuilder<_DecryptedKyc?>(
+              future: _downloadAndDecryptKyc(uid),
               builder: (context, kycSnap) {
                 if (kycSnap.connectionState == ConnectionState.waiting) {
                   return const SizedBox(
@@ -183,63 +226,52 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                     child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
                   );
                 }
-
-                final kycData = kycSnap.data?.data() ?? {};
-                final kycFileName = (kycData["kycFileName"] ?? "").toString();
-
-                if (kycFileName.isEmpty) {
-                  return const Text("No ID file uploaded.", style: TextStyle(color: Colors.white70));
+                if (kycSnap.hasError) {
+                  return Text(
+                    "KYC decrypt failed: ${kycSnap.error}",
+                    style: const TextStyle(color: Colors.redAccent),
+                  );
                 }
 
-                final permitPath = "kyc/$uid/$kycFileName";
+                final kyc = kycSnap.data;
+                if (kyc == null) {
+                  return const Text("No ID file uploaded.",
+                      style: TextStyle(color: Colors.white70));
+                }
 
-                return FutureBuilder<String>(
-                  future: AdminStorageCache.url(permitPath),
-                  builder: (context, s) {
-                    if (s.connectionState == ConnectionState.waiting) {
-                      return const SizedBox(
-                        height: 220,
-                        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                      );
-                    }
-                    if (s.hasError || !s.hasData) {
-                      return Text(
-                        "File failed: ${s.error}",
-                        style: const TextStyle(color: Colors.redAccent),
-                      );
-                    }
+                final fname = kyc.originalFileName.toLowerCase();
+                final isPdf = fname.endsWith(".pdf");
 
-                    final url = s.data!;
-                    final isPdf = kycFileName.toLowerCase().endsWith(".pdf");
-
-                    if (isPdf) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text("KYC file is a PDF.", style: TextStyle(color: Colors.white70)),
-                          const SizedBox(height: 10),
-                          ElevatedButton.icon(
-                            onPressed: () => _showImageDialog(url),
-                            icon: const Icon(Icons.open_in_new),
-                            label: const Text("Open PDF"),
-                          ),
-                        ],
-                      );
-                    }
-
-                    return GestureDetector(
-                      onTap: () => _showImageDialog(url),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: Image.network(
-                          url,
-                          height: 220,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                        ),
+                if (isPdf) {
+                  // NOTE: You still have decrypted bytes here.
+                  // To preview PDF inside Flutter, add a PDF viewer package.
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text("KYC file is a PDF (decrypted).",
+                          style: TextStyle(color: Colors.white70)),
+                      SizedBox(height: 8),
+                      Text(
+                        "PDF preview needs a PDF viewer widget/package.\n"
+                        "If you want, I can give you the exact PDF viewer code next.",
+                        style: TextStyle(color: Colors.white54, height: 1.3),
                       ),
-                    );
-                  },
+                    ],
+                  );
+                }
+
+                // ✅ Preview image (JPG/PNG)
+                return GestureDetector(
+                  onTap: () => _showDecryptedImageDialog(kyc.bytes),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.memory(
+                      kyc.bytes,
+                      height: 220,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
                 );
               },
             );
@@ -265,7 +297,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                   Text("Status: $status", style: const TextStyle(color: Colors.white70)),
                   const SizedBox(height: 16),
 
-                  imageBlock,
+                  kycBlock,
                   const SizedBox(height: 16),
 
                   if (_busy)
@@ -353,4 +385,16 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       ),
     );
   }
+}
+
+class _DecryptedKyc {
+  final Uint8List bytes;
+  final String originalFileName;
+  final String storagePath;
+
+  _DecryptedKyc({
+    required this.bytes,
+    required this.originalFileName,
+    required this.storagePath,
+  });
 }
