@@ -59,7 +59,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     final end = _monthEndExclusive(_selectedMonth);
 
     final txStream = FirebaseFirestore.instance
-        .collection('Junkshop')
         .doc(widget.shopID)
         .collection('transaction')
         .where('transactionDate',

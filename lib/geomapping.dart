@@ -66,10 +66,10 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   // Fallback destination if Firestore list is empty
   final Destination _moresFallback = const Destination(
-  id: "fallback",
+  id: "mores",
   name: "Mores Scrap Trading",
-  subtitle: "Junkshop • Drop-off",
-  latLng: LatLng(14.0000, 121.0000),
+  subtitle: "Fixed Drop-off",
+  latLng: LatLng(14.198630, 121.117270),
 );
 
   // If user taps map -> pin a custom drop-off
@@ -113,6 +113,11 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     if (_selectedJunkshop != null) return _selectedJunkshop!.latLng;
     return _moresFallback.latLng;
   }
+
+  LatLng get _dropOffLatLng => _moresFallback.latLng;
+
+  String get _dropOffTitle => _moresFallback.name;
+  String get _dropOffSubtitle => _moresFallback.subtitle;
 
   double get _distanceKm {
     final meters = Geolocator.distanceBetween(
@@ -451,18 +456,39 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   Set<Marker> _buildMarkers() {
     final markers = <Marker>{};
 
+    // ✅ Always show Mores marker
     markers.add(
       Marker(
-        markerId: const MarkerId("selected_destination"),
-        position: _destLatLng,
+        markerId: const MarkerId("mores_dropoff"),
+        position: _dropOffLatLng,
         infoWindow: InfoWindow(
-          title: _customDestinationLatLng != null ? "Pinned Drop-off" : (_selectedJunkshop?.name ?? "Destination"),
-          snippet: _customDestinationLatLng != null ? "Custom location" : (_selectedJunkshop?.subtitle ?? ""),
+          title: _dropOffTitle,
+          snippet: _dropOffSubtitle,
         ),
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
       ),
     );
 
+    // ✅ Still show selected destination (junkshop/pin) if different from Mores
+    if (_customDestinationLatLng != null || _selectedJunkshop != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId("selected_destination"),
+          position: _destLatLng,
+          infoWindow: InfoWindow(
+            title: _customDestinationLatLng != null
+                ? "Pinned Drop-off"
+                : (_selectedJunkshop?.name ?? "Destination"),
+            snippet: _customDestinationLatLng != null
+                ? "Custom location"
+                : (_selectedJunkshop?.subtitle ?? ""),
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+        ),
+      );
+    }
+
+    // ✅ User location marker
     final p = _currentPosition;
     if (p != null) {
       markers.add(
@@ -629,18 +655,67 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(picked.latLng, 16));
   }
 
-  Future<void> _startDirectionsToJunkshop() async {
-    if (_selectedJunkshop == null && _customDestinationLatLng == null) {
-      _snack("Choose a destination first.", bg: Colors.black87);
+  Future<void> _startDirectionsToMores() async {
+    setState(() => _tripStage = TripStage.delivering);
+
+    await _buildRouteTo(_dropOffLatLng);
+
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(_dropOffLatLng, 16),
+    );
+
+    _snack("Showing directions to Mores Scrap Trading.", bg: _sheet);
+  }
+
+  Future<void> _buildRouteTo(LatLng dest) async {
+    if (_googleDirectionsApiKey.isEmpty || _googleDirectionsApiKey == "API_KEY_HERE") {
+      if (mounted) setState(() => _routePoints = []);
       return;
     }
 
-    setState(() => _tripStage = TripStage.delivering);
-    await _buildRoute();
+    if (_currentPosition == null) {
+      if (mounted) setState(() => _routePoints = []);
+      return;
+    }
 
-    _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_destLatLng, 15));
-    _snack("Showing directions to destination.", bg: _sheet);
+    final origin = _originLatLng;
+
+    final uri = Uri.parse(
+      "https://maps.googleapis.com/maps/api/directions/json"
+      "?origin=${origin.latitude},${origin.longitude}"
+      "&destination=${dest.latitude},${dest.longitude}"
+      "&mode=driving"
+      "&key=$_googleDirectionsApiKey",
+    );
+
+    try {
+      final res = await http.get(uri);
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+
+      if (data["status"] != "OK") {
+        if (!mounted) return;
+        setState(() => _routePoints = []);
+        _snack("Directions: ${data["status"]}", bg: Colors.black87);
+        return;
+      }
+
+      final routes = data["routes"] as List<dynamic>;
+      if (routes.isEmpty) {
+        if (mounted) setState(() => _routePoints = []);
+        return;
+      }
+
+      final encoded = routes.first["overview_polyline"]["points"] as String;
+      final decoded = _decodePolyline(encoded);
+
+      if (!mounted) return;
+      setState(() => _routePoints = decoded);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _routePoints = []);
+    }
   }
+
 
   Future<void> requestPickupWithConfirm({
     required LatLng pickupLatLng,
@@ -780,53 +855,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
   Future<void> _buildRoute() async {
-    if (_googleDirectionsApiKey.isEmpty || _googleDirectionsApiKey == "API_KEY_HERE") {
-      if (mounted) setState(() => _routePoints = []);
-      return;
-    }
-
-    if (_currentPosition == null) {
-      if (mounted) setState(() => _routePoints = []);
-      return;
-    }
-
-    final origin = _originLatLng;
-    final dest = _destLatLng;
-
-    final uri = Uri.parse(
-      "https://maps.googleapis.com/maps/api/directions/json"
-      "?origin=${origin.latitude},${origin.longitude}"
-      "&destination=${dest.latitude},${dest.longitude}"
-      "&mode=driving"
-      "&key=$_googleDirectionsApiKey",
-    );
-
-    try {
-      final res = await http.get(uri);
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-
-      if (data["status"] != "OK") {
-        if (!mounted) return;
-        setState(() => _routePoints = []);
-        _snack("Directions: ${data["status"]}", bg: Colors.black87);
-        return;
-      }
-
-      final routes = data["routes"] as List<dynamic>;
-      if (routes.isEmpty) {
-        if (mounted) setState(() => _routePoints = []);
-        return;
-      }
-
-      final encoded = routes.first["overview_polyline"]["points"] as String;
-      final decoded = _decodePolyline(encoded);
-
-      if (!mounted) return;
-      setState(() => _routePoints = decoded);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _routePoints = []);
-    }
+    await _buildRouteTo(_destLatLng);
   }
 
   List<LatLng> _decodePolyline(String encoded) {
@@ -1238,7 +1267,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           child: SizedBox(
                             height: 56,
                             child: ElevatedButton.icon(
-                              onPressed: _startDirectionsToJunkshop,
+                              onPressed: _startDirectionsToMores,
                               icon: const Icon(Icons.directions),
                               label: const Text("DROP-OFF"),
                               style: ElevatedButton.styleFrom(
