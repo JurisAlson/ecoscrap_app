@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "315109985206-a9onmlv6b9lcajei1sdilp4vo4q1kvrc.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ecoscrap_app",
+            "certificate_hash": "1dc5bc5bcd8e14600238631a2eb9df251a765664"
+          }
+        },
+        {
           "client_id": "315109985206-0rcpqskgid0r423053il64r6elmlfpq9.apps.googleusercontent.com",
           "client_type": 3
         }

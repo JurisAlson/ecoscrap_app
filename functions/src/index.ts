@@ -442,10 +442,7 @@ function daysAgo(days: number) {
    AUTO add approvedAt when admin approves permit
 ==================================================== */
 export const setApprovedAtOnApprove = onDocumentUpdated(
-  {
-    document: "permitRequests/{requestId}",
-    region: "asia-southeast1",
-  },
+  { document: "permitRequests/{requestId}", region: "asia-southeast1" },
   async (event) => {
     const beforeSnap = event.data?.before;
     const afterSnap = event.data?.after;
@@ -455,26 +452,72 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
     const after = afterSnap.data() as any;
     if (!before || !after) return;
 
-    // Trigger only when it changes to approved
-    if (before.approved !== true && after.approved === true) {
-      logger.info("Approved -> set approvedAt + notify user", { requestId: event.params.requestId });
+    const uid = String(after.uid || "").trim();
+    if (!uid) return;
 
-      // set approvedAt once
+    const beforeApproved = before.approved === true;
+    const afterApproved = after.approved === true;
+    const afterStatus = String(after.status || "").trim().toLowerCase();
+
+    // ✅ APPROVED
+    if (!beforeApproved && afterApproved) {
       if (!after.approvedAt) {
         await afterSnap.ref.update({
           approvedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
       }
 
-      const uid = String(after.uid || "").trim();
-      if (uid) {
-        await sendPushToUser(
-          uid,
-          "Junkshop Application Approved ✅",
-          "Your junkshop application has been approved by the admin.",
-          { type: "junkshop_approved", requestId: String(event.params.requestId) }
-        );
-      }
+      await sendPushToUser(
+        uid,
+        "Junkshop Application Approved ✅",
+        "Your junkshop application has been approved by the admin.",
+        { type: "junkshop_approved", requestId: String(event.params.requestId) }
+      );
+
+      return;
+    }
+
+    // ✅ REJECTED
+    if (beforeApproved !== false && afterApproved === false && afterStatus === "rejected") {
+      await sendPushToUser(
+        uid,
+        "Junkshop Application Rejected ❌",
+        "Your junkshop application was rejected by the admin.",
+        { type: "junkshop_rejected", requestId: String(event.params.requestId) }
+      );
+
+      logger.info("Junkshop rejection notified", { uid, requestId: event.params.requestId });
+      return;
+    }
+  }
+);
+
+export const notifyCollectorRequestRejected = onDocumentUpdated(
+  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const afterSnap = event.data?.after;
+    if (!beforeSnap || !afterSnap) return;
+
+    const before = beforeSnap.data() as any;
+    const after = afterSnap.data() as any;
+    if (!before || !after) return;
+
+    const beforeStatus = String(before.status || "").trim().toLowerCase();
+    const afterStatus = String(after.status || "").trim().toLowerCase();
+
+    // Only notify on transition to rejected
+    if (beforeStatus !== "rejected" && afterStatus === "rejected") {
+      const uid = String(event.params.collectorUid);
+
+      await sendPushToUser(
+        uid,
+        "Collector Application Rejected ❌",
+        "Your collector application was rejected by the admin.",
+        { type: "collector_rejected", requestId: uid }
+      );
+
+      logger.info("Collector rejection notified", { uid });
     }
   }
 );
