@@ -111,7 +111,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
         "junkshopName": shopName,
 
         "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      }, SetOptions(merge: true)); 
     });
   }
 

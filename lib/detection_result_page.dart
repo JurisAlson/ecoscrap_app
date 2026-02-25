@@ -107,7 +107,7 @@ class DetectionResultPage extends StatelessWidget {
                           ),
                           const SizedBox(height: 26),
 
-                          // ✅ Only show junkshop button when confidently recyclable
+                          // ✅ Only show junkshop button when recyclable
                           if (isRecyclable) ...[
                             _actionButton(
                               icon: Icons.location_on,
