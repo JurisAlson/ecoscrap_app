@@ -1,8 +1,10 @@
-import 'dart:ui'; 
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../auth/login_page.dart';
+import '../security/admin_profile_encrypt.dart';
 
 import 'admin_overview_tab.dart';
 import 'collectors/admin_collector_requests.dart';
@@ -44,6 +46,66 @@ class _AdminHomePageState extends State<AdminHomePage> {
       (_) => false,
     );
   }
+
+  // ✅ Clean + reliable: checks the SAME doc, writes debug ping, then encrypts.
+  Future<void> _encryptAdminProfileRunOnce(User user) async {
+  try {
+    print("=== START ENCRYPT === uid=${user.uid}");
+
+    // 1. Find admin doc by uid field (works even if doc ID is different)
+    final q = await FirebaseFirestore.instance
+        .collection('Users') // ⚠️ change if your collection name is different
+        .where('uid', isEqualTo: user.uid)
+        .limit(1)
+        .get();
+
+    if (q.docs.isEmpty) {
+      throw Exception("Admin document not found for uid ${user.uid}");
+    }
+
+    final docRef = q.docs.first.reference;
+    final data = q.docs.first.data();
+
+    print("=== FOUND DOC PATH === ${docRef.path}");
+
+    // 2. FORCE WRITE test marker so you can see it immediately
+    await docRef.set({
+      "FORCE_TEST": "ENCRYPT_CLICKED",
+      "FORCE_TIME": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    print("=== FORCE_TEST WRITTEN ===");
+
+    // 3. Pick name from existing field
+    final existingName = (data['Name'] as String?)?.trim();
+    final nameToEncrypt =
+        (existingName != null && existingName.isNotEmpty) ? existingName : "admin";
+
+    // 4. Encrypt profile
+    await upsertAdminEncryptedProfile(
+      uid: user.uid,
+      email: user.email ?? "",
+      name: nameToEncrypt,
+    );
+
+    print("=== ENCRYPT COMPLETE ===");
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("✅ Encryption executed. Check Firestore for FORCE_TEST and profile."),
+      ),
+    );
+  } catch (e, st) {
+    print("❌ ENCRYPT ERROR: $e");
+    print(st);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("❌ Encrypt failed: $e")),
+    );
+  }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -96,14 +158,9 @@ class _AdminHomePageState extends State<AdminHomePage> {
                               "Admin Panel",
                               style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                             ),
-                            Text(
-                              user?.email ?? "Admin",
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
+                            const Text(
+                              "Administrator",
+                              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                             ),
                           ],
                         ),
@@ -266,9 +323,13 @@ class _AdminHomePageState extends State<AdminHomePage> {
           const SizedBox(height: 20),
           const Icon(Icons.person, size: 80, color: Colors.white54),
           const SizedBox(height: 16),
-          Text(
-            user?.email ?? "Admin",
-            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          const Text(
+            "Administrator",
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 8),
           Text(
@@ -283,16 +344,16 @@ class _AdminHomePageState extends State<AdminHomePage> {
               color: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: const Column(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   "Admin Tools",
                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                 ),
-                SizedBox(height: 8),
-                Text(
-                  "• Review collectors\n• Manage users",
+                const SizedBox(height: 8),
+                const Text(
+                  "• Overview \n• Manage user Roles\n• Review collectors",
                   style: TextStyle(color: Colors.white70, height: 1.35, fontSize: 13),
                 ),
               ],
