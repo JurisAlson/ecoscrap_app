@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:ui';
-
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -38,8 +38,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   static const Color _bg = Color(0xFF0F172A);
   static const Color _accent = Color(0xFF1FA9A7);
 
-  // ✅ put your Directions key
-  static const String _directionsKey = "YOUR_DIRECTIONS_API_KEY";
 
   GoogleMapController? _map;
   Position? _pos;
@@ -68,6 +66,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     _loadRequestInfo();
     _initLocation();
   }
+
 
   Future<void> _loadRequestInfo() async {
     try {
@@ -123,25 +122,30 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return true;
   }
 
-  Future<void> _buildRoute() async {
-    if (_directionsKey == "YOUR_DIRECTIONS_API_KEY") return;
+  final FirebaseFunctions _functions =
+    FirebaseFunctions.instanceFor(region: 'asia-southeast1');
 
+  Future<void> _buildRoute() async {
     final o = _origin;
     final d = _pickup;
 
-    final uri = Uri.parse(
-      "https://maps.googleapis.com/maps/api/directions/json"
-      "?origin=${o.latitude},${o.longitude}"
-      "&destination=${d.latitude},${d.longitude}"
-      "&mode=driving"
-      "&key=$_directionsKey",
-    );
-
     try {
-      final res = await http.get(uri);
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final callable = _functions.httpsCallable('getDirections');
+      final result = await callable.call({
+        'origin': '${o.latitude},${o.longitude}',
+        'destination': '${d.latitude},${d.longitude}',
+        'mode': 'driving',
+      });
 
-      if (data["status"] != "OK") {
+      final data = result.data;
+      if (data is! Map) return;
+
+      final points = data['points'] as String?;
+      final dist = (data['distanceText'] ?? '').toString();
+      final dur = (data['durationText'] ?? '').toString();
+      final durVal = data['durationValueSec'];
+
+      if (points == null || points.isEmpty) {
         if (!mounted) return;
         setState(() {
           _route = [];
@@ -152,44 +156,22 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         return;
       }
 
-      final routes = (data["routes"] as List<dynamic>);
-      if (routes.isEmpty) return;
+      final decoded = _decodePolyline(points);
 
-      final route0 = routes.first as Map<String, dynamic>;
-
-      // distance + duration from first leg
-      final legs = (route0["legs"] as List<dynamic>);
-      if (legs.isNotEmpty) {
-        final leg0 = legs.first as Map<String, dynamic>;
-        final dist = (leg0["distance"]?["text"] ?? "").toString();
-        final dur = (leg0["duration"]?["text"] ?? "").toString();
-        final durVal = leg0["duration"]?["value"];
-
-        if (mounted) {
-          setState(() {
-            _distanceText = dist;
-            _durationText = dur;
-            _durationValueSec = (durVal is int) ? durVal : null;
-          });
-        }
-      }
-
-      final encoded = route0["overview_polyline"]["points"] as String;
-      final decoded = _decodePolyline(encoded);
-
-      if (!mounted) return;
-      setState(() => _route = decoded);
-    } catch (_) {
       if (!mounted) return;
       setState(() {
-        _route = [];
-        _distanceText = "";
-        _durationText = "";
-        _durationValueSec = null;
+        _route = decoded;
+        _distanceText = dist;
+        _durationText = dur;
+        _durationValueSec = (durVal is int) ? durVal : null;
       });
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint("❌ getDirections failed: ${e.code} ${e.message}");
+    } catch (e) {
+      debugPrint("❌ getDirections crashed: $e");
     }
   }
-
+  
   Future<void> _openGoogleMapsNavigation() async {
     final gp = _pickupGp;
     if (gp == null) {
