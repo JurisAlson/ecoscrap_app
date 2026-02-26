@@ -1,7 +1,8 @@
 const admin = require("firebase-admin");
 const { logger } = require("firebase-functions/v2");
 const crypto = require("crypto");
-
+const { defineSecret } = require("firebase-functions/params");
+const GOOGLE_MAPS_API_KEY = defineSecret("GOOGLE_MAPS_API_KEY");
 const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
 const {
   onDocumentCreated,
@@ -546,5 +547,104 @@ exports.deductInventoryOnTransactionCreate = onDocumentCreated(
         inventoryDeductedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     });
+  }
+);
+/* ====================================================
+   HIDING API KEY
+==================================================== */
+exports.getDirections = onCall(
+  {
+    region: "asia-southeast1",
+    secrets: [GOOGLE_MAPS_API_KEY],
+  },
+  async (request) => {
+    // Optional: require logged-in user
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+
+    const origin = String(request.data?.origin || "").trim();         // "lat,lng"
+    const destination = String(request.data?.destination || "").trim(); // "lat,lng"
+    const mode = String(request.data?.mode || "driving").trim();
+
+    if (!origin || !destination) {
+      throw new HttpsError("invalid-argument", "origin and destination are required");
+    }
+
+    const apiKey = GOOGLE_MAPS_API_KEY.value();
+
+    const url =
+      "https://maps.googleapis.com/maps/api/directions/json" +
+      `?origin=${encodeURIComponent(origin)}` +
+      `&destination=${encodeURIComponent(destination)}` +
+      `&mode=${encodeURIComponent(mode)}` +
+      `&key=${apiKey}`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.status && data.status !== "OK") {
+      throw new HttpsError("failed-precondition", `Directions failed: ${data.status}`);
+    }
+
+    const route0 = data.routes?.[0];
+    const points = route0?.overview_polyline?.points || null;
+
+    // Optional: also return stats (useful for collector page)
+    const leg0 = route0?.legs?.[0];
+    const distanceText = leg0?.distance?.text || "";
+    const durationText = leg0?.duration?.text || "";
+    const durationValueSec =
+      typeof leg0?.duration?.value === "number" ? leg0.duration.value : null;
+
+    if (!points) throw new HttpsError("not-found", "No route/polyline found");
+
+    return { points, distanceText, durationText, durationValueSec };
+  }
+);
+/* ====================================================
+   GET DIRECTIONS
+==================================================== */
+exports.getDirections = onCall(
+  {
+    region: "asia-southeast1",
+    secrets: [GOOGLE_MAPS_API_KEY],
+  },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+
+    const origin = String(request.data?.origin || "").trim();       // "lat,lng"
+    const destination = String(request.data?.destination || "").trim(); // "lat,lng"
+    const mode = String(request.data?.mode || "driving").trim();
+
+    if (!origin || !destination) {
+      throw new HttpsError("invalid-argument", "origin and destination are required");
+    }
+
+    const apiKey = GOOGLE_MAPS_API_KEY.value();
+
+    const url =
+      "https://maps.googleapis.com/maps/api/directions/json" +
+      `?origin=${encodeURIComponent(origin)}` +
+      `&destination=${encodeURIComponent(destination)}` +
+      `&mode=${encodeURIComponent(mode)}` +
+      `&key=${apiKey}`;
+
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    if (data.status && data.status !== "OK") {
+      throw new HttpsError("failed-precondition", `Directions failed: ${data.status}`);
+    }
+
+    const route0 = data.routes?.[0];
+    const points = route0?.overview_polyline?.points || null;
+
+    const leg0 = route0?.legs?.[0];
+    const distanceText = leg0?.distance?.text || "";
+    const durationText = leg0?.duration?.text || "";
+    const durationValueSec = typeof leg0?.duration?.value === "number" ? leg0.duration.value : null;
+
+    if (!points) throw new HttpsError("not-found", "No route/polyline found");
+
+    return { points, distanceText, durationText, durationValueSec };
   }
 );
