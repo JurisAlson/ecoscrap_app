@@ -12,138 +12,235 @@ import * as crypto from "crypto";
 admin.initializeApp();
 setGlobalOptions({ maxInstances: 10 });
 
+/* ====================================================
+  PUSH HELPERS
+==================================================== */
+
+async function getAdminUids(): Promise<string[]> {
+  const db = admin.firestore();
+
+  const snapA = await db.collection("Users")
+    .where("Roles", "in", ["admin", "admins", "Admin", "Admins"])
+    .get();
+
+  const snapB = await db.collection("Users")
+    .where("role", "in", ["admin", "admins", "Admin", "Admins"])
+    .get();
+
+  const set = new Set<string>();
+  snapA.docs.forEach(d => set.add(d.id));
+  snapB.docs.forEach(d => set.add(d.id));
+
+  return [...set];
+}
+
+async function getJunkshopUids(): Promise<string[]> {
+  const db = admin.firestore();
+
+  const s1 = await db.collection("Users").where("Roles", "in", ["junkshop", "junkshops"]).get();
+  const s2 = await db.collection("Users").where("role", "in", ["junkshop", "junkshops"]).get();
+
+  const ids = new Set<string>();
+  s1.docs.forEach(d => ids.add(d.id));
+  s2.docs.forEach(d => ids.add(d.id));
+
+  return [...ids];
+}
+
+async function sendPushToMany(uids: string[], title: string, body: string, data: Record<string, any> = {}) {
+  // simple + safe: reuse your single-user send (good enough for small lists)
+  await Promise.allSettled(uids.map(uid => sendPushToUser(uid, title, body, data)));
+}
+
 async function sendPushToUser(
   uid: string,
   title: string,
   body: string,
-  data: Record<string, string> = {}
+  data: Record<string, any> = {}
 ) {
   const userSnap = await admin.firestore().collection("Users").doc(uid).get();
-  if (!userSnap.exists) return;
+  if (!userSnap.exists) {
+    logger.warn("sendPushToUser: no Users doc", { uid });
+    return;
+  }
 
   const token = (userSnap.data() as any)?.fcmToken as string | undefined;
-  if (!token) return;
+  if (!token) {
+    logger.warn("sendPushToUser: missing fcmToken", { uid });
+    return;
+  }
+
+  // FCM data values must be strings
+  const stringData: Record<string, string> = Object.fromEntries(
+    Object.entries(data).map(([k, v]) => [k, String(v)])
+  );
 
   await admin.messaging().send({
     token,
     notification: { title, body },
-    data,
+    data: stringData,
   });
 }
 
 /* ====================================================
     ADMIN-ONLY: Set user role in Firestore (for app routing)
 ==================================================== */
-export const setUserRole = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
+export const setUserRole = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth)
+      throw new HttpsError("unauthenticated", "Login required.");
+    if (request.auth.token?.admin !== true) {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const uid = request.data?.uid as string | undefined;
+    let role = String(request.data?.role || "").trim().toLowerCase();
+
+    if (role === "users") role = "user";
+    if (role === "admins") role = "admin";
+    if (role === "collectors") role = "collector";
+    if (role === "junkshops") role = "junkshop";
+
+    const allowed = ["user", "collector", "junkshop", "admin"];
+    if (!uid || typeof uid !== "string")
+      throw new HttpsError("invalid-argument", "uid required");
+    if (!allowed.includes(role))
+      throw new HttpsError("invalid-argument", "Invalid role");
+
+    await admin
+      .firestore()
+      .collection("Users")
+      .doc(uid)
+      .set({ Roles: role }, { merge: true });
+
+    return { ok: true, uid, role };
   }
-
-  const uid = request.data?.uid as string | undefined;
-  let role = String(request.data?.role || "").trim().toLowerCase();
-
-  if (role === "users") role = "user";
-  if (role === "admins") role = "admin";
-  if (role === "collectors") role = "collector";
-  if (role === "junkshops") role = "junkshop";
-
-  const allowed = ["user", "collector", "junkshop", "admin"];
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
-  if (!allowed.includes(role)) throw new HttpsError("invalid-argument", "Invalid role");
-
-  await admin.firestore().collection("Users").doc(uid).set({ Roles: role }, { merge: true });
-  return { ok: true, uid, role };
-});
+);
 
 /* ====================================================
    ADMIN-ONLY: Verify junkshop
 ==================================================== */
-export const verifyJunkshop = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
+export const verifyJunkshop = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth)
+      throw new HttpsError("unauthenticated", "Login required.");
+    if (request.auth.token?.admin !== true) {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const uid = request.data?.uid as string | undefined;
+    if (!uid || typeof uid !== "string")
+      throw new HttpsError("invalid-argument", "uid required");
+
+    // Keep your existing behavior (Junkshop collection + Users role)
+    await admin
+      .firestore()
+      .collection("Junkshop")
+      .doc(uid)
+      .set(
+        {
+          verified: true,
+          verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+    await admin
+      .firestore()
+      .collection("Users")
+      .doc(uid)
+      .set({ Roles: "junkshop" }, { merge: true });
+
+    const user = await admin.auth().getUser(uid);
+    const existing = user.customClaims || {};
+
+    await admin.auth().setCustomUserClaims(uid, {
+      ...existing,
+      junkshop: true,
+      collector: false,
+      admin: existing.admin === true,
+    });
+
+    return { ok: true, uid };
   }
-
-  const uid = request.data?.uid as string | undefined;
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
-
-  await admin.firestore().collection("Junkshop").doc(uid).set(
-    {
-      verified: true,
-      verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  await admin.firestore().collection("Users").doc(uid).set({ Roles: "junkshop" }, { merge: true });
-
-  const user = await admin.auth().getUser(uid);
-  const existing = user.customClaims || {};
-
-  await admin.auth().setCustomUserClaims(uid, {
-    ...existing,
-    junkshop: true,
-    collector: false,
-    admin: existing.admin === true,
-  });
-
-  return { ok: true, uid };
-});
+);
 
 /* ====================================================
    ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
 ==================================================== */
-export const adminDeleteUser = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
+export const adminDeleteUser = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth)
+      throw new HttpsError("unauthenticated", "Login required.");
+    if (request.auth.token?.admin !== true) {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const uid = request.data?.uid as string | undefined;
+    if (!uid || typeof uid !== "string")
+      throw new HttpsError("invalid-argument", "uid required");
+
+    const db = admin.firestore();
+
+    try {
+      await db.collection("Users").doc(uid).delete().catch(() => null);
+      await db.collection("Junkshop").doc(uid).delete().catch(() => null);
+
+      const permits = await db
+        .collection("permitRequests")
+        .where("uid", "==", uid)
+        .get();
+      const batch = db.batch();
+      permits.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit().catch(() => null);
+
+      await admin.auth().deleteUser(uid);
+      return { ok: true, uid };
+    } catch (err: any) {
+      logger.error("adminDeleteUser error", {
+        err: String(err),
+        stack: err?.stack,
+      });
+      throw new HttpsError("internal", err?.message || String(err));
+    }
   }
-
-  const uid = request.data?.uid as string | undefined;
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
-
-  const db = admin.firestore();
-
-  try {
-    await db.collection("Users").doc(uid).delete().catch(() => null);
-    await db.collection("Junkshop").doc(uid).delete().catch(() => null);
-
-    const permits = await db.collection("permitRequests").where("uid", "==", uid).get();
-    const batch = db.batch();
-    permits.docs.forEach((d) => batch.delete(d.ref));
-    await batch.commit().catch(() => null);
-
-    await admin.auth().deleteUser(uid);
-    return { ok: true, uid };
-  } catch (err: any) {
-    logger.error("adminDeleteUser error", { err: String(err), stack: err?.stack });
-    throw new HttpsError("internal", err?.message || String(err));
-  }
-});
+);
 
 /* ====================================================
    ADMIN-ONLY: Grant/Revoke admin claim
 ==================================================== */
-export const setAdminClaim = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
-  if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+export const setAdminClaim = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth)
+      throw new HttpsError("unauthenticated", "Login required.");
+    if (request.auth.token?.admin !== true)
+      throw new HttpsError("permission-denied", "Admin only.");
 
-  const uid = request.data?.uid as string | undefined;
-  const makeAdmin = request.data?.makeAdmin as boolean | undefined;
+    const uid = request.data?.uid as string | undefined;
+    const makeAdmin = request.data?.makeAdmin as boolean | undefined;
 
-  if (!uid || typeof uid !== "string") throw new HttpsError("invalid-argument", "uid required");
-  if (typeof makeAdmin !== "boolean") throw new HttpsError("invalid-argument", "makeAdmin must be boolean");
+    if (!uid || typeof uid !== "string")
+      throw new HttpsError("invalid-argument", "uid required");
+    if (typeof makeAdmin !== "boolean")
+      throw new HttpsError("invalid-argument", "makeAdmin must be boolean");
 
-  try {
-    const user = await admin.auth().getUser(uid);
-    const existing = user.customClaims || {};
-    await admin.auth().setCustomUserClaims(uid, { ...existing, admin: makeAdmin });
-    return { ok: true, uid, admin: makeAdmin };
-  } catch (err: any) {
-    throw new HttpsError("internal", err?.message || String(err));
+    try {
+      const user = await admin.auth().getUser(uid);
+      const existing = user.customClaims || {};
+      await admin.auth().setCustomUserClaims(uid, {
+        ...existing,
+        admin: makeAdmin,
+      });
+      return { ok: true, uid, admin: makeAdmin };
+    } catch (err: any) {
+      throw new HttpsError("internal", err?.message || String(err));
+    }
   }
-});
+);
 
 /* ====================================================
    Auto-sync claims whenever Users/{uid}.Roles changes
@@ -160,8 +257,12 @@ export const syncRoleClaims = onDocumentWritten(
       const after = (afterSnap.data() || {}) as any;
       const uid = event.params.uid as string;
 
-      const beforeRole = String(before.Roles || before.roles || "").trim().toLowerCase();
-      let role = String(after.Roles || after.roles || "").trim().toLowerCase();
+      const beforeRole = String(before.Roles || before.roles || "")
+        .trim()
+        .toLowerCase();
+      let role = String(after.Roles || after.roles || "")
+        .trim()
+        .toLowerCase();
 
       if (role === "users") role = "user";
       if (role === "admins") role = "admin";
@@ -181,7 +282,10 @@ export const syncRoleClaims = onDocumentWritten(
 
       logger.info("RBAC Claims synced", { uid, role, roleClaims });
     } catch (e: any) {
-      logger.error("syncRoleClaims FAILED", { error: String(e), stack: e?.stack });
+      logger.error("syncRoleClaims FAILED", {
+        error: String(e),
+        stack: e?.stack,
+      });
     }
   }
 );
@@ -194,14 +298,18 @@ function getKeysOrThrow() {
   const hmacKeyB64 = process.env.PII_HMAC_KEY_B64;
 
   if (!aesKeyB64 || !hmacKeyB64) {
-    throw new Error("Missing encryption secrets (PII_AES_KEY_B64 / PII_HMAC_KEY_B64).");
+    throw new Error(
+      "Missing encryption secrets (PII_AES_KEY_B64 / PII_HMAC_KEY_B64)."
+    );
   }
 
   const AES_KEY = Buffer.from(aesKeyB64, "base64");
   const HMAC_KEY = Buffer.from(hmacKeyB64, "base64");
 
-  if (AES_KEY.length !== 32) throw new Error("AES key must be 32 bytes (AES-256).");
-  if (HMAC_KEY.length < 32) throw new Error("HMAC key too short (recommend >= 32 bytes).");
+  if (AES_KEY.length !== 32)
+    throw new Error("AES key must be 32 bytes (AES-256).");
+  if (HMAC_KEY.length < 32)
+    throw new Error("HMAC key too short (recommend >= 32 bytes).");
 
   return { AES_KEY, HMAC_KEY };
 }
@@ -236,14 +344,25 @@ function normalizeMoney(v: any) {
 /* ====================================================
    ENCRYPTION HELPERS
 ==================================================== */
-function encryptNormalizedToFields(normalized: string, AES_KEY: Buffer, HMAC_KEY: Buffer, fieldPrefix: string) {
+function encryptNormalizedToFields(
+  normalized: string,
+  AES_KEY: Buffer,
+  HMAC_KEY: Buffer,
+  fieldPrefix: string
+) {
   const nonce = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", AES_KEY, nonce);
 
-  const ciphertext = Buffer.concat([cipher.update(normalized, "utf8"), cipher.final()]);
+  const ciphertext = Buffer.concat([
+    cipher.update(normalized, "utf8"),
+    cipher.final(),
+  ]);
   const tag = cipher.getAuthTag();
 
-  const lookup = crypto.createHmac("sha256", HMAC_KEY).update(normalized).digest("hex");
+  const lookup = crypto
+    .createHmac("sha256", HMAC_KEY)
+    .update(normalized)
+    .digest("hex");
 
   return {
     [`${fieldPrefix}_enc`]: ciphertext.toString("base64"),
@@ -255,14 +374,25 @@ function encryptNormalizedToFields(normalized: string, AES_KEY: Buffer, HMAC_KEY
   } as Record<string, any>;
 }
 
-function encryptNormalizedToFieldsNoTimestamp(normalized: string, AES_KEY: Buffer, HMAC_KEY: Buffer, fieldPrefix: string) {
+function encryptNormalizedToFieldsNoTimestamp(
+  normalized: string,
+  AES_KEY: Buffer,
+  HMAC_KEY: Buffer,
+  fieldPrefix: string
+) {
   const nonce = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", AES_KEY, nonce);
 
-  const ciphertext = Buffer.concat([cipher.update(normalized, "utf8"), cipher.final()]);
+  const ciphertext = Buffer.concat([
+    cipher.update(normalized, "utf8"),
+    cipher.final(),
+  ]);
   const tag = cipher.getAuthTag();
 
-  const lookup = crypto.createHmac("sha256", HMAC_KEY).update(normalized).digest("hex");
+  const lookup = crypto
+    .createHmac("sha256", HMAC_KEY)
+    .update(normalized)
+    .digest("hex");
 
   return {
     [`${fieldPrefix}_enc`]: ciphertext.toString("base64"),
@@ -272,17 +402,52 @@ function encryptNormalizedToFieldsNoTimestamp(normalized: string, AES_KEY: Buffe
   } as Record<string, any>;
 }
 
-function encryptStringToFields(plainText: any, AES_KEY: Buffer, HMAC_KEY: Buffer, fieldPrefix: string) {
-  return encryptNormalizedToFields(normalizeText(plainText), AES_KEY, HMAC_KEY, fieldPrefix);
+function encryptStringToFields(
+  plainText: any,
+  AES_KEY: Buffer,
+  HMAC_KEY: Buffer,
+  fieldPrefix: string
+) {
+  return encryptNormalizedToFields(
+    normalizeText(plainText),
+    AES_KEY,
+    HMAC_KEY,
+    fieldPrefix
+  );
 }
 function encryptEmailToFields(email: any, AES_KEY: Buffer, HMAC_KEY: Buffer) {
-  return encryptNormalizedToFields(normalizeEmail(email), AES_KEY, HMAC_KEY, "shopEmail");
+  return encryptNormalizedToFields(
+    normalizeEmail(email),
+    AES_KEY,
+    HMAC_KEY,
+    "shopEmail"
+  );
 }
-function encryptMoneyToFields(value: any, AES_KEY: Buffer, HMAC_KEY: Buffer, fieldPrefix: string) {
-  return encryptNormalizedToFields(normalizeMoney(value), AES_KEY, HMAC_KEY, fieldPrefix);
+function encryptMoneyToFields(
+  value: any,
+  AES_KEY: Buffer,
+  HMAC_KEY: Buffer,
+  fieldPrefix: string
+) {
+  return encryptNormalizedToFields(
+    normalizeMoney(value),
+    AES_KEY,
+    HMAC_KEY,
+    fieldPrefix
+  );
 }
-function encryptMoneyToFieldsForArray(value: any, AES_KEY: Buffer, HMAC_KEY: Buffer, fieldPrefix: string) {
-  return encryptNormalizedToFieldsNoTimestamp(normalizeMoney(value), AES_KEY, HMAC_KEY, fieldPrefix);
+function encryptMoneyToFieldsForArray(
+  value: any,
+  AES_KEY: Buffer,
+  HMAC_KEY: Buffer,
+  fieldPrefix: string
+) {
+  return encryptNormalizedToFieldsNoTimestamp(
+    normalizeMoney(value),
+    AES_KEY,
+    HMAC_KEY,
+    fieldPrefix
+  );
 }
 
 /* ====================================================
@@ -301,7 +466,8 @@ export const encryptJunkshopEmailOnWrite = onDocumentWritten(
     const after = afterSnap.data() as any;
     const { shopId } = event.params;
 
-    const hasPlainEmail = typeof after?.email === "string" && after.email.trim() !== "";
+    const hasPlainEmail =
+      typeof after?.email === "string" && after.email.trim() !== "";
     const alreadyEncrypted = !!after?.shopEmail_enc;
     if (!hasPlainEmail || alreadyEncrypted) return;
 
@@ -316,14 +482,18 @@ export const encryptJunkshopEmailOnWrite = onDocumentWritten(
 
       logger.info("Encrypted Junkshop email successfully", { shopId });
     } catch (err: any) {
-      logger.error("Encryption failed (Junkshop email)", { shopId, message: err?.message, stack: err?.stack });
+      logger.error("Encryption failed (Junkshop email)", {
+        shopId,
+        message: err?.message,
+        stack: err?.stack,
+      });
     }
   }
 );
 
 /* ====================================================
    2) AUTO-ENCRYPT Transaction customerName + total + items[].subtotal
-   ✅ FIXED so UI keeps name + totals
+   ✅ Keeps UI display fields
 ==================================================== */
 export const encryptTransactionCustomerOnWrite = onDocumentWritten(
   {
@@ -345,23 +515,41 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
 
       // customerName (PII) -> encrypt + delete plaintext, but keep customerNameDisplay for UI
       if (!after?.customerName_enc && after?.customerName != null) {
-        if (typeof after.customerName === "string" && after.customerName.trim() !== "") {
-          Object.assign(updatePayload, encryptStringToFields(after.customerName, AES_KEY, HMAC_KEY, "customerName"));
-          updatePayload.customerNameDisplay = after.customerName; // ✅ UI field
-          updatePayload.customerName = admin.firestore.FieldValue.delete(); // ✅ remove plaintext PII
+        if (
+          typeof after.customerName === "string" &&
+          after.customerName.trim() !== ""
+        ) {
+          Object.assign(
+            updatePayload,
+            encryptStringToFields(after.customerName, AES_KEY, HMAC_KEY, "customerName")
+          );
+          updatePayload.customerNameDisplay = after.customerName;
+          updatePayload.customerName = admin.firestore.FieldValue.delete();
         }
       }
 
-      // totalAmount -> encrypt but DO NOT delete plaintext (UI reads totalAmount)
-      if (after?.totalAmount !== undefined && after?.totalAmount !== null && !after?.totalAmount_enc) {
-        Object.assign(updatePayload, encryptMoneyToFields(after.totalAmount, AES_KEY, HMAC_KEY, "totalAmount"));
-        // ✅ DO NOT delete totalAmount
+      // totalAmount -> encrypt but DO NOT delete plaintext
+      if (
+        after?.totalAmount !== undefined &&
+        after?.totalAmount !== null &&
+        !after?.totalAmount_enc
+      ) {
+        Object.assign(
+          updatePayload,
+          encryptMoneyToFields(after.totalAmount, AES_KEY, HMAC_KEY, "totalAmount")
+        );
       }
 
-      // totalPrice (if you ever use it)
-      if (after?.totalPrice !== undefined && after?.totalPrice !== null && !after?.totalPrice_enc) {
-        Object.assign(updatePayload, encryptMoneyToFields(after.totalPrice, AES_KEY, HMAC_KEY, "totalPrice"));
-        // ✅ DO NOT delete totalPrice
+      // totalPrice (optional)
+      if (
+        after?.totalPrice !== undefined &&
+        after?.totalPrice !== null &&
+        !after?.totalPrice_enc
+      ) {
+        Object.assign(
+          updatePayload,
+          encryptMoneyToFields(after.totalPrice, AES_KEY, HMAC_KEY, "totalPrice")
+        );
       }
 
       // items[].subtotal -> encrypt but DO NOT delete plaintext
@@ -370,8 +558,10 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
           const copy = { ...(it || {}) };
 
           if (copy.subtotal != null && !copy.subtotal_enc) {
-            Object.assign(copy, encryptMoneyToFieldsForArray(copy.subtotal, AES_KEY, HMAC_KEY, "subtotal"));
-            // ✅ DO NOT delete copy.subtotal
+            Object.assign(
+              copy,
+              encryptMoneyToFieldsForArray(copy.subtotal, AES_KEY, HMAC_KEY, "subtotal")
+            );
             copy.subtotalSetAtMs = Date.now();
           }
           return copy;
@@ -387,7 +577,12 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
       await afterSnap.ref.update(updatePayload);
       logger.info("Encrypted transaction fields successfully", { shopId, txId });
     } catch (err: any) {
-      logger.error("Encryption failed (transaction)", { shopId, txId, message: err?.message, stack: err?.stack });
+      logger.error("Encryption failed (transaction)", {
+        shopId,
+        txId,
+        message: err?.message,
+        stack: err?.stack,
+      });
     }
   }
 );
@@ -401,14 +596,18 @@ export const setJunkshopEmail = onCall(
     secrets: ["PII_AES_KEY_B64", "PII_HMAC_KEY_B64"],
   },
   async (request) => {
-    if (!request.auth) throw new HttpsError("unauthenticated", "Must be signed in.");
-    if (request.auth.token?.admin !== true) throw new HttpsError("permission-denied", "Admin only.");
+    if (!request.auth)
+      throw new HttpsError("unauthenticated", "Must be signed in.");
+    if (request.auth.token?.admin !== true)
+      throw new HttpsError("permission-denied", "Admin only.");
 
     const shopId = request.data?.shopId as string | undefined;
     const email = request.data?.email as string | undefined;
 
-    if (!shopId || typeof shopId !== "string") throw new HttpsError("invalid-argument", "shopId is required.");
-    if (!email || typeof email !== "string") throw new HttpsError("invalid-argument", "email is required.");
+    if (!shopId || typeof shopId !== "string")
+      throw new HttpsError("invalid-argument", "shopId is required.");
+    if (!email || typeof email !== "string")
+      throw new HttpsError("invalid-argument", "email is required.");
 
     try {
       const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
@@ -416,10 +615,7 @@ export const setJunkshopEmail = onCall(
 
       const ref = admin.firestore().collection("Junkshop").doc(shopId);
       await ref.set(
-        {
-          ...encFields,
-          email: admin.firestore.FieldValue.delete(),
-        },
+        { ...encFields, email: admin.firestore.FieldValue.delete() },
         { merge: true }
       );
 
@@ -439,7 +635,7 @@ function daysAgo(days: number) {
 }
 
 /* ====================================================
-   AUTO add approvedAt when admin approves permit
+   AUTO add approvedAt + notify user when admin approves/rejects permit
 ==================================================== */
 export const setApprovedAtOnApprove = onDocumentUpdated(
   { document: "permitRequests/{requestId}", region: "asia-southeast1" },
@@ -478,7 +674,11 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
     }
 
     // ✅ REJECTED
-    if (beforeApproved !== false && afterApproved === false && afterStatus === "rejected") {
+    if (afterApproved === false && afterStatus === "rejected") {
+      // Only send once (on transition)
+      const beforeStatus = String(before.status || "").trim().toLowerCase();
+      if (beforeStatus === "rejected") return;
+
       await sendPushToUser(
         uid,
         "Junkshop Application Rejected ❌",
@@ -486,44 +686,17 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
         { type: "junkshop_rejected", requestId: String(event.params.requestId) }
       );
 
-      logger.info("Junkshop rejection notified", { uid, requestId: event.params.requestId });
+      logger.info("Junkshop rejection notified", {
+        uid,
+        requestId: event.params.requestId,
+      });
       return;
     }
   }
 );
 
-export const notifyCollectorRequestRejected = onDocumentUpdated(
-  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const afterSnap = event.data?.after;
-    if (!beforeSnap || !afterSnap) return;
-
-    const before = beforeSnap.data() as any;
-    const after = afterSnap.data() as any;
-    if (!before || !after) return;
-
-    const beforeStatus = String(before.status || "").trim().toLowerCase();
-    const afterStatus = String(after.status || "").trim().toLowerCase();
-
-    // Only notify on transition to rejected
-    if (beforeStatus !== "rejected" && afterStatus === "rejected") {
-      const uid = String(event.params.collectorUid);
-
-      await sendPushToUser(
-        uid,
-        "Collector Application Rejected ❌",
-        "Your collector application was rejected by the admin.",
-        { type: "collector_rejected", requestId: uid }
-      );
-
-      logger.info("Collector rejection notified", { uid });
-    }
-  }
-);
-
 /* ====================================================
-   SHARED CLEANUP LOGIC
+   PERMIT CLEANUP
 ==================================================== */
 async function cleanupPermits() {
   const db = admin.firestore();
@@ -591,42 +764,32 @@ async function cleanupPermits() {
   return { deleted };
 }
 
-/* ====================================================
-   SCHEDULED CLEANUP (Runs every 24h)
-==================================================== */
 export const cleanupPermitsByRetention = onSchedule(
-  {
-    schedule: "every 24 hours",
-    region: "asia-southeast1",
-    timeZone: "Asia/Manila",
-  },
+  { schedule: "every 24 hours", region: "asia-southeast1", timeZone: "Asia/Manila" },
   async () => {
     const result = await cleanupPermits();
     logger.info("Scheduled cleanup result", result);
   }
 );
 
-/* ====================================================
-   MANUAL CLEANUP (FOR TESTING)
-==================================================== */
-export const runPermitCleanupNow = onRequest({ region: "asia-southeast1" }, async (req, res) => {
-  try {
-    const result = await cleanupPermits();
-    res.status(200).json({ ok: true, ...result });
-  } catch (err: any) {
-    logger.error("Manual cleanup crashed", { err: String(err) });
-    res.status(500).json({ ok: false, error: String(err) });
+export const runPermitCleanupNow = onRequest(
+  { region: "asia-southeast1" },
+  async (req, res) => {
+    try {
+      const result = await cleanupPermits();
+      res.status(200).json({ ok: true, ...result });
+    } catch (err: any) {
+      logger.error("Manual cleanup crashed", { err: String(err) });
+      res.status(500).json({ ok: false, error: String(err) });
+    }
   }
-});
+);
 
 /* ====================================================
-   INVENTORY DEDUCTION (UNCHANGED)
+   INVENTORY DEDUCTION (sale) + ADD (buy)
 ==================================================== */
 export const deductInventoryOnTransactionCreate = onDocumentCreated(
-  {
-    document: "Junkshop/{shopId}/transaction/{txId}",
-    region: "asia-southeast1",
-  },
+  { document: "Junkshop/{shopId}/transaction/{txId}", region: "asia-southeast1" },
   async (event) => {
     const { shopId } = event.params;
     const snap = event.data;
@@ -638,85 +801,65 @@ export const deductInventoryOnTransactionCreate = onDocumentCreated(
     const txType = String(data.transactionType || "sale").toLowerCase();
     if (txType !== "sale") return;
 
-    // prevent double-run
     if (data.inventoryDeducted === true) return;
 
     const db = admin.firestore();
 
-    // helpers
-    /*const EPS = 0.0001; // tiny tolerance for float errors
-    const round2 = (n: number) => Math.round(n * 100) / 100;*/
+    // safer float handling
+    const EPS = 0.0001;
+    const round2 = (n: number) => Math.round(n * 100) / 100;
 
     await db.runTransaction(async (t) => {
-        for (const item of data.items) {
-            const inventoryRef = db
-            .collection("Junkshop")
-            .doc(shopId)
-            .collection("inventory")
-            .doc(item.inventoryDocId);
+      for (const item of data.items) {
+        const invId = String(item.inventoryDocId || "").trim();
+        if (!invId) continue;
 
-            const inventorySnap = await t.get(inventoryRef);
-            if (!inventorySnap.exists) continue;
+        const weight = Number(item.weightKg);
+        if (!Number.isFinite(weight) || weight <= 0) continue;
 
-            const currentKg = Number((inventorySnap.data() as any).unitsKg) || 0;
-            const newKg = Math.max(currentKg - Number(item.weightKg), 0);
+        const inventoryRef = db
+          .collection("Junkshop")
+          .doc(shopId)
+          .collection("inventory")
+          .doc(invId);
 
-            if (newKg <= 0) {
-            // ✅ DELETE if zero
-            t.delete(inventoryRef);
-            } else {
-            t.update(inventoryRef, {
-                unitsKg: newKg,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-            }
+        const inventorySnap = await t.get(inventoryRef);
+        if (!inventorySnap.exists) continue;
+
+        const rawCurrent = Number((inventorySnap.data() as any).unitsKg);
+        const currentKg = Number.isFinite(rawCurrent) ? rawCurrent : 0;
+
+        let newKg = round2(currentKg - weight);
+        if (newKg < 0 && Math.abs(newKg) <= EPS) newKg = 0;
+        if (newKg < 0) {
+          logger.warn("Oversell detected (clamping to 0, not deleting)", {
+            shopId,
+            invId,
+            currentKg,
+            weight,
+            newKg,
+          });
+          newKg = 0;
         }
 
-        t.update(snap.ref, {
-            inventoryDeducted: true,
-            inventoryDeductedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        });
-    }
-);
+        if (newKg === 0) t.delete(inventoryRef);
+        else
+          t.update(inventoryRef, {
+            unitsKg: newKg,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+      }
 
-export const notifyCollectorApproved = onDocumentUpdated(
-  { document: "Users/{uid}", region: "asia-southeast1" },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const afterSnap = event.data?.after;
-    if (!beforeSnap || !afterSnap) return;
-
-    const before = beforeSnap.data() as any;
-    const after = afterSnap.data() as any;
-
-    // Your app uses BOTH "Roles" and "role" in different places
-    const beforeRole = String(before?.Roles || before?.role || "").trim().toLowerCase();
-    const afterRole = String(after?.Roles || after?.role || "").trim().toLowerCase();
-
-    // Only notify on transition to collector
-    if (beforeRole !== "collector" && afterRole === "collector") {
-      const uid = String(event.params.uid);
-
-      await sendPushToUser(
-        uid,
-        "Collector Application Approved",
-        "Your collector application has been approved by the admin.",
-        { type: "collector_approved", uid }
-      );
-
-      logger.info("Collector approval notified", { uid });
-    }
+      t.update(snap.ref, {
+        inventoryDeducted: true,
+        inventoryDeductedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
   }
 );
 
-
-
 export const addInventoryOnBuyCreate = onDocumentCreated(
-  {
-    document: "Junkshop/{shopId}/transaction/{txId}",
-    region: "asia-southeast1",
-  },
+  { document: "Junkshop/{shopId}/transaction/{txId}", region: "asia-southeast1" },
   async (event) => {
     const { shopId } = event.params;
     const snap = event.data;
@@ -728,7 +871,6 @@ export const addInventoryOnBuyCreate = onDocumentCreated(
     const txType = String(data.transactionType || "sale").toLowerCase();
     if (txType !== "buy") return;
 
-    // prevent double-run
     if (data.inventoryAdded === true) return;
 
     const db = admin.firestore();
@@ -740,10 +882,8 @@ export const addInventoryOnBuyCreate = onDocumentCreated(
 
         const category = String(item.category || "").trim();
         const subCategory = String(item.subCategory || "").trim();
-
         if (!category || !subCategory) continue;
 
-        // ✅ merge strategy: 1 inventory doc per category + subCategory
         const invQuery = db
           .collection("Junkshop")
           .doc(shopId)
@@ -755,7 +895,6 @@ export const addInventoryOnBuyCreate = onDocumentCreated(
         const qSnap = await t.get(invQuery);
 
         if (!qSnap.empty) {
-          // update existing
           const invDoc = qSnap.docs[0];
           const currentKg = Number((invDoc.data() as any).unitsKg) || 0;
           const newKg = currentKg + weightKg;
@@ -765,12 +904,11 @@ export const addInventoryOnBuyCreate = onDocumentCreated(
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
         } else {
-          // create new
           const invRef = db
             .collection("Junkshop")
             .doc(shopId)
             .collection("inventory")
-            .doc(); // auto id
+            .doc();
 
           const derivedName = `${category} • ${subCategory}`;
 
@@ -786,11 +924,288 @@ export const addInventoryOnBuyCreate = onDocumentCreated(
         }
       }
 
-      // mark transaction as processed
       t.update(snap.ref, {
         inventoryAdded: true,
         inventoryAddedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     });
+  }
+);
+
+export const notifyAdminOnJunkshopApply = onDocumentCreated(
+  { document: "permitRequests/{requestId}", region: "asia-southeast1" },
+  async (event) => {
+    const after = event.data?.data() as any;
+    if (!after) return;
+
+    const requestId = String(event.params.requestId);
+    const uid = String(after.uid || "").trim();
+    if (!uid) return;
+
+    // Optional: only notify if this permit request is for junkshop
+    // If you have a "type" field, uncomment:
+    // const type = String(after.type || "").toLowerCase();
+    // if (type && type !== "junkshop") return;
+
+    const admins = await getAdminUids();
+    if (admins.length === 0) return;
+
+    await sendPushToMany(
+      admins,
+      "New Junkshop Application 🏪",
+      `A new junkshop permit request was submitted.`,
+      { type: "admin_new_junkshop_request", uid, requestId }
+    );
+
+    logger.info("Admins notified of junkshop application", { uid, requestId, adminCount: admins.length });
+  }
+);
+
+export const notifyAdminOnCollectorApply = onDocumentWritten(
+  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!after) return;
+
+    const uid = String(event.params.collectorUid);
+
+    const b = String(before?.status || "").trim().toLowerCase();
+    const a = String(after?.status || "").trim().toLowerCase();
+
+    // Only when it becomes pending (new or resubmitted)
+    if (a !== "pending" || a === b) return;
+
+    const name = String(after.publicName || "Collector");
+    const email = String(after.emailDisplay || "");
+
+    const admins = await getAdminUids();
+    logger.info("notifyAdminOnCollectorApply", { uid, a, b, adminCount: admins.length });
+
+    if (admins.length === 0) return;
+
+    await sendPushToMany(
+      admins,
+      "New Collector Application 📩",
+      `${name}${email ? ` (${email})` : ""} submitted a collector request.`,
+      { type: "admin_new_collector_request", collectorUid: uid }
+    );
+  }
+);
+
+/* ====================================================
+   PICKUP: Notify junkshop when pickup becomes CONFIRMED
+   (household + collector flow)
+==================================================== */
+export const notifyJunkshopOnPickupConfirmed = onDocumentUpdated(
+  { document: "requests/{requestId}", region: "asia-southeast1" },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const afterSnap = event.data?.after;
+    if (!beforeSnap || !afterSnap) return;
+
+    const before = (beforeSnap.data() || {}) as any;
+    const after = (afterSnap.data() || {}) as any;
+
+    if (String(after.type || "").toLowerCase() !== "pickup") return;
+
+    const beforeStatus = String(before.status || "").toLowerCase();
+    const afterStatus = String(after.status || "").toLowerCase();
+
+    if (beforeStatus === afterStatus) return;
+    if (afterStatus !== "confirmed") return;
+
+    let junkshopId = String(after.junkshopId || "").trim();
+
+    // fallback: derive from collector Users doc
+    if (!junkshopId) {
+      const collectorId = String(after.collectorId || "").trim();
+      if (collectorId) {
+        const collectorSnap = await admin
+          .firestore()
+          .collection("Users")
+          .doc(collectorId)
+          .get();
+        if (collectorSnap.exists) {
+          const c = collectorSnap.data() as any;
+          junkshopId = String(c.assignedJunkshopUid || c.junkshopId || "").trim();
+        }
+      }
+    }
+
+    if (!junkshopId) {
+      logger.warn("No junkshopId found for confirmed pickup", {
+        requestId: event.params.requestId,
+      });
+      return;
+    }
+
+    const requestId = String(event.params.requestId);
+
+    await sendPushToUser(
+      junkshopId,
+      "Pickup confirmed ✅",
+      "A pickup was confirmed by the collector and the household.",
+      { type: "pickup_confirmed", requestId }
+    );
+
+    logger.info("Junkshop notified for confirmed pickup", { requestId, junkshopId });
+  }
+);
+
+/* ====================================================
+   COLLECTOR NOTIFICATIONS (ADMIN + JUNKSHOP)
+   ✅ This is the part you needed fixed.
+==================================================== */
+
+// 1) ADMIN approves/rejects collectorRequest
+export const notifyCollectorAdminDecision = onDocumentWritten(
+  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!before || !after) return;
+
+    const uid = String(event.params.collectorUid);
+
+    const b = String(before.status || "").trim().toLowerCase();
+    const a = String(after.status || "").trim().toLowerCase();
+    if (a === b) return;
+
+    if (a === "adminapproved") {
+
+          // ✅ ALSO notify junkshops so they can accept the collector
+    const junkshops = await getJunkshopUids();
+    if (junkshops.length > 0) {
+      await sendPushToMany(
+        junkshops,
+        "Collector Available ✅",
+        "A collector was approved by admin. You can accept them now.",
+        { type: "junkshop_collector_available", collectorUid: uid }
+      );
+      logger.info("Junkshops notified of admin-approved collector", { collectorUid: uid, junkshopCount: junkshops.length });
+    }
+
+      await sendPushToUser(
+        uid,
+        "Admin approved ✅",
+        "You are approved by admin. Now wait for a junkshop to accept you.",
+        { type: "collector_admin_approved" }
+      );
+      logger.info("Collector adminApproved notified", { uid });
+      return;
+    }
+
+    if (a === "rejected") {
+      await sendPushToUser(
+        uid,
+        "Admin rejected ❌",
+        "Your collector application was rejected by the admin.",
+        { type: "collector_admin_rejected" }
+      );
+      logger.info("Collector rejected notified", { uid });
+      return;
+    }
+  }
+);
+
+// 2) JUNKSHOP accepts collectorRequest (status becomes junkshopAccepted)
+export const notifyCollectorJunkshopAccepted = onDocumentUpdated(
+  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!before || !after) return;
+
+    const uid = String(event.params.collectorUid);
+
+    const b = String(before.status || "").trim().toLowerCase();
+    const a = String(after.status || "").trim().toLowerCase();
+    if (a === b) return;
+
+    if (a !== "junkshopaccepted") return;
+
+    await sendPushToUser(
+      uid,
+      "Junkshop approved ✅",
+      "A junkshop accepted you. You can now start as a collector.",
+      { type: "collector_junkshop_accepted" }
+    );
+
+    logger.info("Collector junkshopAccepted notified", { uid });
+  }
+);
+
+// 3) JUNKSHOP rejects collectorRequest (rejectedByJunkshops array grows)
+export const notifyCollectorJunkshopRejected = onDocumentUpdated(
+  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!before || !after) return;
+
+    const uid = String(event.params.collectorUid);
+
+    const beforeList = Array.isArray(before.rejectedByJunkshops)
+      ? before.rejectedByJunkshops
+      : [];
+    const afterList = Array.isArray(after.rejectedByJunkshops)
+      ? after.rejectedByJunkshops
+      : [];
+
+    if (afterList.length <= beforeList.length) return;
+
+    const beforeSet = new Set(beforeList.map((x: any) => String(x)));
+    const newlyAdded = afterList
+      .map((x: any) => String(x))
+      .filter((x: string) => !beforeSet.has(x));
+    if (newlyAdded.length === 0) return;
+
+    const rejectedByUid = newlyAdded[0];
+
+    await sendPushToUser(
+      uid,
+      "Junkshop declined ❌",
+      "A junkshop declined your request. You can try another junkshop.",
+      { type: "collector_junkshop_rejected", rejectedByUid }
+    );
+
+    logger.info("Collector junkshop rejection notified", { uid, rejectedByUid });
+  }
+);
+
+/* ====================================================
+   OPTIONAL: legacy notification when Users/{uid} becomes collector
+   (This happens on junkshop acceptance, so keep it only if you still want it.)
+==================================================== */
+export const notifyCollectorRoleBecameCollector = onDocumentUpdated(
+  { document: "Users/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const afterSnap = event.data?.after;
+    if (!beforeSnap || !afterSnap) return;
+
+    const before = beforeSnap.data() as any;
+    const after = afterSnap.data() as any;
+
+    const beforeRole = String(before?.Roles || before?.role || "")
+      .trim()
+      .toLowerCase();
+    const afterRole = String(after?.Roles || after?.role || "")
+      .trim()
+      .toLowerCase();
+
+    if (beforeRole !== "collector" && afterRole === "collector") {
+      const uid = String(event.params.uid);
+
+      await sendPushToUser(
+        uid,
+        "Collector activated ✅",
+        "Your collector account is now active.",
+        { type: "collector_role_activated", uid }
+      );
+
+      logger.info("Collector role activation notified", { uid });
+    }
   }
 );

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import '../junkshop/junkshop_dashboard.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'forgot_password.dart';
 import 'UserAccountCreation.dart';
@@ -67,6 +69,33 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+
+Future<void> saveFcmToken() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  await FirebaseMessaging.instance.requestPermission();
+
+  final token = await FirebaseMessaging.instance.getToken();
+  if (token == null) return;
+
+  await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
+    "fcmToken": token,
+    "updatedAt": FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
+
+  // keep token fresh
+  FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
+      "fcmToken": token,
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  });
+}
+
   Future<void> _login() async {
     if (_isLoading) return;
 
@@ -103,10 +132,43 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const RoleGate()),
-      );
+
+// Read role from Users/{uid}
+final snap = await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
+final data = snap.data() ?? {};
+final role = (data['Roles'] ?? data['role'] ?? data['roles'] ?? '')
+    .toString().trim().toLowerCase();
+
+if (role == 'junkshop' || role == 'junkshops') {
+  final shopName = (data['Name'] ?? data['name'] ?? data['shopName'] ?? 'Junkshop')
+      .toString().trim();
+
+  Navigator.pushReplacement(
+    context,
+    MaterialPageRoute(
+      builder: (_) => JunkshopDashboardPage(
+        shopID: u.uid,
+        shopName: shopName.isNotEmpty ? shopName : 'Junkshop',
+      ),
+    ),
+  );
+  return;
+}
+
+// only for non-junkshop users
+await _ensureUserProfile(u);
+
+// then go RoleGate
+Navigator.pushReplacement(
+  context,
+  MaterialPageRoute(builder: (_) => const RoleGate()),
+);
+
+// default: go through RoleGate (admin/user/collector)
+Navigator.pushReplacement(
+  context,
+  MaterialPageRoute(builder: (_) => const RoleGate()),
+);
     } on FirebaseAuthException catch (e) {
       _showToast(e.message ?? "Login failed", isError: true);
     } finally {
