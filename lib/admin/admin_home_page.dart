@@ -1,10 +1,10 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+//import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../auth/login_page.dart';
-import '../security/admin_profile_encrypt.dart';
+//import '../security/admin_profile_encrypt.dart';
 
 import 'admin_overview_tab.dart';
 import 'collectors/admin_collector_requests.dart';
@@ -47,65 +47,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
-  // ✅ Clean + reliable: checks the SAME doc, writes debug ping, then encrypts.
-  Future<void> _encryptAdminProfileRunOnce(User user) async {
-  try {
-    print("=== START ENCRYPT === uid=${user.uid}");
-
-    // 1. Find admin doc by uid field (works even if doc ID is different)
-    final q = await FirebaseFirestore.instance
-        .collection('Users') // ⚠️ change if your collection name is different
-        .where('uid', isEqualTo: user.uid)
-        .limit(1)
-        .get();
-
-    if (q.docs.isEmpty) {
-      throw Exception("Admin document not found for uid ${user.uid}");
-    }
-
-    final docRef = q.docs.first.reference;
-    final data = q.docs.first.data();
-
-    print("=== FOUND DOC PATH === ${docRef.path}");
-
-    // 2. FORCE WRITE test marker so you can see it immediately
-    await docRef.set({
-      "FORCE_TEST": "ENCRYPT_CLICKED",
-      "FORCE_TIME": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    print("=== FORCE_TEST WRITTEN ===");
-
-    // 3. Pick name from existing field
-    final existingName = (data['Name'] as String?)?.trim();
-    final nameToEncrypt =
-        (existingName != null && existingName.isNotEmpty) ? existingName : "admin";
-
-    // 4. Encrypt profile
-    await upsertAdminEncryptedProfile(
-      uid: user.uid,
-      email: user.email ?? "",
-      name: nameToEncrypt,
-    );
-
-    print("=== ENCRYPT COMPLETE ===");
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("✅ Encryption executed. Check Firestore for FORCE_TEST and profile."),
-      ),
-    );
-  } catch (e, st) {
-    print("❌ ENCRYPT ERROR: $e");
-    print(st);
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("❌ Encrypt failed: $e")),
-    );
-  }
-}
 
   @override
   Widget build(BuildContext context) {
