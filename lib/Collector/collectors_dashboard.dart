@@ -3,10 +3,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
-import 'collector_notifications_page.dart';
-import 'collector_pickup_map_page.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+
+import 'collector_pickup_map_page.dart';
 
 // ✅ Chat (pickup list + junkshop direct chat)
 import '../chat/services/chat_services.dart';
@@ -25,6 +24,9 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   static const Color primaryColor = Color(0xFF1FA9A7);
   static const Color bgColor = Color(0xFF0F172A);
 
+  // ✅ RIGHT DRAWER controller
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
   // ✅ Chat service
   final ChatService _chat = ChatService();
 
@@ -37,7 +39,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     WidgetsBinding.instance.addObserver(this);
     _setOnline(true);
 
-    // ✅ ADD THIS
+    // ✅ save FCM token
     _saveFcmToken();
   }
 
@@ -60,40 +62,40 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   }
 
   Future<void> _saveFcmToken() async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-  try {
-    final fcm = FirebaseMessaging.instance;
+    try {
+      final fcm = FirebaseMessaging.instance;
 
-    // ✅ Android 13+ + iOS permission
-    await fcm.requestPermission(alert: true, badge: true, sound: true);
+      // ✅ Android 13+ + iOS permission
+      await fcm.requestPermission(alert: true, badge: true, sound: true);
 
-    final token = await fcm.getToken();
-    if (token == null || token.trim().isEmpty) {
-      debugPrint("⚠️ FCM token is null/empty");
-      return;
-    }
+      final token = await fcm.getToken();
+      if (token == null || token.trim().isEmpty) {
+        debugPrint("⚠️ FCM token is null/empty");
+        return;
+      }
 
-    await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
-      "fcmToken": token,
-      "fcmUpdatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    debugPrint("✅ FCM token saved for ${user.uid}: $token");
-
-    // ✅ keep updated on refresh
-    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
       await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
-        "fcmToken": newToken,
+        "fcmToken": token,
         "fcmUpdatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      debugPrint("✅ FCM token refreshed + saved");
-    });
-  } catch (e) {
-    debugPrint("❌ saveFcmToken failed: $e");
+
+      debugPrint("✅ FCM token saved for ${user.uid}: $token");
+
+      // ✅ keep updated on refresh
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+        await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
+          "fcmToken": newToken,
+          "fcmUpdatedAt": FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        debugPrint("✅ FCM token refreshed + saved");
+      });
+    } catch (e) {
+      debugPrint("❌ saveFcmToken failed: $e");
+    }
   }
-}
 
   Future<void> _setOnline(bool online) async {
     final user = FirebaseAuth.instance.currentUser;
@@ -118,34 +120,21 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     final db = FirebaseFirestore.instance;
 
-    // 1) Try Users/{collectorUid} first (new/ideal flow)
     final userDoc = await db.collection('Users').doc(user.uid).get();
     final userData = userDoc.data() ?? {};
 
     String junkshopUid = (userData['assignedJunkshopUid'] ?? "").toString().trim();
-    String junkshopName =
-        (userData['assignedJunkshopName'] ?? "").toString().trim();
+    String junkshopName = (userData['assignedJunkshopName'] ?? "").toString().trim();
 
-    // 2) Fallback: collectorRequests/{collectorUid} (old flow)
     if (junkshopUid.isEmpty) {
       final reqDoc = await db.collection('collectorRequests').doc(user.uid).get();
       final reqData = reqDoc.data() ?? {};
 
-      // supports either key spelling just in case
-      junkshopUid = (reqData['acceptedByJunkshopUid'] ??
-              reqData['acceptedByJunkshopUid'] ??
-              "")
+      junkshopUid = (reqData['acceptedByJunkshopUid'] ?? "").toString().trim();
+      junkshopName = (reqData['acceptedByJunkshopName'] ?? reqData['junkshopName'] ?? junkshopName)
           .toString()
           .trim();
 
-      // optional: name from request (if you ever store it there)
-      junkshopName = (reqData['acceptedByJunkshopName'] ??
-              reqData['junkshopName'] ??
-              junkshopName)
-          .toString()
-          .trim();
-
-      // 3) If we found a junkshopUid via request, persist back to Users to fix future runs
       if (junkshopUid.isNotEmpty) {
         await db.collection('Users').doc(user.uid).set({
           'assignedJunkshopUid': junkshopUid,
@@ -155,7 +144,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       }
     }
 
-    // Still none? show message.
     if (junkshopUid.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -164,11 +152,19 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       return;
     }
 
-    // Create/open deterministic chat
-    final chatId = await _chat.ensureJunkshopChat(
+    // ✅ ONLY open if active pickup exists
+    final chatId = await _chat.ensureJunkshopChatForActivePickup(
       junkshopUid: junkshopUid,
       collectorUid: user.uid,
     );
+
+    if (chatId == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Chat is only available during an active pickup.")),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
@@ -178,8 +174,88 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         builder: (_) => ChatPage(
           chatId: chatId,
           title: junkshopName.isEmpty ? "Junkshop" : junkshopName,
-          otherUserId: junkshopUid, // ✅ ADD THIS (use the variable you have)
+          otherUserId: junkshopUid,
         ),
+      ),
+    );
+  }
+
+  Widget _collectorProfileDrawer(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                "Profile",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          const Icon(Icons.person, size: 80, color: Colors.white54),
+          const SizedBox(height: 16),
+
+          Text(
+            user?.displayName ?? "Collector",
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            user?.email ?? "No email",
+            style: const TextStyle(color: Colors.white70),
+            textAlign: TextAlign.center,
+          ),
+
+          const SizedBox(height: 24),
+
+    
+
+          const SizedBox(height: 12),
+
+          // ✅ Logout
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: () async {
+                await _setOnline(false);
+                await FirebaseAuth.instance.signOut();
+                if (!context.mounted) return;
+                Navigator.pop(context);
+                Navigator.pushReplacementNamed(context, '/login');
+              },
+              icon: const Icon(Icons.logout),
+              label: const Text("Logout"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -284,6 +360,11 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         (data?['junkshopStatus'] ?? "").toString().toLowerCase() == "verified";
   }
 
+  void _openNotifsDrawer() {
+    // close keyboard etc if needed
+    _scaffoldKey.currentState?.openEndDrawer();
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -347,28 +428,33 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           );
         }
 
-        // ✅ Footer pages (same vibe as junkshop dashboard)
+        // ✅ 3 bottom tabs (NOTIFS is now a RIGHT drawer)
         final pages = <Widget>[
           _CollectorHomeTab(
             collectorId: user.uid,
-            onOpenProfile: () => _showProfileSheet(context),
+            onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(), // ✅ LEFT drawer
+            onOpenNotifs: () => _scaffoldKey.currentState?.openEndDrawer(), // ✅ RIGHT drawer
           ),
-          const CollectorChatListPage(),// ✅ CHATS now = assigned junkshop
+          const CollectorChatListPage(),
           _CollectorMapTab(collectorId: user.uid),
-          const CollectorNotificationsPage(),
-          _CollectorProfileTab(
-            onLogout: () async {
-              await _setOnline(false);
-              await FirebaseAuth.instance.signOut();
-              if (!context.mounted) return;
-              Navigator.pushReplacementNamed(context, '/login');
-            },
-            onOpenJunkshopChat: _openJunkshopChat,
-          ),
         ];
 
         return Scaffold(
+          key: _scaffoldKey,
           backgroundColor: bgColor,
+
+          // ✅ LEFT DRAWER = PROFILE
+          drawer: Drawer(
+            backgroundColor: bgColor,
+            child: SafeArea(child: _collectorProfileDrawer(context)),
+          ),
+
+          // ✅ RIGHT DRAWER = NOTIFICATIONS
+          endDrawer: Drawer(
+            backgroundColor: bgColor,
+            child: SafeArea(child: _collectorNotificationsDrawer(context)),
+          ),
+
           body: Stack(
             children: [
               Positioned(
@@ -381,6 +467,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                 left: -120,
                 child: _blurCircle(Colors.green.withOpacity(0.10), 360),
               ),
+
+              // ✅ MUST be inside children list
               SafeArea(child: pages[_tabIndex]),
             ],
           ),
@@ -417,8 +505,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: "HOME"),
           BottomNavigationBarItem(icon: Icon(Icons.forum_outlined), label: "CHATS"),
           BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: "MAP"),
-          BottomNavigationBarItem(icon: Icon(Icons.notifications_none), label: "NOTIFS"),
-          BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: "PROFILE"),
         ],
       ),
     );
@@ -437,6 +523,110 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     );
   }
 
+  // ================== RIGHT DRAWER: NOTIFICATIONS ==================
+  Widget _collectorNotificationsDrawer(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                "Notifications",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // ✅ If you already have Firestore notifications, replace these tiles
+          // with your real notifications list.
+          _notifTile(
+            icon: Icons.info_outline,
+            title: "Welcome!",
+            subtitle: "Your pickup updates will appear here.",
+          ),
+          const SizedBox(height: 12),
+          _notifTile(
+            icon: Icons.eco_outlined,
+            title: "Tip",
+            subtitle: "Keep bottles dry and clean for better acceptance.",
+          ),
+          const SizedBox(height: 12),
+          _notifTile(
+            icon: Icons.message_outlined,
+            title: "Need help?",
+            subtitle: "Chat your assigned junkshop anytime.",
+            trailing: TextButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                await _openJunkshopChat();
+              },
+              child: const Text("OPEN CHAT"),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _notifTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    Widget? trailing,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: primaryColor, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                if (trailing != null) ...[
+                  const SizedBox(height: 10),
+                  Align(alignment: Alignment.centerLeft, child: trailing),
+                ]
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ================== PROFILE BOTTOM SHEET ==================
   void _showProfileSheet(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
@@ -477,7 +667,32 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                   user?.email ?? "No email",
                   style: const TextStyle(color: Colors.white70),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
+
+                // ✅ Optional: quick actions
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: () async {
+                      Navigator.pop(context);
+                      await _openJunkshopChat();
+                    },
+                    icon: const Icon(Icons.message_outlined),
+                    label: const Text("Open Junkshop Chat"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.08),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(color: Colors.white.withOpacity(0.10)),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
                 SizedBox(
                   width: double.infinity,
                   height: 48,
@@ -510,66 +725,16 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 }
 
 // ===================== HOME TAB =====================
-class _AssignedJunkshopChatTab extends StatelessWidget {
-  const _AssignedJunkshopChatTab({required this.openChat});
-
-  final Future<void> Function() openChat;
-
-  static const Color primaryColor = Color(0xFF1FA9A7);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 90),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Chats",
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "Assigned Junkshop",
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  "Message your assigned junkshop here. This is your main communication channel.",
-                  style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.35),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _CollectorHomeTab extends StatelessWidget {
   const _CollectorHomeTab({
     required this.collectorId,
     required this.onOpenProfile,
+    required this.onOpenNotifs,
   });
 
   final String collectorId;
   final VoidCallback onOpenProfile;
+  final VoidCallback onOpenNotifs;
 
   static const Color primaryColor = Color(0xFF1FA9A7);
 
@@ -582,17 +747,22 @@ class _CollectorHomeTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // header (no vertical-letter issue)
+          // ✅ Header: profile left, bell right (like household/admin)
           Row(
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [primaryColor, Colors.green]),
-                  borderRadius: BorderRadius.circular(14),
+              GestureDetector(
+                onTap: onOpenProfile,
+                child: Container(
+                  width: 45,
+                  height: 45,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF1FA9A7), Colors.green],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.person, color: Colors.white),
                 ),
-                child: const Icon(Icons.person_pin_circle, color: Colors.white),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -621,7 +791,7 @@ class _CollectorHomeTab extends StatelessWidget {
                 ),
               ),
               InkWell(
-                onTap: onOpenProfile,
+                onTap: onOpenNotifs,
                 borderRadius: BorderRadius.circular(50),
                 child: Container(
                   padding: const EdgeInsets.all(10),
@@ -629,9 +799,10 @@ class _CollectorHomeTab extends StatelessWidget {
                     color: Colors.white.withOpacity(0.05),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(Icons.person_outline, color: Colors.grey.shade300),
+                  child: Icon(Icons.notifications_outlined,
+                      color: Colors.grey.shade300),
                 ),
-              )
+              ),
             ],
           ),
 
@@ -657,12 +828,14 @@ class _CollectorHomeTab extends StatelessWidget {
                     children: [
                       Text(
                         "Community + Environment",
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        style:
+                            TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                       ),
                       SizedBox(height: 4),
                       Text(
                         "Every pickup helps the community, supports junkshops, and reduces pollution.",
-                        style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.35),
+                        style: TextStyle(
+                            color: Colors.white70, fontSize: 12, height: 1.35),
                       ),
                     ],
                   ),
@@ -679,7 +852,6 @@ class _CollectorHomeTab extends StatelessWidget {
           ),
           const SizedBox(height: 10),
 
-          // ✅ Your existing logs widget (same file)
           _CollectorLogsHome(collectorId: collectorId),
         ],
       ),
@@ -700,7 +872,6 @@ class _CollectorHomeTab extends StatelessWidget {
 }
 
 // ===================== MAP TAB =====================
-// Shows "resume active pickup" if available; otherwise a friendly empty state.
 class _CollectorMapTab extends StatelessWidget {
   const _CollectorMapTab({required this.collectorId});
   final String collectorId;
@@ -831,84 +1002,7 @@ class _CollectorMapTab extends StatelessWidget {
   }
 }
 
-// ===================== PROFILE TAB =====================
-
-class _CollectorProfileTab extends StatelessWidget {
-  const _CollectorProfileTab({
-    required this.onLogout,
-    required this.onOpenJunkshopChat,
-  });
-
-  final Future<void> Function() onLogout;
-  final Future<void> Function() onOpenJunkshopChat;
-
-  @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 90),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Profile",
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
-            ),
-            child: Column(
-              children: [
-                const Icon(Icons.person, size: 64, color: Colors.white54),
-                const SizedBox(height: 10),
-                Text(
-                  user?.displayName ?? "Collector",
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  user?.email ?? "No email",
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                const SizedBox(height: 14),
-                
-
-                const SizedBox(height: 10),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () async => onLogout(),
-                    icon: const Icon(Icons.logout),
-                    label: const Text("Logout"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1FA9A7),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ================= LOGS HOME (your existing widget, unchanged) =================
-
-
-
-
+// ================= LOGS HOME (unchanged) =================
 class _CollectorLogsHome extends StatelessWidget {
   const _CollectorLogsHome({required this.collectorId});
   final String collectorId;
@@ -1059,9 +1153,7 @@ class _CollectorLogsHome extends StatelessWidget {
                     );
                   },
                 ),
-
                 const SizedBox(height: 6),
-
                 const Text(
                   "Active",
                   style: TextStyle(
@@ -1315,20 +1407,16 @@ class CollectorChatListPage extends StatelessWidget {
       backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: bgColor,
-         title: const Text(
+        title: const Text(
           "Chats",
           style: TextStyle(
-            color: Colors.white,       // ← force white text
+            color: Colors.white,
             fontWeight: FontWeight.w700,
           ),
         ),
-        
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('Users')
-            .doc(user.uid)
-            .snapshots(),
+        stream: FirebaseFirestore.instance.collection('Users').doc(user.uid).snapshots(),
         builder: (context, snap) {
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
@@ -1336,10 +1424,8 @@ class CollectorChatListPage extends StatelessWidget {
 
           final data = snap.data!.data() ?? {};
 
-          final junkshopUid =
-              (data['assignedJunkshopUid'] ?? '').toString().trim();
-          final junkshopName =
-              (data['assignedJunkshopName'] ?? 'Junkshop').toString().trim();
+          final junkshopUid = (data['assignedJunkshopUid'] ?? '').toString().trim();
+          final junkshopName = (data['assignedJunkshopName'] ?? 'Junkshop').toString().trim();
 
           if (junkshopUid.isEmpty) {
             return Center(
@@ -1365,10 +1451,17 @@ class CollectorChatListPage extends StatelessWidget {
             children: [
               InkWell(
                 onTap: () async {
-                  final chatId = await chatService.ensureJunkshopChat(
+                  final chatId = await chatService.ensureJunkshopChatForActivePickup(
                     junkshopUid: junkshopUid,
                     collectorUid: user.uid,
                   );
+
+                  if (chatId == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Chat is only available during an active pickup.")),
+                    );
+                    return;
+                  }
 
                   if (!context.mounted) return;
 
@@ -1378,7 +1471,7 @@ class CollectorChatListPage extends StatelessWidget {
                       builder: (_) => ChatPage(
                         chatId: chatId,
                         title: junkshopName.isEmpty ? "Junkshop" : junkshopName,
-                        otherUserId: junkshopUid, // ✅ ADD THIS (use the variable you have)
+                        otherUserId: junkshopUid,
                       ),
                     ),
                   );
@@ -1399,8 +1492,7 @@ class CollectorChatListPage extends StatelessWidget {
                           color: primaryColor.withOpacity(0.18),
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: const Icon(Icons.storefront_outlined,
-                            color: Colors.white),
+                        child: const Icon(Icons.storefront_outlined, color: Colors.white),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -1419,8 +1511,7 @@ class CollectorChatListPage extends StatelessWidget {
                             const SizedBox(height: 4),
                             Text(
                               "Tap to open chat",
-                              style: TextStyle(
-                                  color: Colors.grey.shade400, fontSize: 12),
+                              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                             ),
                           ],
                         ),

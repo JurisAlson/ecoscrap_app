@@ -7,8 +7,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'services/notification_service.dart';
 import 'firebase_options.dart';
 import 'role_gate.dart';
-
-// ✅ add this import
 import 'auth/login_page.dart';
 
 void main() async {
@@ -80,14 +78,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       title: 'EcoScrap App',
       theme: ThemeData(primarySwatch: Colors.teal),
 
-      // ✅ keep home if you want
+      // ✅ Keep home (this becomes the "/" route implicitly)
       home: const RoleGate(),
 
-      // ✅ add named routes
+      // ✅ Named routes (DO NOT include "/")
       routes: {
         '/login': (context) => const LoginPage(),
-        // optional: if you want to navigate back to RoleGate by name too
-        '/': (context) => const RoleGate(),
+        '/roleGate': (context) => const RoleGate(), // optional
       },
     );
   }

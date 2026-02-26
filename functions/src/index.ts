@@ -52,12 +52,35 @@ async function sendPushToMany(uids: string[], title: string, body: string, data:
   await Promise.allSettled(uids.map(uid => sendPushToUser(uid, title, body, data)));
 }
 
+async function createInAppNotification(
+  uid: string,
+  title: string,
+  body: string,
+  data: Record<string, any> = {}
+) {
+  await admin.firestore()
+    .collection("Users")
+    .doc(uid)
+    .collection("notifications")
+    .add({
+      title,
+      body,
+      type: String(data.type || ""),
+      data,
+      read: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+}
+
 async function sendPushToUser(
   uid: string,
   title: string,
   body: string,
   data: Record<string, any> = {}
 ) {
+  // ✅ Always create in-app notification
+  await createInAppNotification(uid, title, body, data);
+
   const userSnap = await admin.firestore().collection("Users").doc(uid).get();
   if (!userSnap.exists) {
     logger.warn("sendPushToUser: no Users doc", { uid });
@@ -70,7 +93,6 @@ async function sendPushToUser(
     return;
   }
 
-  // FCM data values must be strings
   const stringData: Record<string, string> = Object.fromEntries(
     Object.entries(data).map(([k, v]) => [k, String(v)])
   );

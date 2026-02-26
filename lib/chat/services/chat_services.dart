@@ -14,7 +14,28 @@ class ChatService {
         .orderBy('createdAt', descending: false)
         .snapshots();
   }
-  
+
+  /// ✅ Deletes chat doc + messages subcollection
+  Future<void> deleteChat(String chatId) async {
+    final chatRef = _db.collection('chats').doc(chatId);
+    final messagesRef = chatRef.collection('messages');
+
+    // Delete messages in batches
+    while (true) {
+      final snap = await messagesRef.limit(400).get();
+      if (snap.docs.isEmpty) break;
+
+      final batch = _db.batch();
+      for (final d in snap.docs) {
+        batch.delete(d.reference);
+      }
+      await batch.commit();
+    }
+
+    // Delete chat doc
+    await chatRef.delete();
+  }
+
   Future<void> sendImage({
     required String chatId,
     required File file,
@@ -60,8 +81,7 @@ class ChatService {
     if (uid == null) throw Exception("Not logged in");
     if (text.trim().isEmpty) return;
 
-    final msgRef =
-        _db.collection('chats').doc(chatId).collection('messages').doc();
+    final msgRef = _db.collection('chats').doc(chatId).collection('messages').doc();
 
     await msgRef.set({
       'senderId': uid,
@@ -100,52 +120,46 @@ class ChatService {
     return chatId;
   }
 
-  /// ✅ Always available chat between collector and junkshop
-  /// deterministic chatId
-  Future<String> ensureJunkshopChat({
-  required String junkshopUid,
-  required String collectorUid,
-}) async {
-  final ids = [collectorUid, junkshopUid]..sort();
-  final chatId = "junkshop_${ids[0]}_${ids[1]}";
+  /// ✅ Junkshop chat is ONLY allowed if collector has an active pickup
+  Future<String?> ensureJunkshopChatForActivePickup({
+    required String junkshopUid,
+    required String collectorUid,
+  }) async {
+    final q = await _db
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorUid)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
+        .orderBy('updatedAt', descending: true)
+        .limit(1)
+        .get();
 
-  final ref = _db.collection('chats').doc(chatId);
-  final snap = await ref.get();
+    if (q.docs.isEmpty) return null;
 
-  if (!snap.exists) {
-    // ✅ fetch names once (safe + simple)
-    final collectorDoc = await _db.collection("Users").doc(collectorUid).get();
-    final junkshopDoc = await _db.collection("Users").doc(junkshopUid).get();
+    final requestId = q.docs.first.id;
 
-    final c = collectorDoc.data() ?? {};
-    final j = junkshopDoc.data() ?? {};
+    final chatId = "junkshop_pickup_$requestId";
+    final ref = _db.collection('chats').doc(chatId);
+    final snap = await ref.get();
 
-    final collectorName =
-        (c["name"] ?? c["Name"] ?? c["publicName"] ?? "Collector").toString();
+    if (!snap.exists) {
+      await ref.set({
+        'type': 'junkshop',
+        'requestId': requestId,
+        'participants': [junkshopUid, collectorUid],
+        'junkshopUid': junkshopUid,
+        'collectorUid': collectorUid,
+        'createdAt': FieldValue.serverTimestamp(),
+        'lastMessage': '',
+        'lastMessageAt': FieldValue.serverTimestamp(),
+      });
+    }
 
-    final junkshopName =
-        (j["shopName"] ?? j["name"] ?? j["Name"] ?? "Junkshop").toString();
-
-    await ref.set({
-      'type': 'junkshop',
-      'participants': ids,
-      'collectorUid': collectorUid,
-      'junkshopUid': junkshopUid,
-
-      // ✅ store names
-      'collectorName': collectorName,
-      'junkshopName': junkshopName,
-
-      'createdAt': FieldValue.serverTimestamp(),
-      'lastMessage': '',
-      'lastMessageAt': FieldValue.serverTimestamp(),
-    });
+    return chatId;
   }
 
-  return chatId;
-}
   /// ✅ Backfill for old chat docs that were created without names/uid fields
-  /// Works now because you allowed update collectorName/junkshopName
   Future<void> backfillJunkshopChatIfMissing({
     required String chatId,
     required String collectorUid,
@@ -157,14 +171,10 @@ class ChatService {
 
     final data = snap.data() ?? {};
 
-    final hasCollectorUid = (data['collectorUid'] ?? '').toString().trim().isNotEmpty;
-    final hasJunkshopUid = (data['junkshopUid'] ?? '').toString().trim().isNotEmpty;
-
     final hasCollectorName = (data['collectorName'] ?? '').toString().trim().isNotEmpty;
     final hasJunkshopName = (data['junkshopName'] ?? '').toString().trim().isNotEmpty;
 
-    // nothing to do
-    if (hasCollectorUid && hasJunkshopUid && hasCollectorName && hasJunkshopName) return;
+    if (hasCollectorName && hasJunkshopName) return;
 
     final collectorDoc = await _db.collection("Users").doc(collectorUid).get();
     final junkshopDoc = await _db.collection("Users").doc(junkshopUid).get();
@@ -172,14 +182,9 @@ class ChatService {
     final c = collectorDoc.data() ?? {};
     final j = junkshopDoc.data() ?? {};
 
-    final collectorName =
-        (c["name"] ?? c["Name"] ?? c["publicName"] ?? "Collector").toString();
+    final collectorName = (c["name"] ?? c["Name"] ?? c["publicName"] ?? "Collector").toString();
+    final junkshopName = (j["name"] ?? j["shopName"] ?? j["Name"] ?? "Junkshop").toString();
 
-    final junkshopName =
-        (j["name"] ?? j["shopName"] ?? j["Name"] ?? "Junkshop").toString();
-
-    // IMPORTANT: your rules currently allow updating ONLY lastMessage/lastMessageAt + names.
-    // So we update ONLY the allowed keys here:
     await ref.update({
       if (!hasCollectorName) 'collectorName': collectorName,
       if (!hasJunkshopName) 'junkshopName': junkshopName,
