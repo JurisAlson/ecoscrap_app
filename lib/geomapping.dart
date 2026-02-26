@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
-
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
 
 /// Avoid deprecated withOpacity() by using withValues(alpha: double)
 extension OpacityFix on Color {
@@ -16,7 +14,6 @@ extension OpacityFix on Color {
 
 /// ✅ Put your real Directions API key here
 /// (Polyline will work as long as Directions API is enabled + billing is on)
-const String _googleDirectionsApiKey = "AIzaSyAJVP8YXeKKBvr5rSsGwOUqWEAOPZ10dGg";
 
 /// Trip stages
 enum TripStage { planning, pickup, delivering }
@@ -256,6 +253,29 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       _windowStart = start;
       _windowEnd = end;
     });
+  }
+
+  Future<String?> _fetchPolylineFromBackend(LatLng origin, LatLng dest) async {
+    try {
+      final callable = _functions.httpsCallable('getDirections'); // must match index.js export name
+      final result = await callable.call({
+        'origin': '${origin.latitude},${origin.longitude}',
+        'destination': '${dest.latitude},${dest.longitude}',
+        'mode': 'driving', // optional if you support it in backend
+      });
+
+      final data = result.data;
+      if (data is Map && data['points'] is String) {
+        return data['points'] as String;
+      }
+      return null;
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('❌ getDirections failed: ${e.code} ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('❌ getDirections crashed: $e');
+      return null;
+    }
   }
 
 
@@ -667,12 +687,10 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     _snack("Showing directions to Mores Scrap Trading.", bg: _sheet);
   }
 
-  Future<void> _buildRouteTo(LatLng dest) async {
-    if (_googleDirectionsApiKey.isEmpty || _googleDirectionsApiKey == "API_KEY_HERE") {
-      if (mounted) setState(() => _routePoints = []);
-      return;
-    }
+  final FirebaseFunctions _functions =
+      FirebaseFunctions.instanceFor(region: 'asia-southeast1');
 
+  Future<void> _buildRouteTo(LatLng dest) async {
     if (_currentPosition == null) {
       if (mounted) setState(() => _routePoints = []);
       return;
@@ -680,37 +698,33 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
     final origin = _originLatLng;
 
-    final uri = Uri.parse(
-      "https://maps.googleapis.com/maps/api/directions/json"
-      "?origin=${origin.latitude},${origin.longitude}"
-      "&destination=${dest.latitude},${dest.longitude}"
-      "&mode=driving"
-      "&key=$_googleDirectionsApiKey",
-    );
-
     try {
-      final res = await http.get(uri);
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final callable = _functions.httpsCallable('getDirections');
+      final result = await callable.call({
+        'origin': '${origin.latitude},${origin.longitude}',
+        'destination': '${dest.latitude},${dest.longitude}',
+        'mode': 'driving',
+      });
 
-      if (data["status"] != "OK") {
+      final data = result.data;
+      final points = (data is Map) ? data['points'] as String? : null;
+
+      if (points == null || points.isEmpty) {
         if (!mounted) return;
         setState(() => _routePoints = []);
-        _snack("Directions: ${data["status"]}", bg: Colors.black87);
         return;
       }
 
-      final routes = data["routes"] as List<dynamic>;
-      if (routes.isEmpty) {
-        if (mounted) setState(() => _routePoints = []);
-        return;
-      }
-
-      final encoded = routes.first["overview_polyline"]["points"] as String;
-      final decoded = _decodePolyline(encoded);
+      final decoded = _decodePolyline(points);
 
       if (!mounted) return;
       setState(() => _routePoints = decoded);
-    } catch (_) {
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint("❌ getDirections failed: ${e.code} ${e.message}");
+      if (!mounted) return;
+      setState(() => _routePoints = []);
+    } catch (e) {
+      debugPrint("❌ getDirections crashed: $e");
       if (!mounted) return;
       setState(() => _routePoints = []);
     }
