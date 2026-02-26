@@ -1,8 +1,10 @@
-import 'dart:ui'; 
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+//import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../auth/login_page.dart';
+//import '../security/admin_profile_encrypt.dart';
 
 import 'admin_overview_tab.dart';
 import 'collectors/admin_collector_requests.dart';
@@ -44,6 +46,7 @@ class _AdminHomePageState extends State<AdminHomePage> {
       (_) => false,
     );
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -96,14 +99,9 @@ class _AdminHomePageState extends State<AdminHomePage> {
                               "Admin Panel",
                               style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                             ),
-                            Text(
-                              user?.email ?? "Admin",
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
+                            const Text(
+                              "Administrator",
+                              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                             ),
                           ],
                         ),
@@ -266,9 +264,13 @@ class _AdminHomePageState extends State<AdminHomePage> {
           const SizedBox(height: 20),
           const Icon(Icons.person, size: 80, color: Colors.white54),
           const SizedBox(height: 16),
-          Text(
-            user?.email ?? "Admin",
-            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          const Text(
+            "Administrator",
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 8),
           Text(
@@ -283,16 +285,16 @@ class _AdminHomePageState extends State<AdminHomePage> {
               color: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: const Column(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   "Admin Tools",
                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                 ),
-                SizedBox(height: 8),
-                Text(
-                  "• Review collectors\n• Manage users",
+                const SizedBox(height: 8),
+                const Text(
+                  "• Overview \n• Manage user Roles\n• Review collectors",
                   style: TextStyle(color: Colors.white70, height: 1.35, fontSize: 13),
                 ),
               ],
