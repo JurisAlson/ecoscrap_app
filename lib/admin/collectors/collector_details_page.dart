@@ -28,42 +28,41 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   // DO NOT delete Storage here (encrypted file).
   // Just mark statuses, and let your retention/cleanup handle actual deletion.
   Future<void> _rejectCollectorAndRestoreUser(String uid) async {
-    final db = FirebaseFirestore.instance;
+  final db = FirebaseFirestore.instance;
 
-    final userRef = db.collection("Users").doc(uid);
-    final reqRef = db.collection("collectorRequests").doc(uid);
-    final kycRef = db.collection("collectorKYC").doc(uid);
+  final userRef = db.collection("Users").doc(uid);
+  final reqRef = db.collection("collectorRequests").doc(uid);
 
-    await db.runTransaction((tx) async {
-      final userSnap = await tx.get(userRef);
-      final userData = userSnap.data() ?? {};
+  await db.runTransaction((tx) async {
+    tx.set(userRef, {
+      "collectorStatus": "rejected",
+      "collectorUpdatedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
 
-      final rawRole = userData["role"] ?? userData["Roles"] ?? "user";
-      final rawRoleStr = rawRole.toString().trim();
-      final rawLower = rawRoleStr.toLowerCase();
-      //final roleToSave =
-          (rawLower == "collector" || rawRoleStr.isEmpty) ? "user" : rawRoleStr;
+    tx.set(reqRef, {
+      "status": "rejected",
+      "adminRejectedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  });
+}
 
-      tx.set(userRef, {
-        "collectorStatus": "rejected",
-        "collectorSubmittedAt": FieldValue.delete(),
-        "collectorUpdatedAt": FieldValue.serverTimestamp(),
-        "collectorKyc": FieldValue.delete(),
+  Future<void> approveCollector(DocumentReference reqRef) async {
+    await reqRef.set({
+      "status": "adminApproved",
+      "adminApprovedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
 
-        "junkshopVerified": FieldValue.delete(),
-        "junkshopStatus": FieldValue.delete(),
-
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      tx.set(reqRef, {
-        "status": "rejected",
-        "acceptedByJunkshopUid": "",
-        "acceptedAt": FieldValue.delete(),
-        "rejectedByJunkshops": [],
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    });
+  Future<void> rejectCollector(DocumentReference reqRef, {String reason = ""}) async {
+    await reqRef.set({
+      "status": "rejected",
+      "adminRejectedAt": FieldValue.serverTimestamp(),
+      "adminRejectReason": reason, // optional
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> _adminApprove(String uid) async {

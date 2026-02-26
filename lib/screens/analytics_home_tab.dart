@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-// ✅ ADD: charts package
+// ✅ charts package
 import 'package:fl_chart/fl_chart.dart';
 
 import '../constants/categories.dart';
@@ -58,8 +58,20 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     final start = _monthStart(_selectedMonth);
     final end = _monthEndExclusive(_selectedMonth);
 
+    final shopId = widget.shopID.trim();
+    if (shopId.isEmpty) {
+      return const Center(
+        child: Text(
+          "Missing shopID",
+          style: TextStyle(color: Colors.white),
+        ),
+      );
+    }
+
+    // ✅ FIXED: Users/{shopId}/transaction
     final txStream = FirebaseFirestore.instance
-        .doc(widget.shopID)
+        .collection('Users')
+        .doc(shopId)
         .collection('transaction')
         .where('transactionDate',
             isGreaterThanOrEqualTo: Timestamp.fromDate(start))
@@ -80,7 +92,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
         _buildMonthSelector(),
         const SizedBox(height: 16),
 
-        // ✅ ADD: CHARTS BETWEEN MONTH SELECTOR AND MONTHLY PROJECTION
+        // ✅ CHARTS BETWEEN MONTH SELECTOR AND SUMMARY
         StreamBuilder<QuerySnapshot>(
           stream: txStream,
           builder: (context, snap) {
@@ -105,7 +117,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             // ---- Compute Daily Revenue + Revenue by Category (sale only) ----
             final days = _daysInMonth(start);
 
-            // day -> revenue
             final dailyRevenue = <int, double>{};
             for (int d = 1; d <= days; d++) {
               dailyRevenue[d] = 0.0;
@@ -137,7 +148,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                 }
               }
 
-              // group by day
               final day = dt.day;
               if (dailyRevenue.containsKey(day)) {
                 dailyRevenue[day] = (dailyRevenue[day] ?? 0.0) + txRevenue;
@@ -153,7 +163,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
         ),
 
         const SizedBox(height: 16),
-
         _sectionTitle("MONTH-TO-DATE SUMMARY"),
 
         StreamBuilder<QuerySnapshot>(
@@ -196,8 +205,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
                 final sellTotal = (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
                 final costTotal = (it['costTotal'] as num?)?.toDouble() ?? 0.0;
-                final itemProfit = (it['profit'] as num?)?.toDouble() ??
-                    (sellTotal - costTotal);
+                final itemProfit =
+                    (it['profit'] as num?)?.toDouble() ?? (sellTotal - costTotal);
 
                 revenue += sellTotal;
                 cost += costTotal;
@@ -218,11 +227,9 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                   leftTitle: "Revenue",
                   leftValue: "₱${revenue.toStringAsFixed(2)}",
                   rightTitle: "Profit",
-                  //rightTitleColor: const Color(0xFF00E676),
                   rightValue: "₱${profit.toStringAsFixed(2)}",
-                  rightValueColor: const Color(0xFF00E676), // strong neon green
+                  rightValueColor: const Color(0xFF00E676),
                 ),
-
                 const SizedBox(height: 10),
                 _metricRow(
                   leftTitle: "Cost",
@@ -255,14 +262,13 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                               Expanded(
                                 child: Text(
                                   c,
-                                  style:
-                                      const TextStyle(color: Colors.white70),
+                                  style: const TextStyle(color: Colors.white70),
                                 ),
                               ),
                               Text(
                                 "₱${p.toStringAsFixed(2)}",
-                                style: const TextStyle(
-                                    color: Colors.greenAccent),
+                                style:
+                                    const TextStyle(color: Colors.greenAccent),
                               ),
                               const SizedBox(width: 10),
                               Text(
@@ -289,76 +295,64 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     );
   }
 
-  // ===================== ADD: Charts Block =====================
+  // ===================== Charts Block =====================
   Widget _chartsBlock({
-  required DateTime start,
-  required Map<int, double> dailyRevenue,
-  required Map<String, double> revByCat,
-}) {
-  return _card(
-    child: SizedBox(
-      height: 200, // ✅ smaller overall height
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Analytics Overview",
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
+    required DateTime start,
+    required Map<int, double> dailyRevenue,
+    required Map<String, double> revByCat,
+  }) {
+    return _card(
+      child: SizedBox(
+        height: 200,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Analytics Overview",
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-
-          Expanded(
-            child: PageView(
-              children: [
-                // 🔹 Slide 1: Daily Revenue Line
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Daily Revenue",
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
+            const SizedBox(height: 10),
+            Expanded(
+              child: PageView(
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Daily Revenue",
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Expanded(
-                      child: _dailyRevenueLineChart(
-                        start: start,
-                        dailyRevenue: dailyRevenue,
+                      const SizedBox(height: 6),
+                      Expanded(
+                        child: _dailyRevenueLineChart(
+                          start: start,
+                          dailyRevenue: dailyRevenue,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-
-                // 🔹 Slide 2: Revenue by Category Bar
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Revenue by Category",
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
+                    ],
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Revenue by Category",
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Expanded(
-                      child: _revenueByCategoryBarChart(revByCat),
-                    ),
-                  ],
-                ),
-              ],
+                      const SizedBox(height: 6),
+                      Expanded(child: _revenueByCategoryBarChart(revByCat)),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _dailyRevenueLineChart({
     required DateTime start,
@@ -366,9 +360,9 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
   }) {
     final days = _daysInMonth(start);
 
-    // spots: x=day, y=revenue
     final spots = <FlSpot>[];
     double maxY = 0.0;
+
     for (int d = 1; d <= days; d++) {
       final y = (dailyRevenue[d] ?? 0.0);
       if (y > maxY) maxY = y;
@@ -409,27 +403,30 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               reservedSize: 42,
               interval: maxY <= 0 ? 1 : (maxY / 3),
               getTitlesWidget: (value, meta) {
-                // keep it short (k = thousand)
                 String label;
                 if (value >= 1000) {
                   label = "${(value / 1000).toStringAsFixed(1)}k";
                 } else {
                   label = value.toStringAsFixed(0);
                 }
-                return Text(label,
-                    style: const TextStyle(color: Colors.white54, fontSize: 10));
+                return Text(
+                  label,
+                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                );
               },
             ),
           ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              interval: 5, // show every 5 days
+              interval: 5,
               getTitlesWidget: (value, meta) {
                 final day = value.toInt();
                 if (day < 1 || day > days) return const SizedBox.shrink();
-                return Text("$day",
-                    style: const TextStyle(color: Colors.white54, fontSize: 10));
+                return Text(
+                  "$day",
+                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                );
               },
             ),
           ),
@@ -452,10 +449,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
   }
 
   Widget _revenueByCategoryBarChart(Map<String, double> revByCat) {
-    // Keep only categories with values > 0, sorted descending
-    final entries = revByCat.entries
-        .where((e) => e.value > 0)
-        .toList()
+    final entries = revByCat.entries.where((e) => e.value > 0).toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
     if (entries.isEmpty) {
@@ -517,8 +511,10 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                 } else {
                   label = value.toStringAsFixed(0);
                 }
-                return Text(label,
-                    style: const TextStyle(color: Colors.white54, fontSize: 10));
+                return Text(
+                  label,
+                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                );
               },
             ),
           ),
@@ -529,7 +525,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                 final i = value.toInt();
                 if (i < 0 || i >= entries.length) return const SizedBox.shrink();
 
-                // short label (first 3 letters) to avoid crowding
                 final name = entries[i].key;
                 final short = name.length <= 3 ? name : name.substring(0, 3);
 
@@ -549,7 +544,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     );
   }
 
-  // ===================== Your Existing UI =====================
+  // ===================== UI helpers =====================
   Widget _homeHeader() {
     return Row(
       children: [
@@ -597,8 +592,18 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
   Widget _buildMonthSelector() {
     const months = [
-      "JAN","FEB","MAR","APR","MAY","JUN",
-      "JUL","AUG","SEP","OCT","NOV","DEC"
+      "JAN",
+      "FEB",
+      "MAR",
+      "APR",
+      "MAY",
+      "JUN",
+      "JUL",
+      "AUG",
+      "SEP",
+      "OCT",
+      "NOV",
+      "DEC"
     ];
 
     final selectedLabel = months[_selectedMonth - 1];
@@ -710,70 +715,72 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     required String rightTitle,
     required String rightValue,
     Color? leftValueColor,
-    Color? rightValueColor
+    Color? rightValueColor,
   }) {
-  return Row(
-    children: [
-      Expanded(
-        child: _card(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                leftTitle.toUpperCase(),
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
+    return Row(
+      children: [
+        Expanded(
+          child: _card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  leftTitle.toUpperCase(),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                leftValue,
-                style: TextStyle(
-                  color: leftValueColor ?? Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+                const SizedBox(height: 8),
+                Text(
+                  leftValue,
+                  style: TextStyle(
+                    color: leftValueColor ?? Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: _card(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                rightTitle.toUpperCase(),
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
+        const SizedBox(width: 10),
+        Expanded(
+          child: _card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  rightTitle.toUpperCase(),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                rightValue,
-                style: TextStyle(
-                  color: rightValueColor ?? Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+                const SizedBox(height: 8),
+                Text(
+                  rightValue,
+                  style: TextStyle(
+                    color: rightValueColor ?? Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
-    ],
-  );
-}
+      ],
+    );
+  }
 
-
-  Widget _iconButton(IconData icon,
-      {bool badge = false, required VoidCallback onTap}) {
+  Widget _iconButton(
+    IconData icon, {
+    bool badge = false,
+    required VoidCallback onTap,
+  }) {
     return Stack(
       children: [
         GestureDetector(

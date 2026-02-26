@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'collector_notifications_page.dart';
 import 'collector_pickup_map_page.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 // ✅ Chat (pickup list + junkshop direct chat)
 import '../chat/services/chat_services.dart';
@@ -35,6 +36,9 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _setOnline(true);
+
+    // ✅ ADD THIS
+    _saveFcmToken();
   }
 
   @override
@@ -54,6 +58,42 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       _setOnline(false);
     }
   }
+
+  Future<void> _saveFcmToken() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  try {
+    final fcm = FirebaseMessaging.instance;
+
+    // ✅ Android 13+ + iOS permission
+    await fcm.requestPermission(alert: true, badge: true, sound: true);
+
+    final token = await fcm.getToken();
+    if (token == null || token.trim().isEmpty) {
+      debugPrint("⚠️ FCM token is null/empty");
+      return;
+    }
+
+    await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
+      "fcmToken": token,
+      "fcmUpdatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    debugPrint("✅ FCM token saved for ${user.uid}: $token");
+
+    // ✅ keep updated on refresh
+    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+      await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
+        "fcmToken": newToken,
+        "fcmUpdatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      debugPrint("✅ FCM token refreshed + saved");
+    });
+  } catch (e) {
+    debugPrint("❌ saveFcmToken failed: $e");
+  }
+}
 
   Future<void> _setOnline(bool online) async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1090,6 +1130,10 @@ class _CollectorLogsHome extends StatelessWidget {
 
   static String _statusToTitle(String status) {
     switch (status) {
+      case 'completed_pending_household':
+        return "Waiting for household confirmation";
+      case 'confirmed':
+        return "Pickup confirmed";
       case 'completed':
         return "Pickup completed";
       case 'accepted':

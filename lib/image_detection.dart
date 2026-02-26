@@ -193,8 +193,8 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
 
       final double p = await TFLiteService.runModel(_image!.path);
 
-      // ✅ Conservative YES + Uncertain band (recommended for current model)
-      const double yesThreshold = 0.70; // strong YES
+      // ✅ Conservative YES + Uncertain band
+      const double yesThreshold = 0.80; // strong YES
       const double noThreshold = 0.35; // strong NO
 
       DetectionStatus status;

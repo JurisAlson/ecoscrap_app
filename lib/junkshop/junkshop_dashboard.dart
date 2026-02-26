@@ -125,11 +125,10 @@ Future<void> _rejectCollector({
       .collection("collectorRequests")
       .doc(collectorUid);
 
-  // Hide ONLY from this junkshop (do NOT change global status)
-  await reqRef.set({
+  await reqRef.update({
     "rejectedByJunkshops": FieldValue.arrayUnion([shopUid]),
     "updatedAt": FieldValue.serverTimestamp(),
-  }, SetOptions(merge: true));
+  });
 }
 
   // ================= COLLECTOR REQUESTS SECTION (collectorRequests) =================
@@ -162,6 +161,10 @@ Future<void> _rejectCollector({
           return !rejectedBy.contains(shopId);
         }).toList();
 
+        if (widget.shopID.trim().isEmpty) {
+          return const Center(child: Text("Missing shopID"));
+        }
+        
         if (docs.isEmpty) {
           return Container(
             width: double.infinity,
