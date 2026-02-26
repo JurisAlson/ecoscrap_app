@@ -32,7 +32,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
     final userRef = db.collection("Users").doc(uid);
     final reqRef = db.collection("collectorRequests").doc(uid);
-    final kycRef = db.collection("collectorKYC").doc(uid);
+    //final kycRef = db.collection("collectorKYC").doc(uid);
 
     await db.runTransaction((tx) async {
       final userSnap = await tx.get(userRef);
@@ -70,7 +70,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final db = FirebaseFirestore.instance;
     final reqRef = db.collection("collectorRequests").doc(uid);
     final userRef = db.collection("Users").doc(uid);
-    final kycRef = db.collection("collectorKYC").doc(uid);
+    //final kycRef = db.collection("collectorKYC").doc(uid);
 
     final batch = db.batch();
 
