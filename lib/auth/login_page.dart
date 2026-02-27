@@ -138,6 +138,8 @@ final snap = await FirebaseFirestore.instance.collection('Users').doc(u.uid).get
 final data = snap.data() ?? {};
 final role = (data['Roles'] ?? data['role'] ?? data['roles'] ?? '')
     .toString().trim().toLowerCase();
+    
+if (!mounted) return;
 
 if (role == 'junkshop' || role == 'junkshops') {
   final shopName = (data['Name'] ?? data['name'] ?? data['shopName'] ?? 'Junkshop')
@@ -156,19 +158,21 @@ if (role == 'junkshop' || role == 'junkshops') {
 }
 
 // only for non-junkshop users
-await _ensureUserProfile(u);
+// await _ensureUserProfile(u);
 
 // then go RoleGate
-Navigator.pushReplacement(
-  context,
-  MaterialPageRoute(builder: (_) => const RoleGate()),
-);
+// Navigator.pushReplacement(
+//   context,
+//   MaterialPageRoute(builder: (_) => const RoleGate()),
+// );
 
 // default: go through RoleGate (admin/user/collector)
 Navigator.pushReplacement(
   context,
   MaterialPageRoute(builder: (_) => const RoleGate()),
 );
+return;
+
     } on FirebaseAuthException catch (e) {
       _showToast(e.message ?? "Login failed", isError: true);
     } finally {

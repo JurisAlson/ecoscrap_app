@@ -6,14 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
-/// Avoid deprecated withOpacity() by using withValues(alpha: double)
 extension OpacityFix on Color {
   Color o(double opacity) =>
       withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
 }
-
-/// ✅ Put your real Directions API key here
-/// (Polyline will work as long as Directions API is enabled + billing is on)
 
 /// Trip stages
 enum TripStage { planning, pickup, delivering }
@@ -292,7 +288,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     });
 
     _initLocation();
-    _listenJunkshops();
     _listenAvailableCollectors();
   }
 
@@ -378,59 +373,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         backgroundColor: bg ?? Colors.black87,
         behavior: SnackBarBehavior.floating,
       ),
-    );
-  }
-
-  void _listenJunkshops() {
-    FirebaseFirestore.instance
-        .collection('Users')
-        .where('role', isEqualTo: 'junkshop')
-        .where('verified', isEqualTo: true)
-        .snapshots()
-        .listen(
-      (snap) {
-        debugPrint("✅ JUNKSHOP USERS FOUND: ${snap.docs.length}");
-
-        final list = <Destination>[];
-
-        for (final d in snap.docs) {
-          final data = d.data();
-
-          // ✅ make sure you read correct fields from your Users junkshop doc
-          final shopName = (data['shopName'] ?? data['Name'] ?? 'Junkshop').toString();
-          final address = (data['address'] ?? '').toString();
-
-          // location field can be 'location' or 'junkshopLocation' depending on your schema
-          final gp = data['location'] ?? data['junkshopLocation'];
-
-          if (gp is! GeoPoint) {
-            debugPrint("⚠️ junkshop ${d.id} has no valid GeoPoint location");
-            continue;
-          }
-
-          list.add(Destination(
-            id: d.id, // ✅ THIS becomes junkshopId in pickupRequests
-            name: shopName,
-            subtitle: address.isEmpty ? "Junkshop • Drop-off" : address,
-            latLng: LatLng(gp.latitude, gp.longitude),
-          ));
-        }
-
-        if (!mounted) return;
-        setState(() {
-          _junkshops = list;
-
-          if (_customDestinationLatLng == null && _selectedJunkshop == null && _junkshops.isNotEmpty) {
-            _selectedJunkshop = _junkshops.first;
-          }
-        });
-
-        _buildRoute();
-      },
-      onError: (e) {
-        debugPrint("❌ Junkshop stream error: $e");
-        if (mounted) _snack("Junkshop stream error: $e", bg: Colors.red);
-      },
     );
   }
 
@@ -771,8 +713,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     }
 
     final householdName = await _getUserName(user.uid, fallback: user.email ?? "Household");
-    final collectorName = _selectedCollectorName ??
-        await _getUserName(_selectedCollectorId!, fallback: "Collector");
+    final collectorName = (_selectedCollectorName ?? "Collector").trim();
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -841,6 +782,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     } catch (e, st) {
       debugPrint("❌ pickupRequests add failed: $e");
       debugPrint("$st");
+      debugPrint("❌ requests.add permission error: $e");
+      debugPrint("$st");
+
       if (mounted) _snack("Pickup failed: $e", bg: Colors.red);
       return;
     }

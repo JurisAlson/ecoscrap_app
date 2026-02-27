@@ -6,13 +6,20 @@ import '../constants/categories.dart';
 
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
-  const ReceiptScreen({super.key, required this.shopID});
+  final String? prefillName; // ✅ ADD THIS
+
+  const ReceiptScreen({
+    super.key,
+    required this.shopID,
+    this.prefillName,
+  });
 
   @override
   State<ReceiptScreen> createState() => _ReceiptScreenState();
 }
 
 class _ReceiptScreenState extends State<ReceiptScreen> {
+  
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
   final TextEditingController _walkInNameCtrl = TextEditingController();
@@ -99,6 +106,21 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
         _items[index].dispose();
         _items.removeAt(index);
       });
+
+  @override
+  void initState() {
+    super.initState();
+
+    if (widget.prefillName != null && widget.prefillName!.isNotEmpty) {
+      _txType = "buy";
+      _selectedBuySource = "Resident";
+
+      _sourceNameCtrl.text = widget.prefillName!;
+
+      // optional safety
+      _sourceUserId = null;
+    }
+  }
 
   @override
   void dispose() {

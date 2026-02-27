@@ -3,7 +3,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
+import '../screens/receipt_screen.dart';
 import '../screens/analytics_home_tab.dart';
 import '../screens/inventory_screen.dart';
 import '../screens/transaction_screen.dart';
@@ -373,7 +373,26 @@ Future<void> _rejectCollector({
 
   // ================= DRAWERS =================
   Widget _notificationsDrawer() {
-    return SingleChildScrollView(
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Center(
+        child: Text("Not logged in.", style: TextStyle(color: Colors.white)),
+      );
+    }
+
+    final query = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('status', isEqualTo: 'completed')
+        .where('active', isEqualTo: false)
+        .where('junkshopId', isEqualTo: user.uid) // ✅ requires junkshopId saved
+        .orderBy('updatedAt', descending: true)
+        .limit(50);
+
+    String _hhmm(DateTime dt) =>
+        "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -395,23 +414,119 @@ Future<void> _rejectCollector({
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          _notificationTile(
-            icon: Icons.info_outline,
-            title: "Welcome!",
-            subtitle: "Track inventory, transactions, and community impact here.",
-          ),
-          const SizedBox(height: 12),
-          _notificationTile(
-            icon: Icons.location_city_outlined,
-            title: "SDG 11 Impact",
-            subtitle: "Your junkshop supports cleaner, safer communities through recycling.",
-          ),
-          const SizedBox(height: 12),
-          _notificationTile(
-            icon: Icons.eco_outlined,
-            title: "Tip",
-            subtitle: "Sorted and clean plastics usually have higher value.",
+          const SizedBox(height: 10),
+
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: query.snapshots(),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snap.hasError) {
+                  return Center(
+                    child: Text(
+                      "Error: ${snap.error}",
+                      style: const TextStyle(color: Colors.white70),
+                      textAlign: TextAlign.center,
+                    ),
+                  );
+                }
+
+                final docs = snap.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return const Center(
+                    child: Text(
+                      "No completed transactions yet.",
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  );
+                }
+
+                return ListView.builder(
+                  itemCount: docs.length,
+                  itemBuilder: (_, i) {
+                    final d = docs[i];
+                    final data = d.data() as Map<String, dynamic>;
+
+                    // ✅ name to prefill (householdName)
+                    final name = (data['householdName'] ?? '').toString().trim();
+
+                    // ✅ use completedAt if available, else updatedAt
+                    final Timestamp? ts = (data['completedAt'] is Timestamp)
+                        ? data['completedAt'] as Timestamp
+                        : (data['updatedAt'] is Timestamp)
+                            ? data['updatedAt'] as Timestamp
+                            : null;
+
+                    final dt = ts?.toDate();
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                      ),
+                      child: ListTile(
+                        onTap: () {
+                          Navigator.pop(context); // close drawer first
+
+                          // ✅ minimal safe payload for TransactionDetailScreen
+                          final txData = <String, dynamic>{
+                            "transactionType": "buy", // junkshop buying from household
+                            "customerNameDisplay": name,
+                            "items": const [],
+                            "totalAmount": 0,
+                            "transactionDate": ts, // Timestamp? (safe with your screen)
+                            "transactionId": d.id, // fallback display
+                            "sourceType": "resident",
+                            "sourceName": name,
+                          };
+
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ReceiptScreen(
+                                shopID: FirebaseAuth.instance.currentUser!.uid,
+                                prefillName: name, // householdName
+                              ),
+                            ),
+                          );
+                        },
+                        leading: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: Colors.green.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(
+                            Icons.check_circle_outline,
+                            color: Colors.green,
+                          ),
+                        ),
+                        title: const Text(
+                          "Pickup completed",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        subtitle: Text(
+                          name.isEmpty ? "Unnamed household" : "Name: $name",
+                          style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                        ),
+                        trailing: Text(
+                          dt == null ? "" : _hhmm(dt),
+                          style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
           ),
         ],
       ),
