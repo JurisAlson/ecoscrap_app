@@ -38,6 +38,7 @@ dependencies:
   file_picker: ^8.0.0
 
   tflite_flutter: ^0.12.1
+  rxdart: ^0.28.0
 
 dev_dependencies:
   flutter_test:
