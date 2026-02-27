@@ -279,12 +279,15 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
           'active': false,
           'completedAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
+
+          'junkshopId': "07Wi7N8fALh2yqNdt1CQgIYVGE43",
+          'junkshopName': "Mores Scrap",
         });
 
         // ✅ delete both chats tied to request
         final requestId = widget.requestId;
-        await _chat.deleteChat("pickup_$requestId");
-        await _chat.deleteChat("junkshop_pickup_$requestId");
+        // await _chat.deleteChat("pickup_$requestId");
+        // await _chat.deleteChat("junkshop_pickup_$requestId");
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(

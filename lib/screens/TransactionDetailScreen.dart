@@ -120,7 +120,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
         padding: const EdgeInsets.all(16),
         child: FutureBuilder<DocumentSnapshot>(
           future: FirebaseFirestore.instance
-              .collection("Junkshop")
+              .collection("Users")
               .doc(widget.shopID)
               .get(),
           builder: (context, snap) {
