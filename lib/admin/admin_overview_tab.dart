@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:rxdart/rxdart.dart';
 
 class AdminOverviewTab extends StatelessWidget {
   const AdminOverviewTab({super.key});
@@ -7,6 +8,15 @@ class AdminOverviewTab extends StatelessWidget {
   Stream<int> _countStream(Query query) {
     return query.snapshots().map((s) => s.size);
   }
+
+  static const residenceRoles = [
+    "residence",
+    "resident",
+    "user",
+    "users",
+    "household",
+    "households",
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -16,14 +26,19 @@ class AdminOverviewTab extends StatelessWidget {
           .where("collectorStatus", isEqualTo: "pending"),
     );
 
-    final totalUsers = _countStream(FirebaseFirestore.instance.collection("Users"));
-
-    final totalJunkshops = _countStream(
-      FirebaseFirestore.instance.collection("Users").where("Roles", isEqualTo: "junkshop"),
-    );
-
     final totalCollectors = _countStream(
       FirebaseFirestore.instance.collection("Users").where("Roles", isEqualTo: "collector"),
+    );
+
+    final totalResidences = _countStream(
+      FirebaseFirestore.instance.collection("Users").where("Roles", whereIn: residenceRoles),
+    );
+
+    // ✅ Total Users = collectors + residences
+    final totalUsers = Rx.combineLatest2<int, int, int>(
+      totalCollectors,
+      totalResidences,
+      (collectors, residences) => collectors + residences,
     );
 
     return SingleChildScrollView(
@@ -42,15 +57,15 @@ class AdminOverviewTab extends StatelessWidget {
               ),
             ],
           ),
-  
           const SizedBox(height: 10),
+
           _statCard("Pending Collector Requests", collectorsPending, icon: Icons.local_shipping),
 
           const SizedBox(height: 18),
 
           _statCard("Total Users", totalUsers, icon: Icons.people),
           const SizedBox(height: 10),
-          _statCard("Total Junkshops", totalJunkshops, icon: Icons.storefront),
+          _statCard("Total Residences", totalResidences, icon: Icons.home),
           const SizedBox(height: 10),
           _statCard("Total Collectors", totalCollectors, icon: Icons.local_shipping),
         ],
