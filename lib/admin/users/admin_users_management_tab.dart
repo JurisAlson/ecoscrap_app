@@ -22,7 +22,8 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  static const List<String> _filterRoles = ["all", "residence", "collector"];
+  // ✅ Added "restricted" filter
+  static const List<String> _filterRoles = ["all", "residence", "collector", "restricted"];
 
   // Roles that represent "resident/user"
   static const residenceRoles = [
@@ -192,7 +193,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
         children: [
           const SizedBox(height: 6),
 
-          // ✅ Simple header row (no extra “card header” look)
+          // ✅ Simple header row
           const Row(
             children: [
               Icon(Icons.people, color: Colors.white),
@@ -205,7 +206,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
           ),
           const SizedBox(height: 14),
 
-          // ✅ Search in a calm card wrapper
+          // ✅ Search
           _panel(
             child: TextField(
               onChanged: (v) => setState(() => _query = v),
@@ -231,7 +232,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
 
           const SizedBox(height: 10),
 
-          // ✅ Filters in a compact “section” style (less noisy)
+          // ✅ Filters
           _sectionLabel("Filter"),
           const SizedBox(height: 8),
           Wrap(
@@ -240,20 +241,38 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
             children: _filterRoles.map((role) {
               final selected = _roleFilter == role;
 
+              // ✅ Special label for restricted (optional)
+              final labelWidget = role == "restricted"
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text("RESTRICTED"),
+                        const SizedBox(width: 6),
+                        Icon(Icons.block, size: 14, color: selected ? Colors.orangeAccent : Colors.white54),
+                      ],
+                    )
+                  : Text(role.toUpperCase());
+
               return ChoiceChip(
-                label: Text(role.toUpperCase()),
+                label: labelWidget,
                 selected: selected,
                 onSelected: (_) => setState(() => _roleFilter = role),
                 backgroundColor: const Color(0xFF141B2D),
-                selectedColor: const Color(0xFF1FA9A7).withOpacity(0.22),
+                selectedColor: role == "restricted"
+                    ? Colors.orangeAccent.withOpacity(0.18)
+                    : const Color(0xFF1FA9A7).withOpacity(0.22),
                 labelStyle: TextStyle(
-                  color: selected ? const Color(0xFF1FA9A7) : Colors.white.withOpacity(0.75),
+                  color: selected
+                      ? (role == "restricted" ? Colors.orangeAccent : const Color(0xFF1FA9A7))
+                      : Colors.white.withOpacity(0.75),
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),
                 side: BorderSide(
                   color: selected
-                      ? const Color(0xFF1FA9A7).withOpacity(0.6)
+                      ? (role == "restricted"
+                          ? Colors.orangeAccent.withOpacity(0.6)
+                          : const Color(0xFF1FA9A7).withOpacity(0.6))
                       : Colors.white.withOpacity(0.08),
                 ),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
@@ -296,19 +315,23 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                   // Hide admin + junkshop + unknown
                   if (role == "admin" || role == "junkshop" || role == "unknown") return false;
 
-                  // ✅ KEY FIX kept (function unchanged):
+                  // status restricted?
+                  final status = (data["status"] ?? "active").toString().trim().toLowerCase();
+                  final restricted = status == "restricted";
+
+                  // ✅ If filter is restricted, show ONLY restricted (role can be collector/residence)
+                  if (_roleFilter == "restricted") {
+                    // still hide unverified residence for cleanliness? up to you.
+                    // BUT since these are restricted users, admins usually want to see them all.
+                    // We'll show restricted regardless of resident verification.
+                    return restricted && _matchesSearch(d, data, q);
+                  }
+
+                  // ✅ Existing rule:
                   // If it is a resident/user, show ONLY if admin approved.
                   if (role == "residence" && !_isVerifiedResident(data)) return false;
 
-                  final name = (data["Name"] ?? data["name"] ?? "").toString();
-                  final email =
-                      (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
-
-                  final matchesSearch = q.isEmpty ||
-                      name.toLowerCase().contains(q) ||
-                      email.toLowerCase().contains(q) ||
-                      d.id.toLowerCase().contains(q);
-
+                  final matchesSearch = _matchesSearch(d, data, q);
                   final matchesRole = _roleFilter == "all" || role == _roleFilter;
 
                   return matchesSearch && matchesRole;
@@ -355,7 +378,6 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // ✅ Small left accent (makes it feel like a dashboard row, not a button)
                           Container(
                             width: 4,
                             height: restricted ? 84 : 78,
@@ -402,7 +424,6 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
 
                           const SizedBox(width: 10),
 
-                          // ✅ Actions (same behavior, calmer styling)
                           if (!managing)
                             _quietButton(
                               label: "Manage",
@@ -443,7 +464,21 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
     );
   }
 
-  // ---------- UI helpers (no logic changes) ----------
+  bool _matchesSearch(
+    QueryDocumentSnapshot<Map<String, dynamic>> d,
+    Map<String, dynamic> data,
+    String q,
+  ) {
+    final name = (data["Name"] ?? data["name"] ?? "").toString();
+    final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
+
+    return q.isEmpty ||
+        name.toLowerCase().contains(q) ||
+        email.toLowerCase().contains(q) ||
+        d.id.toLowerCase().contains(q);
+  }
+
+  // ---------- UI helpers ----------
   Widget _panel({required Widget child}) {
     return Container(
       padding: const EdgeInsets.all(12),
