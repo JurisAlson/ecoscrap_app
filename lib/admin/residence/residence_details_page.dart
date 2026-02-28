@@ -489,8 +489,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                   ),
 
                   const SizedBox(height: 14),
-
-                  _sectionLabel("Government ID"),
                   kycBlock,
 
                   const SizedBox(height: 12),

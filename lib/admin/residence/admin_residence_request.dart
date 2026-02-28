@@ -98,6 +98,7 @@ class _AdminResidentRequestsTabState extends State<AdminResidentRequestsTab> {
       backgroundColor: AdminTheme.bg,
       body: AdminTheme.background(
         child: Padding(
+          // ✅ match the new style padding
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -149,15 +150,15 @@ class _AdminResidentRequestsTabState extends State<AdminResidentRequestsTab> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            "Review submissions to confirm residency eligibility before approving access.",
+                            "Review submissions to confirm resident information before approving access.",
                             style: TextStyle(color: Colors.white.withOpacity(0.62), height: 1.25),
                           ),
                           const SizedBox(height: 10),
                           _pill(
-                            "PALO ALTO SCOPE",
-                            bg: Colors.orangeAccent.withOpacity(0.14),
-                            fg: Colors.orangeAccent,
-                            icon: Icons.location_on_outlined,
+                            "RESIDENT VERIFICATION",
+                            bg: _primary.withOpacity(0.14),
+                            fg: _primary,
+                            icon: Icons.home_work_outlined,
                           ),
                         ],
                       ),
@@ -187,6 +188,7 @@ class _AdminResidentRequestsTabState extends State<AdminResidentRequestsTab> {
                     final docs = snap.data!.docs.toList();
                     if (docs.isEmpty) return _emptyState();
 
+                    // newest first by submittedAt
                     docs.sort((a, b) {
                       final ta = a.data()["submittedAt"];
                       final tb = b.data()["submittedAt"];
@@ -203,6 +205,9 @@ class _AdminResidentRequestsTabState extends State<AdminResidentRequestsTab> {
 
                         final name = (data["publicName"] ?? "Resident").toString();
                         final email = (data["emailDisplay"] ?? "").toString();
+
+                        // Optional: show unit/block/phase/etc if your request doc contains it
+                        final unit = (data["unit"] ?? data["unitNo"] ?? "").toString().trim();
 
                         return Container(
                           margin: const EdgeInsets.only(bottom: 10),
@@ -225,15 +230,15 @@ class _AdminResidentRequestsTabState extends State<AdminResidentRequestsTab> {
                                     width: 44,
                                     height: 44,
                                     decoration: BoxDecoration(
-                                      color: Colors.orangeAccent.withOpacity(0.12),
+                                      color: _primary.withOpacity(0.12),
                                       borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(color: Colors.orangeAccent.withOpacity(0.20)),
+                                      border: Border.all(color: _primary.withOpacity(0.20)),
                                     ),
-                                    child: const Icon(Icons.home_outlined, color: Colors.orangeAccent),
+                                    child: const Icon(Icons.home_outlined, color: _primary),
                                   ),
                                   const SizedBox(width: 12),
 
-                                  // name/email
+                                  // name/email/status
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -257,11 +262,24 @@ class _AdminResidentRequestsTabState extends State<AdminResidentRequestsTab> {
                                             fontSize: 12,
                                           ),
                                         ),
+                                        if (unit.isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            "Unit: $unit",
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: Colors.white.withOpacity(0.55),
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
                                         const SizedBox(height: 10),
                                         _pill(
                                           "PENDING REVIEW",
-                                          bg: Colors.orangeAccent.withOpacity(0.14),
-                                          fg: Colors.orangeAccent,
+                                          bg: _primary.withOpacity(0.14),
+                                          fg: _primary,
                                           icon: Icons.hourglass_bottom_rounded,
                                         ),
                                       ],
