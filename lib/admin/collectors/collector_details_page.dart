@@ -24,46 +24,45 @@ class CollectorDetailsPage extends StatefulWidget {
 class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   bool _busy = false;
 
+  // ===== UI tokens (match your admin pages) =====
+  static const Color _primary = Color(0xFF1FA9A7);
+
   // ✅ Reject:
   // DO NOT delete Storage here (encrypted file).
   // Just mark statuses, and let your retention/cleanup handle actual deletion.
-Future<void> _rejectCollectorAndRestoreUser(String uid) async {
-  final db = FirebaseFirestore.instance;
+  Future<void> _rejectCollectorAndRestoreUser(String uid) async {
+    final db = FirebaseFirestore.instance;
 
-  final userRef = db.collection("Users").doc(uid);
-  final reqRef = db.collection("collectorRequests").doc(uid);
+    final userRef = db.collection("Users").doc(uid);
+    final reqRef = db.collection("collectorRequests").doc(uid);
 
-  await db.runTransaction((tx) async {
-    tx.set(userRef, {
-      "role": "user",
-      "Roles": "user",
+    await db.runTransaction((tx) async {
+      tx.set(userRef, {
+        "role": "user",
+        "Roles": "user",
+        "adminVerified": false,
+        "adminStatus": "rejected",
+        "adminRejectedAt": FieldValue.serverTimestamp(),
+        "collectorActive": false,
+        "collectorStatus": "rejected",
+        "collectorUpdatedAt": FieldValue.serverTimestamp(),
+        // remove assignment so chat + collector access won't persist
+        "junkshopId": FieldValue.delete(),
+        "junkshopName": FieldValue.delete(),
+        "assignedJunkshopUid": FieldValue.delete(),
+        "assignedJunkshopName": FieldValue.delete(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-      "adminVerified": false,
-      "adminStatus": "rejected",
-      "adminRejectedAt": FieldValue.serverTimestamp(),
-
-      "collectorActive": false,
-      "collectorStatus": "rejected",
-      "collectorUpdatedAt": FieldValue.serverTimestamp(),
-
-      // remove assignment so chat + collector access won't persist
-      "junkshopId": FieldValue.delete(),
-      "junkshopName": FieldValue.delete(),
-      "assignedJunkshopUid": FieldValue.delete(),
-      "assignedJunkshopName": FieldValue.delete(),
-
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    tx.set(reqRef, {
-      "status": "rejected",
-      "adminRejectedAt": FieldValue.serverTimestamp(),
-      "adminStatus": "rejected",
-      "adminVerified": false,
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  });
-}
+      tx.set(reqRef, {
+        "status": "rejected",
+        "adminRejectedAt": FieldValue.serverTimestamp(),
+        "adminStatus": "rejected",
+        "adminVerified": false,
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
+  }
 
   Future<void> approveCollector(DocumentReference reqRef) async {
     await reqRef.set({
@@ -82,58 +81,54 @@ Future<void> _rejectCollectorAndRestoreUser(String uid) async {
     }, SetOptions(merge: true));
   }
 
-Future<void> _adminApprove(String uid) async {
-  final db = FirebaseFirestore.instance;
+  Future<void> _adminApprove(String uid) async {
+    final db = FirebaseFirestore.instance;
 
-  final reqRef = db.collection("collectorRequests").doc(uid);
-  final userRef = db.collection("Users").doc(uid);
+    final reqRef = db.collection("collectorRequests").doc(uid);
+    final userRef = db.collection("Users").doc(uid);
 
-  await db.runTransaction((tx) async {
-    final reqSnap = await tx.get(reqRef);
-    if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
+    await db.runTransaction((tx) async {
+      final reqSnap = await tx.get(reqRef);
+      if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
 
-    final req = reqSnap.data() ?? {};
+      final req = reqSnap.data() ?? {};
 
-    final junkshopId = (req["junkshopId"] ?? "").toString().trim();
-    final junkshopName = (req["junkshopName"] ?? "").toString().trim();
+      final junkshopId = (req["junkshopId"] ?? "").toString().trim();
+      final junkshopName = (req["junkshopName"] ?? "").toString().trim();
 
-    if (junkshopId.isEmpty) {
-      throw Exception("Missing junkshopId in collectorRequests/$uid (needed for chat).");
-    }
+      if (junkshopId.isEmpty) {
+        throw Exception("Missing junkshopId in collectorRequests/$uid (needed for chat).");
+      }
 
-    // 1) request status
-    tx.set(reqRef, {
-      "status": "adminApproved",
-      "adminReviewedAt": FieldValue.serverTimestamp(),
-      "adminStatus": "approved",
-      "adminVerified": true,
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      // 1) request status
+      tx.set(reqRef, {
+        "status": "adminApproved",
+        "adminReviewedAt": FieldValue.serverTimestamp(),
+        "adminStatus": "approved",
+        "adminVerified": true,
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-    // 2) user becomes collector immediately
-    tx.set(userRef, {
-      "role": "collector",
-      "Roles": "collector",
+      // 2) user becomes collector immediately
+      tx.set(userRef, {
+        "role": "collector",
+        "Roles": "collector",
+        "adminReviewedAt": FieldValue.serverTimestamp(),
+        "adminStatus": "approved",
+        "adminVerified": true,
+        "collectorActive": true,
+        "collectorStatus": "approved",
+        // ✅ keep chat the same
+        "junkshopId": junkshopId,
+        "junkshopName": junkshopName,
+        // optional compatibility if anything still reads these:
+        "assignedJunkshopUid": junkshopId,
+        "assignedJunkshopName": junkshopName,
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
+  }
 
-      "adminReviewedAt": FieldValue.serverTimestamp(),
-      "adminStatus": "approved",
-      "adminVerified": true,
-
-      "collectorActive": true,
-      "collectorStatus": "approved",
-
-      // ✅ keep chat the same
-      "junkshopId": junkshopId,
-      "junkshopName": junkshopName,
-
-      // optional compatibility if anything still reads these:
-      "assignedJunkshopUid": junkshopId,
-      "assignedJunkshopName": junkshopName,
-
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  });
-}
   // =====================================================
   // 🔓 ADMIN: download encrypted bytes -> decrypt -> return bytes
   // Works for JPG/PNG. For PDF you still get bytes, but preview needs a PDF widget.
@@ -226,6 +221,113 @@ Future<void> _adminApprove(String uid) async {
     );
   }
 
+  // ---------- UI helpers (uniform style) ----------
+  Widget _panel({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
+    return Container(
+      width: double.infinity,
+      padding: padding,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.045),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          color: Colors.white.withOpacity(0.55),
+          fontWeight: FontWeight.w900,
+          fontSize: 11,
+          letterSpacing: 0.6,
+        ),
+      ),
+    );
+  }
+
+  Widget _pill(String text, {Color? bg, Color? fg, IconData? icon}) {
+    final b = bg ?? Colors.white.withOpacity(0.05);
+    final f = fg ?? Colors.white.withOpacity(0.85);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: b,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 14, color: f),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            text,
+            style: TextStyle(color: f, fontWeight: FontWeight.w900, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _primaryActionButton({
+    required String label,
+    required IconData icon,
+    required VoidCallback? onTap,
+    Color background = _primary,
+    Color foreground = Colors.white,
+  }) {
+    return SizedBox(
+      height: 52,
+      child: ElevatedButton.icon(
+        icon: Icon(icon),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: background,
+          foregroundColor: foreground,
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      ),
+    );
+  }
+
+  Widget _outlineActionButton({
+    required String label,
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
+    return SizedBox(
+      height: 52,
+      child: OutlinedButton.icon(
+        icon: Icon(icon),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white,
+          side: BorderSide(color: Colors.white.withOpacity(0.14)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      ),
+    );
+  }
+
+  Color _statusAccent(String status) {
+    final s = status.toLowerCase();
+    if (s == "pending") return Colors.orangeAccent;
+    if (s == "adminapproved" || s == "approved") return Colors.greenAccent;
+    if (s == "rejected") return Colors.redAccent;
+    return Colors.white54;
+  }
+
+  // ---------- page ----------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -233,6 +335,7 @@ Future<void> _adminApprove(String uid) async {
       appBar: AppBar(
         backgroundColor: AdminTheme.bg,
         foregroundColor: Colors.white,
+        elevation: 0,
         title: const Text("Collector Details"),
       ),
       body: AdminTheme.background(
@@ -241,8 +344,7 @@ Future<void> _adminApprove(String uid) async {
           builder: (context, snap) {
             if (snap.hasError) {
               return Center(
-                child: Text("Error: ${snap.error}",
-                    style: const TextStyle(color: Colors.redAccent)),
+                child: Text("Error: ${snap.error}", style: const TextStyle(color: Colors.redAccent)),
               );
             }
             if (!snap.hasData) {
@@ -261,108 +363,230 @@ Future<void> _adminApprove(String uid) async {
             final email = (data["emailDisplay"] ?? "").toString();
             final status = (data["status"] ?? "").toString();
             final isPending = status.toLowerCase() == "pending";
+            final accent = _statusAccent(status);
 
-            // ✅ This block now DECRYPTS (no AdminStorageCache.url)
             final kycBlock = FutureBuilder<_DecryptedKyc?>(
               future: _downloadAndDecryptKyc(uid),
               builder: (context, kycSnap) {
                 if (kycSnap.connectionState == ConnectionState.waiting) {
-                  return const SizedBox(
-                    height: 220,
-                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  return _panel(
+                    padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
+                    child: const SizedBox(
+                      height: 180,
+                      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                    ),
                   );
                 }
                 if (kycSnap.hasError) {
-                  return Text(
-                    "KYC decrypt failed: ${kycSnap.error}",
-                    style: const TextStyle(color: Colors.redAccent),
+                  return _panel(
+                    child: Text(
+                      "ID decrypt failed: ${kycSnap.error}",
+                      style: const TextStyle(color: Colors.redAccent, height: 1.3),
+                    ),
                   );
                 }
 
                 final kyc = kycSnap.data;
                 if (kyc == null) {
-                  return const Text("No ID file uploaded.",
-                      style: TextStyle(color: Colors.white70));
+                  return _panel(
+                    child: Row(
+                      children: [
+                        Icon(Icons.badge_outlined, color: Colors.white.withOpacity(0.6)),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            "No ID file uploaded.",
+                            style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
                 }
 
                 final fname = kyc.originalFileName.toLowerCase();
                 final isPdf = fname.endsWith(".pdf");
 
                 if (isPdf) {
-                  // NOTE: You still have decrypted bytes here.
-                  // To preview PDF inside Flutter, add a PDF viewer package.
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
-                      Text("KYC file is a PDF (decrypted).",
-                          style: TextStyle(color: Colors.white70)),
-                      SizedBox(height: 8),
-                      Text(
-                        "PDF preview needs a PDF viewer widget/package.\n"
-                        "If you want, I can give you the exact PDF viewer code next.",
-                        style: TextStyle(color: Colors.white54, height: 1.3),
-                      ),
-                    ],
+                  return _panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.picture_as_pdf_outlined, color: Colors.white.withOpacity(0.75)),
+                            const SizedBox(width: 10),
+                            const Text(
+                              "Government ID (PDF)",
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          "PDF decrypted successfully.\n\n"
+                          "To preview it here, add a PDF viewer widget/package (e.g. syncfusion_flutter_pdfviewer or flutter_pdfview).",
+                          style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
+                        ),
+                      ],
+                    ),
                   );
                 }
 
-                // ✅ Preview image (JPG/PNG)
-                return GestureDetector(
-                  onTap: () => _showDecryptedImageDialog(kyc.bytes),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: Image.memory(
-                      kyc.bytes,
-                      height: 220,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    ),
+                // ✅ Image preview inside a “document card”
+                // ✅ removed filename display (uniform with ResidentDetailsPage)
+                return _panel(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.badge_outlined, color: Colors.white.withOpacity(0.75)),
+                          const SizedBox(width: 10),
+                          _pill(
+                            "Tap to zoom",
+                            bg: Colors.white.withOpacity(0.04),
+                            fg: Colors.white.withOpacity(0.8),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      GestureDetector(
+                        onTap: () => _showDecryptedImageDialog(kyc.bytes),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: AspectRatio(
+                            aspectRatio: 16 / 10,
+                            child: Image.memory(
+                              kyc.bytes,
+                              width: double.infinity,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
             );
 
-            return Padding(
-              padding: const EdgeInsets.all(24),
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 14, 24, 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 20,
+                  // ✅ Profile header panel (same structure as ResidentDetailsPage)
+                  _panel(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: _primary.withOpacity(0.16),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: _primary.withOpacity(0.22)),
+                          ),
+                          child: const Icon(Icons.local_shipping_outlined, color: _primary),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 18,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              if (email.isNotEmpty)
+                                Text(
+                                  email,
+                                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
+                                ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _pill(
+                                    "STATUS: ${status.isEmpty ? "unknown" : status}",
+                                    bg: accent.withOpacity(0.14),
+                                    fg: accent,
+                                    icon: Icons.circle,
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  if (email.isNotEmpty) Text(email, style: TextStyle(color: Colors.grey.shade300)),
-                  const SizedBox(height: 6),
-                  Text("Status: $status", style: const TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 16),
 
+                  const SizedBox(height: 14),
                   kycBlock,
-                  const SizedBox(height: 16),
+
+                  const SizedBox(height: 12),
+
+                  // ✅ Confidentiality notice (same component style as ResidentDetailsPage)
+                  _panel(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.security, color: Colors.blueAccent.withOpacity(0.95), size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            "Confidentiality Notice (Admin Responsibility)\n"
+                            "This ID contains sensitive personal information and must be handled with care. "
+                            "Access it only for collector verification and never share, screenshot, download, "
+                            "or distribute it outside official review procedures. "
+                            "You are ethically responsible for maintaining privacy and protecting collector data.",
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.65),
+                              height: 1.35,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
 
                   if (_busy)
-                    const Padding(
-                      padding: EdgeInsets.only(bottom: 10),
-                      child: Row(
+                    _panel(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: const Row(
                         children: [
                           SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                           SizedBox(width: 10),
-                          Text("Processing...", style: TextStyle(color: Colors.white)),
+                          Text("Processing...", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
                         ],
                       ),
                     ),
 
+                  if (_busy) const SizedBox(height: 12),
+
+                  _sectionLabel("Admin Actions"),
+
                   Row(
                     children: [
                       Expanded(
-                        child: ElevatedButton.icon(
-                          icon: const Icon(Icons.check),
-                          label: const Text("Approve"),
-                          onPressed: (_busy || !isPending)
+                        child: _primaryActionButton(
+                          icon: Icons.check,
+                          label: "Approve",
+                          onTap: (_busy || !isPending)
                               ? null
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
@@ -389,10 +613,10 @@ Future<void> _adminApprove(String uid) async {
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.close),
-                          label: const Text("Reject"),
-                          onPressed: (_busy || !isPending)
+                        child: _outlineActionButton(
+                          icon: Icons.close,
+                          label: "Reject",
+                          onTap: (_busy || !isPending)
                               ? null
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
