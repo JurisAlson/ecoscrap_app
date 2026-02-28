@@ -40,6 +40,26 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     return "unknown";
   }
 
+  // ✅ Collector verification logic (already correct)
+  bool _isCollectorVerified(Map<String, dynamic> data) {
+    final adminVerified = data['adminVerified'] == true;
+    final adminStatus = (data['adminStatus'] ?? '').toString().toLowerCase();
+    final collectorStatus =
+        (data['collectorStatus'] ?? '').toString().toLowerCase();
+
+    if (adminVerified && adminStatus == "approved") return true;
+    if (collectorStatus == "approved") return true;
+    return false;
+  }
+
+  // ✅ Resident/User verification logic (Palo Alto ONLY)
+  // Users can ONLY access Dashboard after admin approval.
+  bool _isResidentVerified(Map<String, dynamic> data) {
+    final adminVerified = data['adminVerified'] == true;
+    final adminStatus = (data['adminStatus'] ?? '').toString().toLowerCase();
+    return adminVerified && adminStatus == "approved";
+  }
+
   Future<DocumentSnapshot<Map<String, dynamic>>> _getUserDoc(String uid) {
     return FirebaseFirestore.instance.collection('Users').doc(uid).get();
   }
@@ -75,7 +95,6 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    // set online when RoleGate shows
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setOnline(true);
     });
@@ -104,7 +123,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return const LoginPage();
 
-    // Optional: auto-grant claim for the owner email (safe to ignore if CF not deployed)
+    // Optional: auto-grant claim for the owner email
     // grantMeAdminClaimIfOwner(user);
 
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -173,12 +192,51 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
         }
 
         // ===== COLLECTOR =====
+        // ✅ Only admin verification is needed.
         if (role == 'collector') {
+          final verified = _isCollectorVerified(data);
+
+          if (!verified) {
+            return _RoleErrorPage(
+              message:
+                  "Your collector account is not verified yet.\n\n"
+                  "Please wait for admin verification.",
+              actionLabel: "Logout",
+              onAction: () => _logout(context),
+            );
+          }
+
           return const CollectorsDashboardPage();
         }
 
-        // ===== HOUSEHOLD USER =====
+        // ===== PALO ALTO RESIDENT (HOUSEHOLD USER) =====
+        // ✅ Scope is Palo Alto ONLY: must be admin-approved to enter Dashboard.
         if (role == 'user') {
+          final verified = _isResidentVerified(data);
+
+          if (!verified) {
+            final adminStatus =
+                (data['adminStatus'] ?? '').toString().toLowerCase();
+
+            String extra = "";
+            if (adminStatus == "rejected") {
+              extra =
+                  "\n\nYour verification was rejected. Please contact the admin or re-submit a valid Government ID.";
+            } else {
+              extra =
+                  "\n\nPlease wait for admin review. Access is granted only after we confirm you reside in Palo Alto.";
+            }
+
+            return _RoleErrorPage(
+              message:
+                  "Account Pending Palo Alto Verification.\n\n"
+                  "This app is strictly for Palo Alto residents. "
+                  "Your Government ID must be reviewed and approved by the admin before you can continue.$extra",
+              actionLabel: "Logout",
+              onAction: () => _logout(context),
+            );
+          }
+
           return const DashboardPage();
         }
 

@@ -50,221 +50,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       curve: Curves.easeOutCubic,
     );
   }
-
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-  // ✅ Junkshop ACCEPTS collector (2-step finalization)
-  // - Updates collectorRequests/{collectorUid} status -> junkshopAccepted
-  // - Promotes Users/{collectorUid}.role -> collector
-  Future<void> _acceptCollector({
-    required String collectorUid,
-    required String shopUid,
-    required String shopName,
-  }) async {
-    final db = FirebaseFirestore.instance;
-
-    final reqRef = db.collection("collectorRequests").doc(collectorUid);
-    final userRef = db.collection("Users").doc(collectorUid);
-
-    await db.runTransaction((tx) async {
-      final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) throw Exception("Request not found.");
-
-      final req = reqSnap.data() ?? {};
-      final status = (req["status"] ?? "").toString();
-      final acceptedBy = (req["acceptedByJunkshopUid"] ?? "").toString();
-
-      if (status == "junkshopAccepted") {
-        if (acceptedBy == shopUid) return;
-        throw Exception("Collector already accepted by another junkshop.");
-      }
-
-      if (status != "adminApproved") {
-        throw Exception("Collector is not admin approved yet.");
-      }
-
-      // 1) lock request
-      tx.set(reqRef, {
-        "status": "junkshopAccepted",
-        "acceptedByJunkshopUid": shopUid,
-        "acceptedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      // 2) promote + ✅ ASSIGN junkshop to collector (THIS FIXES CHAT)
-      tx.set(userRef, {
-        "role": "collector",
-        "Roles": "collector",
-        "junkshopVerified": true,
-        "junkshopStatus": "verified",
-        "collectorStatus": "junkshopAccepted",
-
-        // ✅ REQUIRED for collector app to find its junkshop chat
-        "assignedJunkshopUid": shopUid,
-        "assignedJunkshopName": shopName,
-
-        // optional compatibility
-        "junkshopId": shopUid,
-        "junkshopName": shopName,
-
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true)); 
-    });
-  }
-
-  // ✅ Junkshop REJECTS collector (hide it from THIS junkshop only)
-  // This does NOT affect other junkshops.
-Future<void> _rejectCollector({
-  required String collectorUid,
-  required String shopUid,
-}) async {
-  final reqRef = FirebaseFirestore.instance
-      .collection("collectorRequests")
-      .doc(collectorUid);
-
-  await reqRef.update({
-    "rejectedByJunkshops": FieldValue.arrayUnion([shopUid]),
-    "updatedAt": FieldValue.serverTimestamp(),
-  });
-}
-
-  // ================= COLLECTOR REQUESTS SECTION (collectorRequests) =================
-  Widget _collectorRequestsSection({required String shopId, required String shopName}) {
-    final stream = FirebaseFirestore.instance
-        .collection("collectorRequests")
-        .where("status", isEqualTo: "adminApproved")
-        .snapshots();
-
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: stream,
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Text(
-            "Collector requests error: ${snap.error}",
-            style: const TextStyle(color: Colors.redAccent),
-          );
-        }
-        if (!snap.hasData) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 10),
-            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-          );
-        }
-
-        // Hide collectors this junkshop already rejected
-        final docs = snap.data!.docs.where((d) {
-          final data = d.data();
-          final rejectedBy = (data["rejectedByJunkshops"] as List?) ?? const [];
-          return !rejectedBy.contains(shopId);
-        }).toList();
-
-        if (widget.shopID.trim().isEmpty) {
-          return const Center(child: Text("Missing shopID"));
-        }
-        
-        if (docs.isEmpty) {
-          return Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withOpacity(0.06)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.mark_email_read,
-                    color: Colors.greenAccent, size: 22),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    "No collector requests available.",
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Column(
-          children: docs.map((d) {
-            final data = d.data();
-            final collectorUid = d.id;
-
-            // ✅ Non-sensitive fields only (safe for junkshops)
-            final name = (data["publicName"] ?? "Collector").toString();
-            final email = (data["emailDisplay"] ?? "").toString();
-
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.06)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name,
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold)),
-                  if (email.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(email,
-                          style: TextStyle(color: Colors.grey.shade300)),
-                    ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      const Text("Admin Approved",
-                          style: TextStyle(color: Colors.orangeAccent)),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await _acceptCollector(
-                              collectorUid: collectorUid,
-                              shopUid: shopId,
-                              shopName: shopName, 
-                            );
-                            _toast("Accepted collector: $name");
-                          } catch (e) {
-                            _toast("Accept failed: $e");
-                          }
-                        },
-                        child: const Text("Accept"),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await _rejectCollector(
-                              collectorUid: collectorUid,
-                              shopUid: shopId,
-                            );
-                            _toast("Rejected collector: $name");
-                          } catch (e) {
-                            _toast("Reject failed: $e");
-                          }
-                        },
-                        child: const Text("Reject"),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
-        );
-      },
-    );
-  }
-
+  
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -389,7 +175,7 @@ Future<void> _rejectCollector({
         .orderBy('updatedAt', descending: true)
         .limit(50);
 
-    String _hhmm(DateTime dt) =>
+    String hhmm(DateTime dt) =>
         "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
 
     return Padding(
@@ -473,17 +259,6 @@ Future<void> _rejectCollector({
                           Navigator.pop(context); // close drawer first
 
                           // ✅ minimal safe payload for TransactionDetailScreen
-                          final txData = <String, dynamic>{
-                            "transactionType": "buy", // junkshop buying from household
-                            "customerNameDisplay": name,
-                            "items": const [],
-                            "totalAmount": 0,
-                            "transactionDate": ts, // Timestamp? (safe with your screen)
-                            "transactionId": d.id, // fallback display
-                            "sourceType": "resident",
-                            "sourceName": name,
-                          };
-
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -518,7 +293,7 @@ Future<void> _rejectCollector({
                           style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                         ),
                         trailing: Text(
-                          dt == null ? "" : _hhmm(dt),
+                          dt == null ? "" : hhmm(dt),
                           style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
                         ),
                       ),
@@ -633,33 +408,6 @@ Future<void> _rejectCollector({
           ),
 
           const SizedBox(height: 18),
-
-          // Collector Requests card
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.06)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "Collector Requests",
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                _collectorRequestsSection(shopId: shopId, shopName: shopName),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 12),
 
           SizedBox(
             width: double.infinity,
