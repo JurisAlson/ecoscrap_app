@@ -2,13 +2,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 
 import '../admin_helpers.dart';
 import '../admin_theme_page.dart';
 
-// 🔐 Crypto (ADMIN APP) - reuse your existing libs
+// 🔐 Crypto (ADMIN APP)
 import 'package:ecoscrap_app/security/admin_keys.dart';
 import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
 import 'package:ecoscrap_app/security/kyc_shared_key.dart';
@@ -24,10 +25,11 @@ class ResidentDetailsPage extends StatefulWidget {
 class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   bool _busy = false;
 
-  // ===== UI tokens (match your admin pages) =====
   static const Color _primary = Color(0xFF1FA9A7);
 
-  // ---------- admin actions (UNCHANGED) ----------
+  // =========================
+  // ADMIN: APPROVE
+  // =========================
   Future<void> _adminApproveResident(String uid) async {
     final db = FirebaseFirestore.instance;
 
@@ -36,61 +38,73 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
 
     await db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) throw Exception("residentRequests/$uid not found");
+      if (!reqSnap.exists) {
+        throw Exception("residentRequests/$uid not found");
+      }
 
-      tx.set(reqRef, {
-        "status": "adminApproved",
-        "adminReviewedAt": FieldValue.serverTimestamp(),
-        "adminStatus": "approved",
-        "adminVerified": true,
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      // residentRequests/{uid}
+      tx.set(
+        reqRef,
+        {
+          "status": "adminApproved",
+          "adminReviewedAt": FieldValue.serverTimestamp(),
+          "adminStatus": "approved",
+          "adminVerified": true,
+          "updatedAt": FieldValue.serverTimestamp(),
 
-      tx.set(userRef, {
-        "role": "user",
-        "Roles": "user",
-        "adminReviewedAt": FieldValue.serverTimestamp(),
-        "adminStatus": "approved",
-        "adminVerified": true,
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+          // Optional mirror (nice for UI consistency)
+          "residentStatus": "approved",
+        },
+        SetOptions(merge: true),
+      );
+
+      // Users/{uid}
+      tx.set(
+        userRef,
+        {
+          "role": "user",
+          "Roles": "user",
+          "adminReviewedAt": FieldValue.serverTimestamp(),
+          "adminStatus": "approved",
+          "adminVerified": true,
+          "updatedAt": FieldValue.serverTimestamp(),
+
+          // ✅ FIX: your screenshot shows this stayed "pending"
+          "residentStatus": "approved",
+        },
+        SetOptions(merge: true),
+      );
     });
   }
 
-  Future<void> _adminRejectResident(String uid, {String reason = ""}) async {
-    final db = FirebaseFirestore.instance;
+  // =========================
+  // ADMIN: REJECT + DELETE ACCOUNT
+  // (this is what allows email reuse)
+  // =========================
+  Future<void> _rejectAndDeleteResidentAccount(
+    String uid, {
+    String reason = "",
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
+        .httpsCallable("rejectResidentAndDeleteAccount");
 
-    final reqRef = db.collection("residentRequests").doc(uid);
-    final userRef = db.collection("Users").doc(uid);
-
-    await db.runTransaction((tx) async {
-      tx.set(reqRef, {
-        "status": "rejected",
-        "adminRejectedAt": FieldValue.serverTimestamp(),
-        "adminRejectReason": reason,
-        "adminStatus": "rejected",
-        "adminVerified": false,
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      tx.set(userRef, {
-        "role": "user",
-        "Roles": "user",
-        "adminVerified": false,
-        "adminStatus": "rejected",
-        "adminRejectedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    await callable.call({
+      "uid": uid,
+      "reason": reason,
     });
   }
 
-  // === decrypt residentKYC exactly like collectorKYC ===
+  // =========================
+  // KYC: DOWNLOAD + DECRYPT
+  // =========================
   Future<_DecryptedKyc?> _downloadAndDecryptResidentKyc(String uid) async {
     final db = FirebaseFirestore.instance;
     final kycSnap = await db.collection("residentKYC").doc(uid).get();
+    if (!kycSnap.exists) return null;
+
     final kyc = kycSnap.data() ?? {};
 
-    final storagePath = (kyc["storagePath"] ?? "").toString();
+    final storagePath = (kyc["storagePath"] ?? "").toString().trim();
     if (storagePath.isEmpty) return null;
 
     final originalFileName = (kyc["originalFileName"] ?? "").toString();
@@ -100,20 +114,25 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     final nonceB64 = (kyc["nonceB64"] ?? "").toString();
     final macB64 = (kyc["macB64"] ?? "").toString();
 
-    if (ephPubKeyB64.isEmpty || saltB64.isEmpty || nonceB64.isEmpty || macB64.isEmpty) {
+    if (ephPubKeyB64.isEmpty ||
+        saltB64.isEmpty ||
+        nonceB64.isEmpty ||
+        macB64.isEmpty) {
       throw Exception("Missing crypto metadata in residentKYC/$uid");
     }
 
     final ref = FirebaseStorage.instance.ref(storagePath);
     final encryptedBytes = await ref.getData(12 * 1024 * 1024);
-    if (encryptedBytes == null) throw Exception("Failed to download encrypted file.");
+    if (encryptedBytes == null) {
+      throw Exception("Failed to download encrypted KYC bytes.");
+    }
 
-    final residentEphPubBytes = base64Decode(ephPubKeyB64);
+    final ephPubBytes = Uint8List.fromList(base64Decode(ephPubKeyB64));
     final salt = base64Decode(saltB64);
 
     final aesKey = await KycSharedKey.deriveForAdmin(
       adminPrivateKeyB64: AdminKeys.adminPrivateKeyB64,
-      collectorEphemeralPubKeyBytes: Uint8List.fromList(residentEphPubBytes),
+      collectorEphemeralPubKeyBytes: ephPubBytes,
       salt: salt,
     );
 
@@ -168,7 +187,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     );
   }
 
-  // ---------- UI helpers (uniform style) ----------
+  // =========================
+  // UI helpers
+  // =========================
   Widget _panel({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
     return Container(
       width: double.infinity,
@@ -234,10 +255,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
       height: 52,
       child: ElevatedButton.icon(
         icon: Icon(icon),
-        label: Text(
-          label,
-          style: const TextStyle(fontWeight: FontWeight.w900),
-        ),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
           backgroundColor: background,
@@ -258,10 +276,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
       height: 52,
       child: OutlinedButton.icon(
         icon: Icon(icon),
-        label: Text(
-          label,
-          style: const TextStyle(fontWeight: FontWeight.w900),
-        ),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
         onPressed: onTap,
         style: OutlinedButton.styleFrom(
           foregroundColor: Colors.white,
@@ -280,7 +295,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     return Colors.white54;
   }
 
-  // ---------- page ----------
+  // =========================
+  // PAGE
+  // =========================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -297,7 +314,10 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
           builder: (context, snap) {
             if (snap.hasError) {
               return Center(
-                child: Text("Error: ${snap.error}", style: const TextStyle(color: Colors.redAccent)),
+                child: Text(
+                  "Error: ${snap.error}",
+                  style: const TextStyle(color: Colors.redAccent),
+                ),
               );
             }
             if (!snap.hasData) {
@@ -318,7 +338,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
             final isPending = status.toLowerCase() == "pending";
             final accent = _statusAccent(status);
 
-            // KYC block (same logic, improved presentation)
             final kycBlock = FutureBuilder<_DecryptedKyc?>(
               future: _downloadAndDecryptResidentKyc(uid),
               builder: (context, kycSnap) {
@@ -379,7 +398,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                         const SizedBox(height: 10),
                         Text(
                           "PDF decrypted successfully.\n\n"
-                          "To preview it here, add a PDF viewer widget/package (e.g. syncfusion_flutter_pdfviewer or flutter_pdfview).",
+                          "To preview it here, add a PDF viewer widget/package.",
                           style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
                         ),
                       ],
@@ -387,8 +406,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                   );
                 }
 
-                // ✅ Image preview inside a “document card”
-                // ✅ CHANGE: removed filename display (per your request)
                 return _panel(
                   padding: const EdgeInsets.all(12),
                   child: Column(
@@ -420,9 +437,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                           ),
                         ),
                       ),
-                      // ✅ removed:
-                      // const SizedBox(height: 10),
-                      // Text(kyc.originalFileName, ...)
                     ],
                   ),
                 );
@@ -434,7 +448,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ✅ “Profile header” panel to match your admin style
                   _panel(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -490,10 +503,8 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
 
                   const SizedBox(height: 14),
                   kycBlock,
-
                   const SizedBox(height: 12),
 
-                  // ✅ CHANGE: replace old note with ethical/security responsibility note (per your request)
                   _panel(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -503,10 +514,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                         Expanded(
                           child: Text(
                             "Confidentiality Notice (Admin Responsibility)\n"
-                            "This ID contains sensitive personal information and must be handled with care. "
-                            "Access it only for residency verification and never share, screenshot, download, "
-                            "or distribute it outside official review procedures. "
-                            "You are ethically responsible for maintaining privacy and protecting resident data.",
+                            "This ID contains sensitive personal information. "
+                            "Use it only for residency verification. Do not share, screenshot, "
+                            "download, or distribute it outside official review procedures.",
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.65),
                               height: 1.35,
@@ -549,7 +559,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Approve resident?",
-                                    body: "Approve $name for Barangay Pulo access?",
+                                    body: "Approve $name for Palo Alto access?",
                                     yesValue: true,
                                     yesLabel: "Approve",
                                   );
@@ -571,29 +581,35 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: _outlineActionButton(
-                          icon: Icons.close,
-                          label: "Reject",
+                          icon: Icons.delete_forever,
+                          label: "Reject & Delete",
                           onTap: (_busy || !isPending)
                               ? null
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
-                                    title: "Reject resident?",
-                                    body: "Reject $name? They will remain blocked until re-submit.",
+                                    title: "Reject & delete account?",
+                                    body:
+                                        "Reject $name and delete their account so they can re-apply using the same email.\n\n"
+                                        "This will remove:\n"
+                                        "• Auth account\n"
+                                        "• Users/{uid}\n"
+                                        "• residentRequests/{uid}\n"
+                                        "• residentKYC/{uid} + encrypted file",
                                     yesValue: true,
-                                    yesLabel: "Reject",
+                                    yesLabel: "Reject & Delete",
                                   );
                                   if (ok != true) return;
 
                                   setState(() => _busy = true);
                                   try {
-                                    await _adminRejectResident(uid);
+                                    await _rejectAndDeleteResidentAccount(uid);
                                     if (mounted) {
-                                      AdminHelpers.toast(context, "Rejected $name.");
+                                      AdminHelpers.toast(context, "Rejected & deleted $name.");
                                       Navigator.pop(context);
                                     }
                                   } catch (e) {
-                                    if (mounted) AdminHelpers.toast(context, "Reject failed: $e");
+                                    if (mounted) AdminHelpers.toast(context, "Reject/Delete failed: $e");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }

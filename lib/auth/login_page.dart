@@ -55,7 +55,8 @@ class _LoginPageState extends State<LoginPage> {
 
     if ((data["uid"] ?? "").toString().isEmpty) updates["uid"] = u.uid;
 
-    if ((data["emailDisplay"] ?? "").toString().isEmpty && (u.email ?? "").isNotEmpty) {
+    if ((data["emailDisplay"] ?? "").toString().isEmpty &&
+        (u.email ?? "").isNotEmpty) {
       updates["emailDisplay"] = u.email;
     }
 
@@ -69,32 +70,31 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-
-Future<void> saveFcmToken() async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return;
-
-  await FirebaseMessaging.instance.requestPermission();
-
-  final token = await FirebaseMessaging.instance.getToken();
-  if (token == null) return;
-
-  await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
-    "fcmToken": token,
-    "updatedAt": FieldValue.serverTimestamp(),
-  }, SetOptions(merge: true));
-
-  // keep token fresh
-  FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+  Future<void> saveFcmToken() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+
+    await FirebaseMessaging.instance.requestPermission();
+
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token == null) return;
 
     await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
       "fcmToken": token,
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
-  });
-}
+
+    // keep token fresh
+    FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
+        "fcmToken": token,
+        "updatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
+  }
 
   Future<void> _login() async {
     if (_isLoading) return;
@@ -115,66 +115,96 @@ Future<void> saveFcmToken() async {
         password: password,
       );
 
-      if (cred.user == null) return;
-      final u = cred.user!;
+      final u = cred.user;
+      if (u == null) {
+        _showToast("Login failed.", isError: true);
+        return;
+      }
+
       debugPrint("LOGIN OK UID=${u.uid} EMAIL=${u.email}");
       debugPrint("PROJECT=${Firebase.app().options.projectId}");
 
       // ✅ Ensure Users/{uid} exists so RoleGate won't block with "profile missing"
       await _ensureUserProfile(u);
 
-      // Optional debug:
-      try {
-        final snap = await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
-        debugPrint("ROLE DOC exists=${snap.exists} data=${snap.data()}");
-      } catch (e) {
-        debugPrint("ROLE READ FAILED: $e");
-      }
+      // ✅ Save FCM token after login
+      await saveFcmToken();
 
       if (!mounted) return;
 
-// Read role from Users/{uid}
-final snap = await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
-final data = snap.data() ?? {};
-final role = (data['Roles'] ?? data['role'] ?? data['roles'] ?? '')
-    .toString().trim().toLowerCase();
-    
-if (!mounted) return;
+      // Read Users/{uid}
+      final snap =
+          await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
+      final data = snap.data() ?? {};
 
-if (role == 'junkshop' || role == 'junkshops') {
-  final shopName = (data['Name'] ?? data['name'] ?? data['shopName'] ?? 'Junkshop')
-      .toString().trim();
+      // ✅ EXTRA SAFETY: Firestore status check (in case auth-disable not deployed yet)
+      final status =
+          (data['status'] ?? 'active').toString().trim().toLowerCase();
+      if (status == 'restricted') {
+        await FirebaseAuth.instance.signOut();
+        _showToast(
+          "Your account has been restricted. Please contact the admin.",
+          isError: true,
+        );
+        return;
+      }
 
-  Navigator.pushReplacement(
-    context,
-    MaterialPageRoute(
-      builder: (_) => JunkshopDashboardPage(
-        shopID: u.uid,
-        shopName: shopName.isNotEmpty ? shopName : 'Junkshop',
-      ),
-    ),
-  );
-  return;
-}
+      final role = (data['Roles'] ?? data['role'] ?? data['roles'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
 
-// only for non-junkshop users
-// await _ensureUserProfile(u);
+      if (!mounted) return;
 
-// then go RoleGate
-// Navigator.pushReplacement(
-//   context,
-//   MaterialPageRoute(builder: (_) => const RoleGate()),
-// );
+      if (role == 'junkshop' || role == 'junkshops') {
+        final shopName =
+            (data['Name'] ?? data['name'] ?? data['shopName'] ?? 'Junkshop')
+                .toString()
+                .trim();
 
-// default: go through RoleGate (admin/user/collector)
-Navigator.pushReplacement(
-  context,
-  MaterialPageRoute(builder: (_) => const RoleGate()),
-);
-return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => JunkshopDashboardPage(
+              shopID: u.uid,
+              shopName: shopName.isNotEmpty ? shopName : 'Junkshop',
+            ),
+          ),
+        );
+        return;
+      }
 
+      // default: go through RoleGate (admin/user/collector)
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const RoleGate()),
+      );
+      return;
     } on FirebaseAuthException catch (e) {
+      // ✅ HARD BLOCK: Firebase Auth disabled user (cannot login)
+      if (e.code == "user-disabled") {
+        _showToast(
+          "Your account has been restricted. Please contact the admin.",
+          isError: true,
+        );
+        return;
+      }
+
+      // clearer messages
+      if (e.code == "wrong-password" || e.code == "invalid-credential") {
+        _showToast("Incorrect email or password.", isError: true);
+        return;
+      }
+      if (e.code == "user-not-found") {
+        _showToast("No account found for that email.", isError: true);
+        return;
+      }
+
       _showToast(e.message ?? "Login failed", isError: true);
+      return;
+    } catch (e) {
+      _showToast("Login failed: $e", isError: true);
+      return;
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -242,13 +272,16 @@ return;
               ? IconButton(
                   onPressed: onToggleVisibility,
                   icon: Icon(
-                    obscureText ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                    obscureText
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
                     color: const Color(0xFF475569),
                   ),
                 )
               : null,
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
         ),
       ),
     );
@@ -311,7 +344,8 @@ return;
                         ),
                         borderRadius: BorderRadius.circular(24),
                       ),
-                      child: const Icon(Icons.recycling, color: Colors.white, size: 40),
+                      child: const Icon(Icons.recycling,
+                          color: Colors.white, size: 40),
                     ),
                   ),
                   const SizedBox(height: 25),
@@ -335,12 +369,16 @@ return;
                       children: const [
                         Text(
                           "Sign In",
-                          style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold),
                         ),
                         SizedBox(height: 8),
                         Text(
                           "Welcome back 🌿 enter your details",
-                          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+                          style: TextStyle(
+                              color: Color(0xFF94A3B8), fontSize: 14),
                         ),
                       ],
                     ),
@@ -359,18 +397,22 @@ return;
                     icon: Icons.lock_outline,
                     isPassword: true,
                     obscureText: _obscurePassword,
-                    onToggleVisibility: () => setState(() => _obscurePassword = !_obscurePassword),
+                    onToggleVisibility: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
                       onPressed: () => Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+                        MaterialPageRoute(
+                            builder: (_) => const ForgotPasswordPage()),
                       ),
                       child: const Text(
                         "Forgot Password?",
-                        style: TextStyle(color: Color(0xFF1FA9A7), fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: Color(0xFF1FA9A7),
+                            fontWeight: FontWeight.w600),
                       ),
                     ),
                   ),
@@ -382,14 +424,17 @@ return;
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF1FA9A7),
                         foregroundColor: const Color(0xFF0F172A),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
                       ),
                       onPressed: _isLoading ? null : _login,
                       child: _isLoading
-                          ? const CircularProgressIndicator(strokeWidth: 3, color: Color(0xFF0F172A))
+                          ? const CircularProgressIndicator(
+                              strokeWidth: 3, color: Color(0xFF0F172A))
                           : const Text(
                               "Continue",
-                              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                  fontSize: 17, fontWeight: FontWeight.bold),
                             ),
                     ),
                   ),
@@ -397,17 +442,22 @@ return;
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Text("Don't have an account?", style: TextStyle(color: Color(0xFF94A3B8))),
+                      const Text("Don't have an account?",
+                          style: TextStyle(color: Color(0xFF94A3B8))),
                       TextButton(
                         onPressed: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => const UserAccountCreationPage()),
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const UserAccountCreationPage()),
                           );
                         },
                         child: const Text(
                           "Create one",
-                          style: TextStyle(color: Color(0xFF1FA9A7), fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                              color: Color(0xFF1FA9A7),
+                              fontWeight: FontWeight.bold),
                         ),
                       ),
                     ],

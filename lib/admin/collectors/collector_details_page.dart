@@ -27,9 +27,11 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   // ===== UI tokens (match your admin pages) =====
   static const Color _primary = Color(0xFF1FA9A7);
 
-  // ✅ Reject:
-  // DO NOT delete Storage here (encrypted file).
-  // Just mark statuses, and let your retention/cleanup handle actual deletion.
+  // ✅ Reject collector:
+  // - Revert role back to user
+  // - Reset ONLY collector fields so they can resubmit
+  // - DO NOT touch residentStatus/residentVerified/resident fields
+  // - DO NOT override residence admin approval logic
   Future<void> _rejectCollectorAndRestoreUser(String uid) async {
     final db = FirebaseFirestore.instance;
 
@@ -37,33 +39,41 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final reqRef = db.collection("collectorRequests").doc(uid);
 
     await db.runTransaction((tx) async {
+      // ✅ restore role back to "user"
       tx.set(userRef, {
         "role": "user",
         "Roles": "user",
-        "adminVerified": false,
-        "adminStatus": "rejected",
-        "adminRejectedAt": FieldValue.serverTimestamp(),
-        "collectorActive": false,
+
+        // ✅ IMPORTANT:
+        // Do NOT touch these if they are residence verification
+        // "residentStatus": ..., "residentVerified": ...
+        // Do NOT set adminStatus/adminVerified here (that blocks resident dashboard)
+
+        // ✅ Collector-only reset (so they can resubmit)
+        "collectorVerified": false, // if you still use this legacy field
         "collectorStatus": "rejected",
+        "collectorActive": false,
         "collectorUpdatedAt": FieldValue.serverTimestamp(),
-        // remove assignment so chat + collector access won't persist
+
+        // ✅ remove junkshop assignment if any
         "junkshopId": FieldValue.delete(),
         "junkshopName": FieldValue.delete(),
         "assignedJunkshopUid": FieldValue.delete(),
         "assignedJunkshopName": FieldValue.delete(),
+
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
+      // ✅ mark request as rejected
       tx.set(reqRef, {
         "status": "rejected",
         "adminRejectedAt": FieldValue.serverTimestamp(),
-        "adminStatus": "rejected",
-        "adminVerified": false,
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
   }
 
+  // (Optional) keep if used elsewhere
   Future<void> approveCollector(DocumentReference reqRef) async {
     await reqRef.set({
       "status": "adminApproved",
@@ -72,15 +82,19 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     }, SetOptions(merge: true));
   }
 
+  // (Optional) keep if used elsewhere
   Future<void> rejectCollector(DocumentReference reqRef, {String reason = ""}) async {
     await reqRef.set({
       "status": "rejected",
       "adminRejectedAt": FieldValue.serverTimestamp(),
-      "adminRejectReason": reason, // optional
+      "adminRejectReason": reason,
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
 
+  // ✅ Approve collector:
+  // If you want NEW logic: collectorStatus should be "adminApproved"
+  // and role becomes collector.
   Future<void> _adminApprove(String uid) async {
     final db = FirebaseFirestore.instance;
 
@@ -91,39 +105,24 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       final reqSnap = await tx.get(reqRef);
       if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
 
-      final req = reqSnap.data() ?? {};
-
-      final junkshopId = (req["junkshopId"] ?? "").toString().trim();
-      final junkshopName = (req["junkshopName"] ?? "").toString().trim();
-
-      if (junkshopId.isEmpty) {
-        throw Exception("Missing junkshopId in collectorRequests/$uid (needed for chat).");
-      }
-
-      // 1) request status
+      // request doc status
       tx.set(reqRef, {
         "status": "adminApproved",
-        "adminReviewedAt": FieldValue.serverTimestamp(),
-        "adminStatus": "approved",
-        "adminVerified": true,
+        "adminApprovedAt": FieldValue.serverTimestamp(),
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      // 2) user becomes collector immediately
+      // user becomes collector
       tx.set(userRef, {
         "role": "collector",
         "Roles": "collector",
-        "adminReviewedAt": FieldValue.serverTimestamp(),
-        "adminStatus": "approved",
-        "adminVerified": true,
+
+        // ✅ NEW: dashboard checks collectorStatus == adminApproved
+        "collectorStatus": "adminApproved",
         "collectorActive": true,
-        "collectorStatus": "approved",
-        // ✅ keep chat the same
-        "junkshopId": junkshopId,
-        "junkshopName": junkshopName,
-        // optional compatibility if anything still reads these:
-        "assignedJunkshopUid": junkshopId,
-        "assignedJunkshopName": junkshopName,
+        "collectorVerified": true, // legacy if you still use
+        "collectorUpdatedAt": FieldValue.serverTimestamp(),
+
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
@@ -131,7 +130,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
   // =====================================================
   // 🔓 ADMIN: download encrypted bytes -> decrypt -> return bytes
-  // Works for JPG/PNG. For PDF you still get bytes, but preview needs a PDF widget.
   // =====================================================
   Future<_DecryptedKyc?> _downloadAndDecryptKyc(String uid) async {
     final db = FirebaseFirestore.instance;
@@ -154,8 +152,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
     // 1) download encrypted blob
     final ref = FirebaseStorage.instance.ref(storagePath);
-
-    // max 12MB (your rules allow 10MB; add small buffer)
     final encryptedBytes = await ref.getData(12 * 1024 * 1024);
     if (encryptedBytes == null) throw Exception("Failed to download encrypted file.");
 
@@ -221,7 +217,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     );
   }
 
-  // ---------- UI helpers (uniform style) ----------
+  // ---------- UI helpers ----------
   Widget _panel({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
     return Container(
       width: double.infinity,
@@ -344,7 +340,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
           builder: (context, snap) {
             if (snap.hasError) {
               return Center(
-                child: Text("Error: ${snap.error}", style: const TextStyle(color: Colors.redAccent)),
+                child: Text("Error: ${snap.error}",
+                    style: const TextStyle(color: Colors.redAccent)),
               );
             }
             if (!snap.hasData) {
@@ -414,18 +411,21 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.picture_as_pdf_outlined, color: Colors.white.withOpacity(0.75)),
+                            Icon(Icons.picture_as_pdf_outlined,
+                                color: Colors.white.withOpacity(0.75)),
                             const SizedBox(width: 10),
                             const Text(
                               "Government ID (PDF)",
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                              style: TextStyle(
+                                  color: Colors.white, fontWeight: FontWeight.w900),
                             ),
                           ],
                         ),
                         const SizedBox(height: 10),
                         Text(
                           "PDF decrypted successfully.\n\n"
-                          "To preview it here, add a PDF viewer widget/package (e.g. syncfusion_flutter_pdfviewer or flutter_pdfview).",
+                          "To preview it here, add a PDF viewer widget/package "
+                          "(e.g. syncfusion_flutter_pdfviewer or flutter_pdfview).",
                           style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
                         ),
                       ],
@@ -433,8 +433,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                   );
                 }
 
-                // ✅ Image preview inside a “document card”
-                // ✅ removed filename display (uniform with ResidentDetailsPage)
                 return _panel(
                   padding: const EdgeInsets.all(12),
                   child: Column(
@@ -477,7 +475,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ✅ Profile header panel (same structure as ResidentDetailsPage)
                   _panel(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -509,7 +506,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                               if (email.isNotEmpty)
                                 Text(
                                   email,
-                                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
+                                  style: TextStyle(
+                                      color: Colors.white.withOpacity(0.65), fontSize: 12),
                                 ),
                               const SizedBox(height: 10),
                               Wrap(
@@ -533,15 +531,14 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
                   const SizedBox(height: 14),
                   kycBlock,
-
                   const SizedBox(height: 12),
 
-                  // ✅ Confidentiality notice (same component style as ResidentDetailsPage)
                   _panel(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.security, color: Colors.blueAccent.withOpacity(0.95), size: 18),
+                        Icon(Icons.security,
+                            color: Colors.blueAccent.withOpacity(0.95), size: 18),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -571,7 +568,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                         children: [
                           SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                           SizedBox(width: 10),
-                          Text("Processing...", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                          Text("Processing...",
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
                         ],
                       ),
                     ),
