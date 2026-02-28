@@ -27,23 +27,39 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   // ✅ Reject:
   // DO NOT delete Storage here (encrypted file).
   // Just mark statuses, and let your retention/cleanup handle actual deletion.
-  Future<void> _rejectCollectorAndRestoreUser(String uid) async {
+Future<void> _rejectCollectorAndRestoreUser(String uid) async {
   final db = FirebaseFirestore.instance;
 
-    final userRef = db.collection("Users").doc(uid);
-    final reqRef = db.collection("collectorRequests").doc(uid);
-    //final kycRef = db.collection("collectorKYC").doc(uid);
+  final userRef = db.collection("Users").doc(uid);
+  final reqRef = db.collection("collectorRequests").doc(uid);
 
   await db.runTransaction((tx) async {
     tx.set(userRef, {
+      "role": "user",
+      "Roles": "user",
+
+      "adminVerified": false,
+      "adminStatus": "rejected",
+      "adminRejectedAt": FieldValue.serverTimestamp(),
+
+      "collectorActive": false,
       "collectorStatus": "rejected",
       "collectorUpdatedAt": FieldValue.serverTimestamp(),
+
+      // remove assignment so chat + collector access won't persist
+      "junkshopId": FieldValue.delete(),
+      "junkshopName": FieldValue.delete(),
+      "assignedJunkshopUid": FieldValue.delete(),
+      "assignedJunkshopName": FieldValue.delete(),
+
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
     tx.set(reqRef, {
       "status": "rejected",
       "adminRejectedAt": FieldValue.serverTimestamp(),
+      "adminStatus": "rejected",
+      "adminVerified": false,
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   });
@@ -66,28 +82,58 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     }, SetOptions(merge: true));
   }
 
-  Future<void> _adminApprove(String uid) async {
-    final db = FirebaseFirestore.instance;
-    final reqRef = db.collection("collectorRequests").doc(uid);
-    final userRef = db.collection("Users").doc(uid);
-    //final kycRef = db.collection("collectorKYC").doc(uid);
+Future<void> _adminApprove(String uid) async {
+  final db = FirebaseFirestore.instance;
 
-    final batch = db.batch();
+  final reqRef = db.collection("collectorRequests").doc(uid);
+  final userRef = db.collection("Users").doc(uid);
 
-    batch.set(reqRef, {
+  await db.runTransaction((tx) async {
+    final reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
+
+    final req = reqSnap.data() ?? {};
+
+    final junkshopId = (req["junkshopId"] ?? "").toString().trim();
+    final junkshopName = (req["junkshopName"] ?? "").toString().trim();
+
+    if (junkshopId.isEmpty) {
+      throw Exception("Missing junkshopId in collectorRequests/$uid (needed for chat).");
+    }
+
+    // 1) request status
+    tx.set(reqRef, {
       "status": "adminApproved",
       "adminReviewedAt": FieldValue.serverTimestamp(),
+      "adminStatus": "approved",
+      "adminVerified": true,
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    batch.set(userRef, {
-      "collectorStatus": "adminApproved",
-      "collectorUpdatedAt": FieldValue.serverTimestamp(),
+    // 2) user becomes collector immediately
+    tx.set(userRef, {
+      "role": "collector",
+      "Roles": "collector",
+
+      "adminReviewedAt": FieldValue.serverTimestamp(),
+      "adminStatus": "approved",
+      "adminVerified": true,
+
+      "collectorActive": true,
+      "collectorStatus": "approved",
+
+      // ✅ keep chat the same
+      "junkshopId": junkshopId,
+      "junkshopName": junkshopName,
+
+      // optional compatibility if anything still reads these:
+      "assignedJunkshopUid": junkshopId,
+      "assignedJunkshopName": junkshopName,
+
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
-    await batch.commit();
-  }
-
+  });
+}
   // =====================================================
   // 🔓 ADMIN: download encrypted bytes -> decrypt -> return bytes
   // Works for JPG/PNG. For PDF you still get bytes, but preview needs a PDF widget.
@@ -291,8 +337,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                   ),
                   const SizedBox(height: 6),
                   if (email.isNotEmpty) Text(email, style: TextStyle(color: Colors.grey.shade300)),
-                  const SizedBox(height: 6),
-                  Text("UID: $uid", style: const TextStyle(color: Colors.white54)),
                   const SizedBox(height: 6),
                   Text("Status: $status", style: const TextStyle(color: Colors.white70)),
                   const SizedBox(height: 16),

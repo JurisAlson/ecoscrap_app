@@ -87,7 +87,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   // ----- Junkshops from Firestore -----
   Destination? _selectedJunkshop;
-  List<Destination> _junkshops = [];
+  final List<Destination> _junkshops = [];
 
   // ----- Available collectors dropdown -----
   String? _selectedCollectorId;

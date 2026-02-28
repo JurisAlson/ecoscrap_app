@@ -24,25 +24,35 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
 
   static const List<String> _filterRoles = ["all", "residence", "collector"];
 
+  // Roles that represent "resident/user"
+  static const residenceRoles = [
+    "residence",
+    "resident",
+    "user",
+    "users",
+    "household",
+    "households",
+  ];
+
   String _normRole(dynamic raw) {
     final s = (raw ?? "").toString().trim().toLowerCase();
 
-    if (s == "residence" ||
-        s == "resident" ||
-        s == "user" ||
-        s == "users" ||
-        s == "household" ||
-        s == "households") {
-      return "residence";
-    }
-
     if (s == "collector" || s == "collectors") return "collector";
+    if (residenceRoles.contains(s)) return "residence";
 
     // Hidden roles
     if (s == "admin" || s == "admins") return "admin";
     if (s == "junkshop" || s == "junkshops") return "junkshop";
 
-    return "residence";
+    // IMPORTANT: do NOT default to residence (causes mislabel)
+    return "unknown";
+  }
+
+  bool _isVerifiedResident(Map<String, dynamic> data) {
+    final adminVerified = data["adminVerified"] == true;
+    final adminStatus = (data["adminStatus"] ?? "").toString().toLowerCase();
+    // only approved counts as resident in Users tab
+    return adminVerified && adminStatus == "approved";
   }
 
   Color _roleColor(String role) {
@@ -50,8 +60,9 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       case "collector":
         return Colors.cyanAccent;
       case "residence":
-      default:
         return Colors.greenAccent;
+      default:
+        return Colors.white54;
     }
   }
 
@@ -66,12 +77,11 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       ),
       child: Text(
         role.toUpperCase(),
-        style: TextStyle(color: c, fontWeight: FontWeight.w700, fontSize: 12),
+        style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 12),
       ),
     );
   }
 
-  // Only show this badge when restricted (no "ACTIVE" badge)
   Widget _restrictedBadge() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -82,7 +92,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       ),
       child: const Text(
         "RESTRICTED",
-        style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w800, fontSize: 12),
+        style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w900, fontSize: 12),
       ),
     );
   }
@@ -180,43 +190,50 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const SizedBox(height: 6),
+
+          // ✅ Simple header row (no extra “card header” look)
           const Row(
             children: [
               Icon(Icons.people, color: Colors.white),
               SizedBox(width: 10),
               Text(
                 "User Management",
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18),
               ),
             ],
           ),
           const SizedBox(height: 14),
 
-          // Search
-          TextField(
-            onChanged: (v) => setState(() => _query = v),
-            style: const TextStyle(color: Colors.white),
-            cursorColor: primaryColor,
-            decoration: InputDecoration(
-              hintText: "Search name / email / uid...",
-              hintStyle: TextStyle(color: Colors.grey.shade500),
-              filled: true,
-              fillColor: Colors.white.withOpacity(0.06),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: primaryColor.withOpacity(0.75), width: 1.2),
+          // ✅ Search in a calm card wrapper
+          _panel(
+            child: TextField(
+              onChanged: (v) => setState(() => _query = v),
+              style: const TextStyle(color: Colors.white),
+              cursorColor: primaryColor,
+              decoration: InputDecoration(
+                hintText: "Search name / email / uid...",
+                hintStyle: TextStyle(color: Colors.grey.shade500),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.06),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: primaryColor.withOpacity(0.75), width: 1.2),
+                ),
               ),
             ),
           ),
 
           const SizedBox(height: 10),
 
-          // Filters
+          // ✅ Filters in a compact “section” style (less noisy)
+          _sectionLabel("Filter"),
+          const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -231,7 +248,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                 selectedColor: const Color(0xFF1FA9A7).withOpacity(0.22),
                 labelStyle: TextStyle(
                   color: selected ? const Color(0xFF1FA9A7) : Colors.white.withOpacity(0.75),
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),
                 side: BorderSide(
@@ -239,9 +256,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                       ? const Color(0xFF1FA9A7).withOpacity(0.6)
                       : Colors.white.withOpacity(0.08),
                 ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(999),
-                ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                 elevation: 0,
                 pressElevation: 0,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -278,8 +293,12 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                   final data = d.data();
                   final role = _normRole(data["Roles"] ?? data["role"] ?? data["roles"]);
 
-                  // Hide admin + junkshop entirely
-                  if (role == "admin" || role == "junkshop") return false;
+                  // Hide admin + junkshop + unknown
+                  if (role == "admin" || role == "junkshop" || role == "unknown") return false;
+
+                  // ✅ KEY FIX kept (function unchanged):
+                  // If it is a resident/user, show ONLY if admin approved.
+                  if (role == "residence" && !_isVerifiedResident(data)) return false;
 
                   final name = (data["Name"] ?? data["name"] ?? "").toString();
                   final email =
@@ -296,13 +315,12 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                 }).toList();
 
                 if (filtered.isEmpty) {
-                  return const Center(
-                    child: Text("No users found.", style: TextStyle(color: Colors.white70)),
-                  );
+                  return _emptyState();
                 }
 
-                return ListView.builder(
+                return ListView.separated(
                   itemCount: filtered.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (_, i) {
                     final d = filtered[i];
                     final data = d.data();
@@ -317,21 +335,17 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                     final restricted = status == "restricted";
 
                     final title = name.isNotEmpty ? name : (email.isNotEmpty ? email : uid);
-
                     final managing = _manageUid == uid;
 
-                    // Darken restricted cards
-                    final cardColor = restricted
-                        ? Colors.white.withOpacity(0.03)
-                        : Colors.white.withOpacity(0.06);
+                    final cardColor =
+                        restricted ? Colors.white.withOpacity(0.03) : Colors.white.withOpacity(0.045);
 
                     final borderColor = restricted
                         ? Colors.orangeAccent.withOpacity(0.25)
-                        : Colors.white.withOpacity(0.08);
+                        : Colors.white.withOpacity(0.07);
 
                     return AnimatedContainer(
                       duration: const Duration(milliseconds: 180),
-                      margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
                         color: cardColor,
@@ -339,7 +353,20 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                         border: Border.all(color: borderColor),
                       ),
                       child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // ✅ Small left accent (makes it feel like a dashboard row, not a button)
+                          Container(
+                            width: 4,
+                            height: restricted ? 84 : 78,
+                            decoration: BoxDecoration(
+                              color: (restricted ? Colors.orangeAccent : _roleColor(role))
+                                  .withOpacity(0.55),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+
                           Expanded(
                             child: Opacity(
                               opacity: restricted ? 0.82 : 1,
@@ -350,7 +377,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                                     title,
                                     style: const TextStyle(
                                       color: Colors.white,
-                                      fontWeight: FontWeight.w800,
+                                      fontWeight: FontWeight.w900,
                                     ),
                                   ),
                                   const SizedBox(height: 4),
@@ -373,61 +400,33 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                             ),
                           ),
 
-                          // Clean UI: Manage button first
+                          const SizedBox(width: 10),
+
+                          // ✅ Actions (same behavior, calmer styling)
                           if (!managing)
-                            TextButton(
-                              style: TextButton.styleFrom(
-                                foregroundColor: Colors.white.withOpacity(0.85),
-                                backgroundColor: Colors.white.withOpacity(0.06),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(color: Colors.white.withOpacity(0.08)),
-                                ),
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                              ),
-                              onPressed: _busy ? null : () => setState(() => _manageUid = uid),
-                              child: const Text(
-                                "Manage",
-                                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-                              ),
+                            _quietButton(
+                              label: "Manage",
+                              onTap: _busy ? null : () => setState(() => _manageUid = uid),
                             )
                           else
-                            Row(
+                            Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                OutlinedButton(
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.white70,
-                                    side: BorderSide(color: Colors.white.withOpacity(0.12)),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  ),
-                                  onPressed: _busy ? null : () => setState(() => _manageUid = null),
-                                  child: const Text(
-                                    "Close",
-                                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-                                  ),
+                                _quietOutlinedButton(
+                                  label: "Close",
+                                  onTap: _busy ? null : () => setState(() => _manageUid = null),
                                 ),
-                                const SizedBox(width: 8),
-                                ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor:
-                                        restricted ? Colors.greenAccent : Colors.orangeAccent,
-                                    foregroundColor: Colors.black,
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  ),
-                                  onPressed: _busy
+                                const SizedBox(height: 8),
+                                _primaryActionButton(
+                                  label: restricted ? "Unrestrict" : "Restrict",
+                                  background: restricted ? Colors.greenAccent : Colors.orangeAccent,
+                                  onTap: _busy
                                       ? null
                                       : () => _setRestricted(
                                             uid: uid,
                                             name: title,
                                             restricted: !restricted,
                                           ),
-                                  child: Text(
-                                    restricted ? "Unrestrict" : "Restrict",
-                                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
-                                  ),
                                 ),
                               ],
                             ),
@@ -440,6 +439,104 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ---------- UI helpers (no logic changes) ----------
+  Widget _panel({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.045),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        color: Colors.white.withOpacity(0.60),
+        fontSize: 11,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 0.6,
+      ),
+    );
+  }
+
+  Widget _emptyState() {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.045),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withOpacity(0.07)),
+        ),
+        child: Text(
+          "No users found.",
+          style: TextStyle(color: Colors.white.withOpacity(0.75), fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+
+  Widget _quietButton({required String label, required VoidCallback? onTap}) {
+    return TextButton(
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.white.withOpacity(0.85),
+        backgroundColor: Colors.white.withOpacity(0.05),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Colors.white.withOpacity(0.07)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      onPressed: onTap,
+      child: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _quietOutlinedButton({required String label, required VoidCallback? onTap}) {
+    return OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white70,
+        side: BorderSide(color: Colors.white.withOpacity(0.12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      onPressed: onTap,
+      child: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _primaryActionButton({
+    required String label,
+    required Color background,
+    required VoidCallback? onTap,
+  }) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: background,
+        foregroundColor: Colors.black,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        elevation: 0,
+      ),
+      onPressed: onTap,
+      child: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
       ),
     );
   }
