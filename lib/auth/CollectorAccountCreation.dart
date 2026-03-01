@@ -24,7 +24,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
 
-  PlatformFile? _pickedFile; // optional ID file
+  PlatformFile? _pickedFile;
   bool _loading = false;
 
   @override
@@ -75,7 +75,6 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   }
 
   Future<void> _pickIdFile() async {
-    // Show reminder BEFORE opening picker
     await _showInfoDialog(
       title: "Upload Government ID (Optional)",
       icon: Icons.verified_user_outlined,
@@ -103,7 +102,6 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
       return;
     }
 
-    // client-side size limit: 10MB (still enforce on Storage rules)
     if (file.size > 10 * 1024 * 1024) {
       _toast("File too large (Max 10MB).", error: true);
       return;
@@ -117,7 +115,6 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
 
     setState(() => _pickedFile = file);
 
-    // Show confirmation AFTER picking
     await _showInfoDialog(
       title: "File Selected",
       icon: Icons.check_circle_outline,
@@ -135,14 +132,10 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     return List.generate(len, (_) => chars[r.nextInt(chars.length)]).join();
   }
 
-  // =====================================================
-  // ✅ Encrypt + Upload KYC (Storage gets only encrypted bytes)
-  // Saves decrypt metadata to collectorKYC/{uid} (admin-only)
-  // =====================================================
   Future<void> _uploadEncryptedKyc({
     required String uid,
     required Uint8List fileBytes,
-    required String originalFileName, // e.g. kyc_xxx.jpg
+    required String originalFileName,
   }) async {
     final eph = await KycSharedKey.newEphemeral();
     final ephPubBytes = await KycSharedKey.publicKeyBytes(eph);
@@ -206,13 +199,12 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
       final reqRef = db.collection("collectorRequests").doc(uid);
       final kycRef = db.collection("collectorKYC").doc(uid);
 
+      // block if already pending (active request)
       final snap0 = await userRef.get();
       final existing0 = snap0.data() ?? {};
       final status0 = (existing0["collectorStatus"] ?? "").toString().toLowerCase();
-      final isActive0 =
-          status0 == "pending" || status0 == "adminapproved" || status0 == "junkshopaccepted";
-      if (isActive0) {
-        _toast("You already have an active request ($status0).", error: true);
+      if (status0 == "pending") {
+        _toast("You already have a pending collector request.", error: true);
         return;
       }
 
@@ -220,12 +212,8 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
 
       if (_pickedFile != null) {
         final ext = (_pickedFile!.extension ?? "").toLowerCase();
-        if (!['jpg', 'jpeg', 'png', 'pdf'].contains(ext)) {
-          _toast("Invalid file type. Use JPG/PNG/PDF only.", error: true);
-          return;
-        }
-
         final normalizedExt = (ext == "jpeg") ? "jpg" : ext;
+
         final rid = _randId();
         kycFileName = "kyc_$rid.$normalizedExt";
 
@@ -246,42 +234,40 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
         final existing = userSnap.data() ?? {};
 
         final status = (existing["collectorStatus"] ?? "").toString().toLowerCase();
-        final isActive =
-            status == "pending" || status == "adminapproved" || status == "junkshopaccepted";
-        if (isActive) throw Exception("Already has active request ($status)");
+        if (status == "pending") {
+          throw Exception("Already has pending request");
+        }
 
+        // ✅ IMPORTANT: Role stays USER while waiting
         tx.set(
           userRef,
           {
             "uid": uid,
             "emailDisplay": email,
             "name": _name.text.trim(),
+
+            // collector-only fields
+            "collectorVerified": false,
             "collectorStatus": "pending",
             "collectorSubmittedAt": FieldValue.serverTimestamp(),
             "collectorUpdatedAt": FieldValue.serverTimestamp(),
+            "collectorActive": false,
+
             if (!existing.containsKey("createdAt")) "createdAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),
         );
 
-        // ✅ PUBLIC doc — DO NOT show email publicly if you want:
         tx.set(
           reqRef,
           {
             "collectorUid": uid,
             "publicName": _name.text.trim(),
-            // REMOVE email from public doc:
-            // "emailDisplay": email,
-
             "hasKycFile": kycFileName != null,
             "status": "pending",
             "submittedAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp(),
-
-            "acceptedByJunkshopUid": "",
-            "acceptedAt": FieldValue.delete(),
-            "rejectedByJunkshops": [],
           },
           SetOptions(merge: true),
         );
@@ -291,10 +277,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
         } else {
           tx.set(
             kycRef,
-            {
-              "status": "pending",
-              "updatedAt": FieldValue.serverTimestamp(),
-            },
+            {"status": "pending", "updatedAt": FieldValue.serverTimestamp()},
             SetOptions(merge: true),
           );
         }
@@ -314,9 +297,6 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     }
   }
 
-  // =========================
-  // UI
-  // =========================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -336,7 +316,6 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
               children: [
                 _HeroHeader(),
                 const SizedBox(height: 14),
-
                 _InfoCard(
                   title: "Why Plastic Collectors are important",
                   icon: Icons.recycling,
@@ -351,22 +330,17 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                     _Bullet(text: "Better recycling and recovery"),
                   ],
                 ),
-
                 const SizedBox(height: 12),
-
-                _SectionTitle("Your Details"),
+                const _SectionTitle("Your Details"),
                 const SizedBox(height: 10),
                 _buildTextField(_name, "Full Name", Icons.person),
-
                 const SizedBox(height: 14),
-
-                _SectionTitle("Verification (Optional)"),
+                const _SectionTitle("Verification (Optional)"),
                 const SizedBox(height: 10),
-
-                _InfoCard(
+                const _InfoCard(
                   title: "Accepted Government IDs",
                   icon: Icons.badge_outlined,
-                  children: const [
+                  children: [
                     _Bullet(text: "Driver’s License"),
                     _Bullet(text: "National ID"),
                     _Bullet(text: "Voter’s ID"),
@@ -378,13 +352,11 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 12),
-
-                _InfoCard(
+                const _InfoCard(
                   title: "Your Security is our Priority",
                   icon: Icons.lock_outline,
-                  children: const [
+                  children: [
                     Text(
                       "Your ID is encrypted and will be used ONLY for verification purposes. "
                       "It will not be used for any other purpose or shared publicly.",
@@ -392,9 +364,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 14),
-
                 _UploadTile(
                   pickedFileName: _pickedFile?.name,
                   onTap: _loading ? null : _pickIdFile,
@@ -402,9 +372,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                       ? null
                       : () => setState(() => _pickedFile = null),
                 ),
-
                 const SizedBox(height: 18),
-
                 SizedBox(
                   height: 54,
                   child: ElevatedButton(
@@ -426,9 +394,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                           ),
                   ),
                 ),
-
                 const SizedBox(height: 10),
-
                 const Text(
                   "By submitting, you confirm that the information provided is true and correct.",
                   textAlign: TextAlign.center,
@@ -467,9 +433,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
   }
 }
 
-// =========================
-// UI Components
-// =========================
+// ========================= UI Components =========================
 
 class _HeroHeader extends StatelessWidget {
   @override
@@ -510,7 +474,7 @@ class _HeroHeader extends StatelessWidget {
                 ),
                 SizedBox(height: 6),
                 Text(
-                  "Help collect, recover, and recycle plastic responsibly — and get verified for safer transactions.",
+                  "Submit your application for admin verification.",
                   style: TextStyle(color: Colors.white70, height: 1.35),
                 ),
               ],

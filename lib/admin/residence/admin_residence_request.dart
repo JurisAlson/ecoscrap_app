@@ -2,16 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../admin_theme_page.dart';
-import 'collector_details_page.dart';
+import '../residence/residence_details_page.dart';
 
-class AdminCollectorRequestsTab extends StatefulWidget {
-  const AdminCollectorRequestsTab({super.key});
+class AdminResidentRequestsTab extends StatefulWidget {
+  const AdminResidentRequestsTab({super.key});
 
   @override
-  State<AdminCollectorRequestsTab> createState() => _AdminCollectorRequestsTabState();
+  State<AdminResidentRequestsTab> createState() => _AdminResidentRequestsTabState();
 }
 
-class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
+class _AdminResidentRequestsTabState extends State<AdminResidentRequestsTab> {
   static const Color _primary = Color(0xFF1FA9A7);
 
   Widget _panel({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
@@ -72,7 +72,7 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
             ),
             const SizedBox(height: 12),
             const Text(
-              "No New Collector Requests",
+              "No New Resident Requests",
               style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 6),
@@ -90,7 +90,7 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
   @override
   Widget build(BuildContext context) {
     final stream = FirebaseFirestore.instance
-        .collection("collectorRequests")
+        .collection("residentRequests")
         .where("status", isEqualTo: "pending")
         .snapshots();
 
@@ -98,7 +98,7 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
       backgroundColor: AdminTheme.bg,
       body: AdminTheme.background(
         child: Padding(
-          // ✅ match Resident tab padding style
+          // ✅ match the new style padding
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -106,10 +106,10 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
               const SizedBox(height: 6),
               const Row(
                 children: [
-                  Icon(Icons.local_shipping_outlined, color: Colors.white),
+                  Icon(Icons.home_outlined, color: Colors.white),
                   SizedBox(width: 10),
                   Text(
-                    "Collector Requests",
+                    "Resident Requests",
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -150,15 +150,15 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            "Review submissions to confirm collector eligibility before approving access.",
+                            "Review submissions to confirm resident information before approving access.",
                             style: TextStyle(color: Colors.white.withOpacity(0.62), height: 1.25),
                           ),
                           const SizedBox(height: 10),
                           _pill(
-                            "JUNKSHOP ASSIGNMENT",
-                            bg: Colors.orangeAccent.withOpacity(0.14),
-                            fg: Colors.orangeAccent,
-                            icon: Icons.storefront_outlined,
+                            "RESIDENT VERIFICATION",
+                            bg: _primary.withOpacity(0.14),
+                            fg: _primary,
+                            icon: Icons.home_work_outlined,
                           ),
                         ],
                       ),
@@ -203,11 +203,11 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                         final d = docs[i];
                         final data = d.data();
 
-                        final name = (data["publicName"] ?? "Collector").toString();
+                        final name = (data["publicName"] ?? "Resident").toString();
                         final email = (data["emailDisplay"] ?? "").toString();
 
-                        // Optional: show assigned junkshop if your request doc contains it
-                        final junkshopName = (data["junkshopName"] ?? "").toString().trim();
+                        // Optional: show unit/block/phase/etc if your request doc contains it
+                        final unit = (data["unit"] ?? data["unitNo"] ?? "").toString().trim();
 
                         return Container(
                           margin: const EdgeInsets.only(bottom: 10),
@@ -217,7 +217,7 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => CollectorDetailsPage(requestRef: d.reference),
+                                  builder: (_) => ResidentDetailsPage(requestRef: d.reference),
                                 ),
                               );
                             },
@@ -230,11 +230,11 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                                     width: 44,
                                     height: 44,
                                     decoration: BoxDecoration(
-                                      color: Colors.orangeAccent.withOpacity(0.12),
+                                      color: _primary.withOpacity(0.12),
                                       borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(color: Colors.orangeAccent.withOpacity(0.20)),
+                                      border: Border.all(color: _primary.withOpacity(0.20)),
                                     ),
-                                    child: const Icon(Icons.local_shipping_outlined, color: Colors.orangeAccent),
+                                    child: const Icon(Icons.home_outlined, color: _primary),
                                   ),
                                   const SizedBox(width: 12),
 
@@ -262,10 +262,10 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                                             fontSize: 12,
                                           ),
                                         ),
-                                        if (junkshopName.isNotEmpty) ...[
+                                        if (unit.isNotEmpty) ...[
                                           const SizedBox(height: 6),
                                           Text(
-                                            "Junkshop: $junkshopName",
+                                            "Unit: $unit",
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
@@ -278,8 +278,8 @@ class _AdminCollectorRequestsTabState extends State<AdminCollectorRequestsTab> {
                                         const SizedBox(height: 10),
                                         _pill(
                                           "PENDING REVIEW",
-                                          bg: Colors.orangeAccent.withOpacity(0.14),
-                                          fg: Colors.orangeAccent,
+                                          bg: _primary.withOpacity(0.14),
+                                          fg: _primary,
                                           icon: Icons.hourglass_bottom_rounded,
                                         ),
                                       ],

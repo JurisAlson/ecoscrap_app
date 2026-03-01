@@ -157,7 +157,9 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       final reqData = reqDoc.data() ?? {};
 
       junkshopUid = (reqData['acceptedByJunkshopUid'] ?? "").toString().trim();
-      junkshopName = (reqData['acceptedByJunkshopName'] ?? reqData['junkshopName'] ?? junkshopName)
+      junkshopName = (reqData['acceptedByJunkshopName'] ??
+              reqData['junkshopName'] ??
+              junkshopName)
           .toString()
           .trim();
 
@@ -254,10 +256,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
           const SizedBox(height: 24),
 
-    
-
-          const SizedBox(height: 12),
-
           // ✅ Logout
           SizedBox(
             width: double.infinity,
@@ -286,6 +284,10 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     );
   }
 
+  // ✅ UPDATED: Admin-approved collectors can enter dashboard immediately
+  // New separated logic:
+  // - allow if Roles == collector AND collectorStatus == "adminApproved"
+  // - legacy fallback remains
   Widget _pendingVerificationScreenNew({
     required String collectorStatus,
     required bool legacyAdminOk,
@@ -302,8 +304,9 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       title = "Collector request submitted";
       body = "Please wait for admin approval.";
     } else if (s == "adminapproved") {
+      // should not normally show if allowDashboard is correct
       title = "Admin approved";
-      body = "Now wait for a junkshop to accept you (first claim).";
+      body = "You may now access the Collector Dashboard.";
     } else if (s == "rejected") {
       title = "Request rejected";
       body = "Your collector request was rejected.\nYou may submit again.";
@@ -381,13 +384,22 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     return rolesRaw == "collector" || rolesRaw == "collectors";
   }
 
-  bool _isJunkshopVerifiedNew(Map<String, dynamic>? data) {
-    return data?['junkshopVerified'] == true ||
-        (data?['junkshopStatus'] ?? "").toString().toLowerCase() == "verified";
+  // ✅ NEW FLOW: allow entry once admin approved (no junkshop needed)
+  bool _isCollectorAdminApproved(Map<String, dynamic>? data) {
+    final s = (data?['collectorStatus'] ?? "").toString().trim().toLowerCase();
+    return s == "adminapproved";
+  }
+
+  // ✅ legacy fallback (keep)
+  bool _isLegacyCollectorVerified(Map<String, dynamic>? data) {
+    final legacyAdminOk = data?['adminVerified'] == true;
+    final legacyAdminStatus = (data?['adminStatus'] ?? "").toString().toLowerCase();
+    final legacyJunkshopOk = data?['junkshopVerified'] == true;
+    final legacyActive = data?['collectorActive'] == true;
+    return legacyAdminOk && legacyAdminStatus == "approved" && legacyJunkshopOk && legacyActive;
   }
 
   void _openNotifsDrawer() {
-    // close keyboard etc if needed
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
@@ -430,7 +442,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
         // NEW FLOW checks
         final isCollectorRole = _isCollectorRole(data);
-        final junkshopOkNew = _isJunkshopVerifiedNew(data);
         final collectorStatus = (data?['collectorStatus'] ?? "").toString();
 
         // LEGACY checks
@@ -438,9 +449,9 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         final legacyJunkshopOk = data?['junkshopVerified'] == true;
         final legacyActive = data?['collectorActive'] == true;
 
+        // ✅ IMPORTANT: allow dashboard when adminApproved (no junkshop needed)
         final allowDashboard =
-            (isCollectorRole && junkshopOkNew) ||
-                (legacyAdminOk && legacyJunkshopOk && legacyActive);
+            (isCollectorRole && _isCollectorAdminApproved(data)) || _isLegacyCollectorVerified(data);
 
         if (!allowDashboard) {
           return Scaffold(
@@ -579,8 +590,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           ),
           const SizedBox(height: 16),
 
-          // ✅ If you already have Firestore notifications, replace these tiles
-          // with your real notifications list.
           _notifTile(
             icon: Icons.info_outline,
             title: "Welcome!",

@@ -1,13 +1,14 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-//import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../auth/login_page.dart';
-//import '../security/admin_profile_encrypt.dart';
 
 import 'admin_overview_tab.dart';
 import 'collectors/admin_collector_requests.dart';
+import 'residence/admin_residence_request.dart';
 import 'users/admin_users_management_tab.dart';
 
 class AdminHomePage extends StatefulWidget {
@@ -30,13 +31,9 @@ class _AdminHomePageState extends State<AdminHomePage> {
   final _pages = const [
     AdminOverviewTab(),
     AdminCollectorRequestsTab(),
+    AdminResidentRequestsTab(),
     AdminUsersManagementTab(),
   ];
-
-  @override
-  void initState() {
-    super.initState();
-  }
 
   Future<void> _logout() async {
     await FirebaseAuth.instance.signOut();
@@ -47,6 +44,30 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
+  // -----------------------------
+  // Streams for badges / counts
+  // -----------------------------
+
+  // Pending collector requests
+  Stream<int> _pendingCollectorsCount() {
+    return FirebaseFirestore.instance
+        .collection("collectorRequests")
+        .where("status", isEqualTo: "pending")
+        .snapshots()
+        .map((s) => s.size);
+  }
+
+  // Pending resident requests
+  Stream<int> _pendingResidentsCount() {
+    return FirebaseFirestore.instance
+        .collection("residentRequests")
+        .where("status", isEqualTo: "pending")
+        .snapshots()
+        .map((s) => s.size);
+  }
+
+  // ✅ Count ONLY approved residents as "users"
+  // This excludes: pending / rejected / unverified
 
   @override
   Widget build(BuildContext context) {
@@ -101,11 +122,19 @@ class _AdminHomePageState extends State<AdminHomePage> {
                             ),
                             const Text(
                               "Administrator",
-                              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
+
+                            // ✅ show "Users: X" but count ONLY approved users
                           ],
                         ),
                       ),
+
+                      // Notifications icon (keep yours)
                       _iconButton(
                         Icons.notifications_outlined,
                         badge: false,
@@ -147,8 +176,28 @@ class _AdminHomePageState extends State<AdminHomePage> {
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _navItem(0, Icons.dashboard_outlined, "Overview"),
-                    _navItem(1, Icons.local_shipping_outlined, "Collectors"),
-                    _navItem(2, Icons.people_alt_outlined, "Users"),
+
+                    // ✅ Collectors with pending badge
+                    StreamBuilder<int>(
+                      stream: _pendingCollectorsCount(),
+                      builder: (context, snap) {
+                        final pending = (snap.data ?? 0) > 0;
+                        return _navItem(1, Icons.local_shipping_outlined, "Collectors",
+                            badge: pending);
+                      },
+                    ),
+
+                    // ✅ Residents with pending badge
+                    StreamBuilder<int>(
+                      stream: _pendingResidentsCount(),
+                      builder: (context, snap) {
+                        final pending = (snap.data ?? 0) > 0;
+                        return _navItem(2, Icons.home_outlined, "Residents",
+                            badge: pending);
+                      },
+                    ),
+
+                    _navItem(3, Icons.people_alt_outlined, "Users"),
                   ],
                 ),
               ),
@@ -159,14 +208,39 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
-  Widget _navItem(int index, IconData icon, String label) {
+  // ✅ updated to support optional badge
+  Widget _navItem(int index, IconData icon, String label, {bool badge = false}) {
     final isActive = _index == index;
+
     return GestureDetector(
       onTap: () => setState(() => _index = index),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: isActive ? primaryColor : Colors.grey.shade500),
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Icon(icon, color: isActive ? primaryColor : Colors.grey.shade500),
+
+              if (badge)
+                Positioned(
+                  right: -2,
+                  top: -2,
+                  child: Container(
+                    width: 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: bgColor,
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 4),
           Text(
             label.toUpperCase(),
@@ -287,14 +361,14 @@ class _AdminHomePageState extends State<AdminHomePage> {
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
+              children: const [
+                Text(
                   "Admin Tools",
                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  "• Overview \n• Manage user Roles\n• Review collectors",
+                SizedBox(height: 8),
+                Text(
+                  "• Overview\n• Review collectors\n• Review residents (Palo Alto)\n• Manage users",
                   style: TextStyle(color: Colors.white70, height: 1.35, fontSize: 13),
                 ),
               ],

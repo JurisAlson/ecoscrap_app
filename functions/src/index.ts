@@ -12,6 +12,69 @@ import * as crypto from "crypto";
 admin.initializeApp();
 setGlobalOptions({ maxInstances: 10 });
 
+/* ADMIN-ONLY: Reject resident
+   - marks residentRequests/{uid} as rejected
+   - cleanup + revert handled by revertResidentOnRejected trigger
+*/
+export const adminRejectResident = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    if (request.auth.token?.admin !== true)
+      throw new HttpsError("permission-denied", "Admin only.");
+
+    const uid = String(request.data?.uid || "").trim();
+    const reason = String(request.data?.reason || "").trim();
+    if (!uid) throw new HttpsError("invalid-argument", "uid required");
+
+    await admin.firestore().collection("residentRequests").doc(uid).set(
+      {
+        status: "rejected",
+        adminStatus: "rejected",
+        adminVerified: false,
+        adminReviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+        rejectReason: reason,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return { ok: true, uid };
+  }
+);
+export const sanitizeResidentRequestPII = onDocumentWritten(
+  { document: "residentRequests/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    const after = event.data?.after;
+    if (!after?.exists) return;
+
+    const beforeData = event.data?.before?.data() as any | undefined;
+    const afterData = after.data() as any;
+
+    // Only act if PII exists now
+    const hasPII =
+      afterData?.emailDisplay != null || afterData?.publicName != null;
+
+    if (!hasPII) return;
+
+    // If it was already removed before, don't repeat
+    const alreadySanitized =
+      (beforeData?.emailDisplay == null) &&
+      (beforeData?.publicName == null) &&
+      (beforeData != null);
+
+    if (alreadySanitized) return;
+
+    await after.ref.update({
+      emailDisplay: admin.firestore.FieldValue.delete(),
+      publicName: admin.firestore.FieldValue.delete(),
+    });
+
+    logger.info("residentRequests sanitized (PII removed)", {
+      uid: event.params.uid,
+    });
+  }
+);
 /* ====================================================
   PUSH HELPERS
 ==================================================== */
@@ -230,7 +293,141 @@ export const adminDeleteUser = onCall(
     }
   }
 );
+// Revert
+export const revertCollectorOnRejected = onDocumentUpdated(
+  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!before || !after) return;
 
+    const uid = String(event.params.collectorUid);
+
+    const b = String(before.status || "").toLowerCase();
+    const a = String(after.status || "").toLowerCase();
+    if (a === b) return;
+
+    // ✅ When admin rejects (or you mark as rejected)
+    if (a !== "rejected") return;
+
+    const db = admin.firestore();
+
+    // ✅ revert custom claims (collector -> false)
+    try {
+      const user = await admin.auth().getUser(uid);
+      const existing = user.customClaims || {};
+      await admin.auth().setCustomUserClaims(uid, {
+        ...existing,
+        collector: false,
+      });
+    } catch (e) {
+      logger.warn("Failed to reset collector claim", { uid, err: String(e) });
+    }
+
+    // ✅ revert Firestore role ONLY if they are currently collector
+    // (If they are resident-approved or junkshop, we don't touch those)
+    const userRef = db.collection("Users").doc(uid);
+    const userSnap = await userRef.get();
+    const u = (userSnap.data() || {}) as any;
+
+    const currentRole = String(u.Roles || u.role || "").toLowerCase();
+
+    // If they were collector, revert to user.
+    if (currentRole === "collector") {
+      await userRef.set(
+        {
+          Roles: "user",
+          role: "user",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    // ✅ delete collectorKYC (optional, for privacy & clean reapply)
+    await db.collection("collectorKYC").doc(uid).delete().catch(() => null);
+
+    // ✅ allow resubmit: easiest is delete the collectorRequests doc
+    await event.data!.after.ref.set(
+  {
+    archived: true,
+    archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // remove anything sensitive here too
+    emailDisplay: admin.firestore.FieldValue.delete(),
+    publicName: admin.firestore.FieldValue.delete(),
+  },
+  { merge: true }
+);
+
+    logger.info("Collector rejected: reverted + cleared for resubmit", { uid });
+  }
+);
+
+export const revertResidentOnRejected = onDocumentUpdated(
+  { document: "residentRequests/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!before || !after) return;
+
+    const uid = String(event.params.uid);
+
+    const b = String(before.status || "").toLowerCase();
+    const a = String(after.status || "").toLowerCase();
+    if (a === b) return;
+
+    if (a !== "rejected") return;
+
+    const db = admin.firestore();
+    const bucket = admin.storage().bucket();
+
+    // ✅ delete residentKYC file + doc (optional but recommended)
+    try {
+      const kycSnap = await db.collection("residentKYC").doc(uid).get();
+      const kyc = (kycSnap.data() || {}) as any;
+      const storagePath = String(kyc.storagePath || "").trim();
+      if (storagePath) {
+        await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
+      }
+    } catch (e) {
+      logger.warn("residentKYC cleanup failed", { uid, err: String(e) });
+    }
+
+    await db.collection("residentKYC").doc(uid).delete().catch(() => null);
+
+    // ✅ revert user back to normal (ONLY if they were "resident" role)
+    const userRef = db.collection("Users").doc(uid);
+    const userSnap = await userRef.get();
+    const u = (userSnap.data() || {}) as any;
+
+    const currentRole = String(u.Roles || u.role || "").toLowerCase();
+    if (currentRole === "resident") {
+      await userRef.set(
+        {
+          Roles: "user",
+          role: "user",
+          residentStatus: "rejected",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } else {
+      // even if they weren't resident role, still mark status cleanly
+      await userRef.set(
+        {
+          residentStatus: "rejected",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    // ✅ allow resubmit: delete residentRequests doc
+    await event.data!.after.ref.delete().catch(() => null);
+
+    logger.info("Resident rejected: reverted + cleared for resubmit", { uid });
+  }
+);
 /* ====================================================
    ADMIN-ONLY: Grant/Revoke admin claim
 ==================================================== */
@@ -718,90 +915,120 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
 );
 
 /* ====================================================
-   PERMIT CLEANUP
+   RESIDENT KYC CLEANUP LIFECYCLE
+   Runs every 24 hours (Asia/Manila)
+   Rules:
+   - rejected → delete immediately (file + doc)
+   - pending → delete after 30 days
+   - approved → delete file after 15 days (doc retained, marked expired)
 ==================================================== */
-async function cleanupPermits() {
+
+async function cleanupResidentKyc() {
   const db = admin.firestore();
   const bucket = admin.storage().bucket();
 
-  const cutoffUnapproved = daysAgo(30);
+  const cutoffPending = daysAgo(30);
   const cutoffApproved = daysAgo(15);
 
-  logger.info("Starting permit cleanup", {
-    cutoffUnapproved: cutoffUnapproved.toDate().toISOString(),
+  logger.info("Starting residentKYC cleanup", {
+    cutoffPending: cutoffPending.toDate().toISOString(),
     cutoffApproved: cutoffApproved.toDate().toISOString(),
-  });
-
-  const unapprovedSnap = await db
-    .collection("permitRequests")
-    .where("approved", "==", false)
-    .where("submittedAt", "<=", cutoffUnapproved)
-    .limit(200)
-    .get();
-
-  const approvedSnap = await db
-    .collection("permitRequests")
-    .where("approved", "==", true)
-    .where("approvedAt", "<=", cutoffApproved)
-    .limit(200)
-    .get();
-
-  const docsToDelete = [...unapprovedSnap.docs, ...approvedSnap.docs];
-
-  if (docsToDelete.length === 0) {
-    logger.info("No permits eligible for cleanup");
-    return { deleted: 0 };
-  }
-
-  logger.info("Permits found", {
-    total: docsToDelete.length,
-    unapproved: unapprovedSnap.size,
-    approved: approvedSnap.size,
   });
 
   let deleted = 0;
 
-  for (const doc of docsToDelete) {
+  const snap = await db.collection("residentKYC").limit(500).get();
+
+  for (const doc of snap.docs) {
     const data = doc.data() as any;
-    const permitPath = data.permitPath as string | undefined;
+    const uid = doc.id;
+
+    const status = String(data.status || "").toLowerCase();
+    const createdAt = data.createdAt;
+    const approvedAt = data.approvedAt;
+    const storagePath = String(data.storagePath || "").trim();
 
     try {
-      if (permitPath) {
-        await bucket.file(permitPath).delete({ ignoreNotFound: true } as any);
+      // rejected → delete immediately
+      if (status === "rejected") {
+        if (storagePath) {
+          await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
+        }
+
+        await doc.ref.delete();
+        deleted++;
+        logger.info("Deleted rejected residentKYC", { uid });
+        continue;
       }
 
-      await doc.ref.update({
-        permitExpired: true,
-        permitDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      // pending → delete after 30 days
+      if (
+        status === "pending" &&
+        createdAt &&
+        createdAt.toMillis() <= cutoffPending.toMillis()
+      ) {
+        if (storagePath) {
+          await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
+        }
 
-      deleted++;
-      logger.info("Permit file removed", { requestId: doc.id, permitPath });
+        await doc.ref.delete();
+        deleted++;
+        logger.info("Deleted expired pending residentKYC", { uid });
+        continue;
+      }
+
+      // approved → delete file after 15 days, keep doc
+      if (
+        status === "approved" &&
+        approvedAt &&
+        approvedAt.toMillis() <= cutoffApproved.toMillis() &&
+        !data.kycExpired
+      ) {
+        if (storagePath) {
+          await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
+        }
+
+        await doc.ref.update({
+          kycExpired: true,
+          kycDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        deleted++;
+        logger.info("Deleted approved residentKYC file (doc retained)", { uid });
+      }
+
     } catch (err: any) {
-      logger.error("Permit deletion failed", { requestId: doc.id, err: String(err) });
+      logger.error("residentKYC cleanup failed", {
+        uid,
+        error: String(err),
+      });
     }
   }
 
-  logger.info("Cleanup finished", { deleted });
+  logger.info("residentKYC cleanup finished", { deleted });
   return { deleted };
 }
 
-export const cleanupPermitsByRetention = onSchedule(
-  { schedule: "every 24 hours", region: "asia-southeast1", timeZone: "Asia/Manila" },
+export const cleanupResidentKycByRetention = onSchedule(
+  {
+    schedule: "every 24 hours",
+    region: "asia-southeast1",
+    timeZone: "Asia/Manila",
+  },
   async () => {
-    const result = await cleanupPermits();
-    logger.info("Scheduled cleanup result", result);
+    const result = await cleanupResidentKyc();
+    logger.info("Scheduled residentKYC cleanup result", result);
   }
 );
 
-export const runPermitCleanupNow = onRequest(
+/* Optional manual trigger */
+export const runResidentKycCleanupNow = onRequest(
   { region: "asia-southeast1" },
   async (req, res) => {
     try {
-      const result = await cleanupPermits();
+      const result = await cleanupResidentKyc();
       res.status(200).json({ ok: true, ...result });
     } catch (err: any) {
-      logger.error("Manual cleanup crashed", { err: String(err) });
       res.status(500).json({ ok: false, error: String(err) });
     }
   }
@@ -1193,6 +1420,53 @@ export const notifyCollectorJunkshopRejected = onDocumentUpdated(
     );
 
     logger.info("Collector junkshop rejection notified", { uid, rejectedByUid });
+  }
+);
+
+//restricted account
+export const adminSetUserRestricted = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    if (request.auth.token?.admin !== true)
+      throw new HttpsError("permission-denied", "Admin only.");
+
+    const uid = String(request.data?.uid || "").trim();
+    const restricted = Boolean(request.data?.restricted);
+
+    if (!uid) throw new HttpsError("invalid-argument", "uid required");
+
+    if (request.auth.uid === uid) {
+      throw new HttpsError("failed-precondition", "You cannot restrict your own admin account.");
+    }
+
+    // ✅ block login
+    await admin.auth().updateUser(uid, { disabled: restricted });
+
+    // ✅ kick logged-in sessions too (recommended)
+    await admin.auth().revokeRefreshTokens(uid);
+
+    // ✅ Firestore status for UI
+    await admin.firestore().collection("Users").doc(uid).set(
+      {
+        status: restricted ? "restricted" : "active",
+        restrictedAt: restricted ? admin.firestore.FieldValue.serverTimestamp() : null,
+        unrestrictedAt: !restricted ? admin.firestore.FieldValue.serverTimestamp() : null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    // optional claim
+    try {
+      const user = await admin.auth().getUser(uid);
+      const existing = user.customClaims || {};
+      await admin.auth().setCustomUserClaims(uid, { ...existing, restricted });
+    } catch (e) {
+      logger.warn("Failed to set restricted claim", { uid, err: String(e) });
+    }
+
+    return { ok: true, uid, restricted };
   }
 );
 
