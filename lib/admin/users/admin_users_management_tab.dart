@@ -15,30 +15,55 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
   String _roleFilter = "all";
   bool _busy = false;
 
-  // keep your brand colors (same as dashboard)
+  // for cleaner UI: tap "Manage" to reveal actions
+  String? _manageUid;
+
+  // Brand colors
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
+  // ✅ Added "restricted" filter
+  static const List<String> _filterRoles = ["all", "residence", "collector", "restricted"];
+
+  // Roles that represent "resident/user"
+  static const residenceRoles = [
+    "residence",
+    "resident",
+    "user",
+    "users",
+    "household",
+    "households",
+  ];
+
   String _normRole(dynamic raw) {
     final s = (raw ?? "").toString().trim().toLowerCase();
-    if (s == "admin" || s == "admins") return "admin";
+
     if (s == "collector" || s == "collectors") return "collector";
+    if (residenceRoles.contains(s)) return "residence";
+
+    // Hidden roles
+    if (s == "admin" || s == "admins") return "admin";
     if (s == "junkshop" || s == "junkshops") return "junkshop";
-    if (s == "user" || s == "users" || s == "household" || s == "households") return "user";
-    return "user";
+
+    // IMPORTANT: do NOT default to residence (causes mislabel)
+    return "unknown";
+  }
+
+  bool _isVerifiedResident(Map<String, dynamic> data) {
+    final adminVerified = data["adminVerified"] == true;
+    final adminStatus = (data["adminStatus"] ?? "").toString().toLowerCase();
+    // only approved counts as resident in Users tab
+    return adminVerified && adminStatus == "approved";
   }
 
   Color _roleColor(String role) {
     switch (role) {
-      case "admin":
-        return Colors.redAccent;
       case "collector":
         return Colors.cyanAccent;
-      case "junkshop":
-        return Colors.purpleAccent;
-      case "user":
-      default:
+      case "residence":
         return Colors.greenAccent;
+      default:
+        return Colors.white54;
     }
   }
 
@@ -53,48 +78,54 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       ),
       child: Text(
         role.toUpperCase(),
-        style: TextStyle(color: c, fontWeight: FontWeight.w700, fontSize: 12),
+        style: TextStyle(color: c, fontWeight: FontWeight.w800, fontSize: 12),
       ),
     );
   }
 
-  Future<void> _deleteUser({
+  Widget _restrictedBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.orangeAccent.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.orangeAccent.withOpacity(0.35)),
+      ),
+      child: const Text(
+        "RESTRICTED",
+        style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w900, fontSize: 12),
+      ),
+    );
+  }
+
+  Future<void> _setRestricted({
     required String uid,
     required String name,
-    required String email,
-    required String role,
+    required bool restricted,
   }) async {
     final currentUid = FirebaseAuth.instance.currentUser?.uid;
 
     if (currentUid != null && uid == currentUid) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("You cannot delete your own admin account.")),
+        const SnackBar(content: Text("You cannot restrict your own admin account.")),
       );
       return;
     }
 
-    if (role == "admin") {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Admin accounts cannot be deleted from here.")),
-      );
-      return;
-    }
-
-    // ✅ DARK / UNIFORM dialog (no white)
     final ok = await showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withOpacity(0.6),
       builder: (_) => AlertDialog(
         backgroundColor: bgColor.withOpacity(0.96),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text("Delete User?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: Text(
+          restricted ? "Restrict User?" : "Unrestrict User?",
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
         content: Text(
-          "This will permanently delete:\n\n"
-          "Name: $name\n"
-          "Email: ${email.isEmpty ? "(none)" : email}\n"
-          "Role: $role\n"
-          "UID: $uid\n\n"
-          "Continue?",
+          restricted
+              ? "This user can still log in, but will see a restricted page and cannot use the app.\n\nUser: $name\nUID: $uid\n\nContinue?"
+              : "Restore access for:\n\nUser: $name\nUID: $uid\n\nContinue?",
           style: const TextStyle(color: Colors.white70, height: 1.35),
         ),
         actions: [
@@ -104,12 +135,12 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
+              backgroundColor: restricted ? Colors.orangeAccent : Colors.greenAccent,
+              foregroundColor: Colors.black,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Delete"),
+            child: Text(restricted ? "Restrict" : "Unrestrict"),
           ),
         ],
       ),
@@ -120,15 +151,22 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
     setState(() => _busy = true);
 
     try {
-      final callable =
-          FirebaseFunctions.instanceFor(region: "asia-southeast1").httpsCallable("adminDeleteUser");
-      await callable.call({"uid": uid});
+      final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
+          .httpsCallable("adminSetUserRestricted");
+
+      await callable.call({
+        "uid": uid,
+        "restricted": restricted,
+      });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: bgColor.withOpacity(0.95),
-          content: const Text("User deleted", style: TextStyle(color: Colors.white)),
+          content: Text(
+            restricted ? "User restricted" : "User un-restricted",
+            style: const TextStyle(color: Colors.white),
+          ),
         ),
       );
     } catch (e) {
@@ -136,7 +174,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: bgColor.withOpacity(0.95),
-          content: Text("Delete failed: $e", style: const TextStyle(color: Colors.white)),
+          content: Text("Action failed: $e", style: const TextStyle(color: Colors.white)),
         ),
       );
     } finally {
@@ -148,92 +186,103 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
   Widget build(BuildContext context) {
     final stream = FirebaseFirestore.instance.collection("Users").snapshots();
 
-    // ✅ IMPORTANT: NO Scaffold here (AdminHomePage already handles it)
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const SizedBox(height: 6),
+
+          // ✅ Simple header row
           const Row(
             children: [
               Icon(Icons.people, color: Colors.white),
               SizedBox(width: 10),
               Text(
                 "User Management",
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18),
               ),
             ],
           ),
           const SizedBox(height: 14),
 
-          // ✅ UNIFORM search field (no white focus)
-          TextField(
-            onChanged: (v) => setState(() => _query = v),
-            style: const TextStyle(color: Colors.white),
-            cursorColor: primaryColor,
-            decoration: InputDecoration(
-              hintText: "Search name / email / uid...",
-              hintStyle: TextStyle(color: Colors.grey.shade500),
-              filled: true,
-              fillColor: Colors.white.withOpacity(0.06),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: primaryColor.withOpacity(0.75), width: 1.2),
+          // ✅ Search
+          _panel(
+            child: TextField(
+              onChanged: (v) => setState(() => _query = v),
+              style: const TextStyle(color: Colors.white),
+              cursorColor: primaryColor,
+              decoration: InputDecoration(
+                hintText: "Search name / email / uid...",
+                hintStyle: TextStyle(color: Colors.grey.shade500),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.06),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: primaryColor.withOpacity(0.75), width: 1.2),
+                ),
               ),
             ),
           ),
 
-const SizedBox(height: 10),
+          const SizedBox(height: 10),
 
-// ✅ UNIFORM chips (no white selected)
-Wrap(
-  spacing: 8,
-  runSpacing: 8,
-  children: ["all", "admin", "user", "junkshop", "collector"]
-      .map((role) {
-    final selected = _roleFilter == role;
+          // ✅ Filters
+          _sectionLabel("Filter"),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _filterRoles.map((role) {
+              final selected = _roleFilter == role;
 
-    return ChoiceChip(
-      label: Text(role.toUpperCase()),
-      selected: selected,
-      onSelected: (_) => setState(() => _roleFilter = role),
+              // ✅ Special label for restricted (optional)
+              final labelWidget = role == "restricted"
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text("RESTRICTED"),
+                        const SizedBox(width: 6),
+                        Icon(Icons.block, size: 14, color: selected ? Colors.orangeAccent : Colors.white54),
+                      ],
+                    )
+                  : Text(role.toUpperCase());
 
-      // ✅ Not too dark (soft surface tone)
-      backgroundColor: const Color(0xFF141B2D),
+              return ChoiceChip(
+                label: labelWidget,
+                selected: selected,
+                onSelected: (_) => setState(() => _roleFilter = role),
+                backgroundColor: const Color(0xFF141B2D),
+                selectedColor: role == "restricted"
+                    ? Colors.orangeAccent.withOpacity(0.18)
+                    : const Color(0xFF1FA9A7).withOpacity(0.22),
+                labelStyle: TextStyle(
+                  color: selected
+                      ? (role == "restricted" ? Colors.orangeAccent : const Color(0xFF1FA9A7))
+                      : Colors.white.withOpacity(0.75),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+                side: BorderSide(
+                  color: selected
+                      ? (role == "restricted"
+                          ? Colors.orangeAccent.withOpacity(0.6)
+                          : const Color(0xFF1FA9A7).withOpacity(0.6))
+                      : Colors.white.withOpacity(0.08),
+                ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                elevation: 0,
+                pressElevation: 0,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              );
+            }).toList(),
+          ),
 
-      // ✅ Not too light (soft teal tint, no white)
-      selectedColor: const Color(0xFF1FA9A7).withOpacity(0.22),
-
-      labelStyle: TextStyle(
-        color: selected
-            ? const Color(0xFF1FA9A7)
-            : Colors.white.withOpacity(0.75), // soft white, not gray
-        fontWeight: FontWeight.w600,
-        fontSize: 12,
-      ),
-
-      side: BorderSide(
-        color: selected
-            ? const Color(0xFF1FA9A7).withOpacity(0.6)
-            : Colors.white.withOpacity(0.08),
-      ),
-
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(999),
-      ),
-
-      elevation: 0,
-      pressElevation: 0,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-  }).toList(),
-),
-  
           const SizedBox(height: 10),
 
           if (_busy)
@@ -261,70 +310,146 @@ Wrap(
 
                 final filtered = docs.where((d) {
                   final data = d.data();
-                  final name = (data["Name"] ?? data["name"] ?? "").toString();
-                  final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
                   final role = _normRole(data["Roles"] ?? data["role"] ?? data["roles"]);
 
-                  final matchesSearch = q.isEmpty ||
-                      name.toLowerCase().contains(q) ||
-                      email.toLowerCase().contains(q) ||
-                      d.id.toLowerCase().contains(q);
+                  // Hide admin + junkshop + unknown
+                  if (role == "admin" || role == "junkshop" || role == "unknown") return false;
 
+                  // status restricted?
+                  final status = (data["status"] ?? "active").toString().trim().toLowerCase();
+                  final restricted = status == "restricted";
+
+                  // ✅ If filter is restricted, show ONLY restricted (role can be collector/residence)
+                  if (_roleFilter == "restricted") {
+                    // still hide unverified residence for cleanliness? up to you.
+                    // BUT since these are restricted users, admins usually want to see them all.
+                    // We'll show restricted regardless of resident verification.
+                    return restricted && _matchesSearch(d, data, q);
+                  }
+
+                  // ✅ Existing rule:
+                  // If it is a resident/user, show ONLY if admin approved.
+                  if (role == "residence" && !_isVerifiedResident(data)) return false;
+
+                  final matchesSearch = _matchesSearch(d, data, q);
                   final matchesRole = _roleFilter == "all" || role == _roleFilter;
+
                   return matchesSearch && matchesRole;
                 }).toList();
 
                 if (filtered.isEmpty) {
-                  return const Center(
-                    child: Text("No users found.", style: TextStyle(color: Colors.white70)),
-                  );
+                  return _emptyState();
                 }
 
-                return ListView.builder(
+                return ListView.separated(
                   itemCount: filtered.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (_, i) {
                     final d = filtered[i];
                     final data = d.data();
 
                     final uid = d.id;
                     final name = (data["Name"] ?? data["name"] ?? "").toString();
-                    final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
+                    final email =
+                        (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
                     final role = _normRole(data["Roles"] ?? data["role"] ?? data["roles"]);
-                    final title = name.isNotEmpty ? name : (email.isNotEmpty ? email : uid);
 
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 10),
+                    final status = (data["status"] ?? "active").toString().trim().toLowerCase();
+                    final restricted = status == "restricted";
+
+                    final title = name.isNotEmpty ? name : (email.isNotEmpty ? email : uid);
+                    final managing = _manageUid == uid;
+
+                    final cardColor =
+                        restricted ? Colors.white.withOpacity(0.03) : Colors.white.withOpacity(0.045);
+
+                    final borderColor = restricted
+                        ? Colors.orangeAccent.withOpacity(0.25)
+                        : Colors.white.withOpacity(0.07);
+
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.06),
+                        color: cardColor,
                         borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        border: Border.all(color: borderColor),
                       ),
                       child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  title,
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-                                ),
-                                const SizedBox(height: 4),
-                                if (email.isNotEmpty)
-                                  Text(email, style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
-                                const SizedBox(height: 8),
-                                _roleBadge(role),
-                              ],
+                          Container(
+                            width: 4,
+                            height: restricted ? 84 : 78,
+                            decoration: BoxDecoration(
+                              color: (restricted ? Colors.orangeAccent : _roleColor(role))
+                                  .withOpacity(0.55),
+                              borderRadius: BorderRadius.circular(999),
                             ),
                           ),
-                          if (role != "admin")
-                            IconButton(
-                              tooltip: "Delete user",
-                              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                              onPressed: _busy
-                                  ? null
-                                  : () => _deleteUser(uid: uid, name: title, email: email, role: role),
+                          const SizedBox(width: 12),
+
+                          Expanded(
+                            child: Opacity(
+                              opacity: restricted ? 0.82 : 1,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  if (email.isNotEmpty)
+                                    Text(
+                                      email,
+                                      style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                                    ),
+                                  const SizedBox(height: 10),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      _roleBadge(role),
+                                      if (restricted) _restrictedBadge(),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(width: 10),
+
+                          if (!managing)
+                            _quietButton(
+                              label: "Manage",
+                              onTap: _busy ? null : () => setState(() => _manageUid = uid),
+                            )
+                          else
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _quietOutlinedButton(
+                                  label: "Close",
+                                  onTap: _busy ? null : () => setState(() => _manageUid = null),
+                                ),
+                                const SizedBox(height: 8),
+                                _primaryActionButton(
+                                  label: restricted ? "Unrestrict" : "Restrict",
+                                  background: restricted ? Colors.greenAccent : Colors.orangeAccent,
+                                  onTap: _busy
+                                      ? null
+                                      : () => _setRestricted(
+                                            uid: uid,
+                                            name: title,
+                                            restricted: !restricted,
+                                          ),
+                                ),
+                              ],
                             ),
                         ],
                       ),
@@ -335,6 +460,118 @@ Wrap(
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  bool _matchesSearch(
+    QueryDocumentSnapshot<Map<String, dynamic>> d,
+    Map<String, dynamic> data,
+    String q,
+  ) {
+    final name = (data["Name"] ?? data["name"] ?? "").toString();
+    final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
+
+    return q.isEmpty ||
+        name.toLowerCase().contains(q) ||
+        email.toLowerCase().contains(q) ||
+        d.id.toLowerCase().contains(q);
+  }
+
+  // ---------- UI helpers ----------
+  Widget _panel({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.045),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        color: Colors.white.withOpacity(0.60),
+        fontSize: 11,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 0.6,
+      ),
+    );
+  }
+
+  Widget _emptyState() {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.045),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withOpacity(0.07)),
+        ),
+        child: Text(
+          "No users found.",
+          style: TextStyle(color: Colors.white.withOpacity(0.75), fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+
+  Widget _quietButton({required String label, required VoidCallback? onTap}) {
+    return TextButton(
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.white.withOpacity(0.85),
+        backgroundColor: Colors.white.withOpacity(0.05),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Colors.white.withOpacity(0.07)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      onPressed: onTap,
+      child: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _quietOutlinedButton({required String label, required VoidCallback? onTap}) {
+    return OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white70,
+        side: BorderSide(color: Colors.white.withOpacity(0.12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      onPressed: onTap,
+      child: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _primaryActionButton({
+    required String label,
+    required Color background,
+    required VoidCallback? onTap,
+  }) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: background,
+        foregroundColor: Colors.black,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        elevation: 0,
+      ),
+      onPressed: onTap,
+      child: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
       ),
     );
   }

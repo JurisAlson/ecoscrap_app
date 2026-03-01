@@ -19,7 +19,7 @@ Future<void> grantMeAdminClaimIfOwner(User user) async {
     "makeAdmin": true,
   });
 
-  await user.getIdTokenResult(true); // refresh token
+  await user.getIdTokenResult(true);
 }
 
 class RoleGate extends StatefulWidget {
@@ -34,10 +34,39 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final s = (raw ?? "").toString().trim().toLowerCase();
     if (s == "admins" || s == "admin") return "admin";
     if (s == "collectors" || s == "collector") return "collector";
-    if (s == "users" || s == "user" || s == "household" || s == "households") {
-      return "user";
-    }
+    if (s == "users" || s == "user" || s == "household" || s == "households") return "user";
     return "unknown";
+  }
+
+  // ✅ USERS: only residentStatus matters
+  bool _isResidentApproved(Map<String, dynamic> data) {
+    final residentStatus = (data['residentStatus'] ?? "")
+        .toString()
+        .trim()
+        .toLowerCase();
+    return residentStatus == "approved";
+  }
+
+  // ✅ COLLECTORS: only collectorStatus matters (NEW FLOW)
+  // Accept both:
+  // - "adminApproved" (new)
+  // - "approved" (legacy)
+  bool _isCollectorApproved(Map<String, dynamic> data) {
+    final status = (data['collectorStatus'] ?? "")
+        .toString()
+        .trim()
+        .toLowerCase();
+
+    if (status == "adminapproved") return true; // ✅ NEW
+    if (status == "approved") return true;      // ✅ LEGACY (optional)
+
+    // Optional legacy fallback if older accounts used adminVerified/adminStatus/collectorActive
+    final legacyAdminOk = data['adminVerified'] == true;
+    final legacyAdminStatus =
+        (data['adminStatus'] ?? "").toString().toLowerCase() == "approved";
+    final legacyActive = data['collectorActive'] == true;
+
+    return legacyAdminOk && legacyAdminStatus && legacyActive;
   }
 
   Future<DocumentSnapshot<Map<String, dynamic>>> _getUserDoc(String uid) {
@@ -49,8 +78,19 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     return token.claims?['admin'] == true;
   }
 
+  Future<void> _setOnline(bool online) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    await FirebaseFirestore.instance.collection('Users').doc(uid).set({
+      'isOnline': online,
+      if (!online) 'lastSeen': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
   Future<void> _logout(BuildContext context) async {
-    await _setOnline(false); // set offline on logout
+    await _setOnline(false);
     await FirebaseAuth.instance.signOut();
     if (context.mounted) {
       Navigator.of(context).pushAndRemoveUntil(
@@ -60,25 +100,11 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _setOnline(bool online) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-
-    await FirebaseFirestore.instance.collection('Users').doc(uid).set({
-      'isOnline': online,
-      if (!online) 'lastSeen': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    // set online when RoleGate shows
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _setOnline(true);
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _setOnline(true));
   }
 
   @override
@@ -104,16 +130,14 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return const LoginPage();
 
-    // Optional: auto-grant claim for the owner email (safe to ignore if CF not deployed)
+    // Optional:
     // grantMeAdminClaimIfOwner(user);
 
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       future: _getUserDoc(user.uid),
       builder: (context, docSnap) {
         if (docSnap.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
 
         if (docSnap.hasError) {
@@ -137,15 +161,16 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
         final data = docSnap.data!.data() ?? {};
         final role = _normRole(data['Roles'] ?? data['roles'] ?? data['role']);
 
+        // ✅ Debug (remove later)
+        debugPrint("RoleGate => role=$role | residentStatus=${data['residentStatus']} | collectorStatus=${data['collectorStatus']}");
+
         // ===== ADMIN =====
         if (role == 'admin') {
           return FutureBuilder<bool>(
             future: _hasAdminClaim(user),
             builder: (context, claimSnap) {
               if (claimSnap.connectionState == ConnectionState.waiting) {
-                return const Scaffold(
-                  body: Center(child: CircularProgressIndicator()),
-                );
+                return const Scaffold(body: Center(child: CircularProgressIndicator()));
               }
 
               if (claimSnap.hasError) {
@@ -174,11 +199,43 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
         // ===== COLLECTOR =====
         if (role == 'collector') {
+          final ok = _isCollectorApproved(data);
+
+          if (!ok) {
+            final cs = (data['collectorStatus'] ?? "").toString().toLowerCase();
+
+            final msg = cs == "rejected"
+                ? "Your collector request was rejected.\n\nPlease resubmit your application."
+                : "Your collector account is not verified yet.\n\nPlease wait for admin approval.";
+
+            return _RoleErrorPage(
+              message: msg,
+              actionLabel: "Logout",
+              onAction: () => _logout(context),
+            );
+          }
+
           return const CollectorsDashboardPage();
         }
 
-        // ===== HOUSEHOLD USER =====
+        // ===== USER / HOUSEHOLD =====
         if (role == 'user') {
+          final ok = _isResidentApproved(data);
+
+          if (!ok) {
+            final rs = (data['residentStatus'] ?? "").toString().toLowerCase();
+
+            final msg = rs == "rejected"
+                ? "Account verification rejected.\n\nPlease re-submit a valid Government ID."
+                : "Account pending verification.\n\nPlease wait for admin approval.";
+
+            return _RoleErrorPage(
+              message: msg,
+              actionLabel: "Logout",
+              onAction: () => _logout(context),
+            );
+          }
+
           return const DashboardPage();
         }
 

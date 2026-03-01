@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 
@@ -13,130 +14,97 @@ import 'package:ecoscrap_app/security/admin_keys.dart';
 import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
 import 'package:ecoscrap_app/security/kyc_shared_key.dart';
 
-class CollectorDetailsPage extends StatefulWidget {
+class ResidentDetailsPage extends StatefulWidget {
   final DocumentReference<Map<String, dynamic>> requestRef;
-  const CollectorDetailsPage({super.key, required this.requestRef});
+  const ResidentDetailsPage({super.key, required this.requestRef});
 
   @override
-  State<CollectorDetailsPage> createState() => _CollectorDetailsPageState();
+  State<ResidentDetailsPage> createState() => _ResidentDetailsPageState();
 }
 
-class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
+class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   bool _busy = false;
 
-  // ===== UI tokens (match your admin pages) =====
   static const Color _primary = Color(0xFF1FA9A7);
 
-  // ✅ Reject collector:
-  // - Revert role back to user
-  // - Reset ONLY collector fields so they can resubmit
-  // - DO NOT touch residentStatus/residentVerified/resident fields
-  // - DO NOT override residence admin approval logic
-  Future<void> _rejectCollectorAndRestoreUser(String uid) async {
+  // =========================
+  // ADMIN: APPROVE
+  // =========================
+  Future<void> _adminApproveResident(String uid) async {
     final db = FirebaseFirestore.instance;
 
-    final userRef = db.collection("Users").doc(uid);
-    final reqRef = db.collection("collectorRequests").doc(uid);
-
-    await db.runTransaction((tx) async {
-      // ✅ restore role back to "user"
-      tx.set(userRef, {
-        "role": "user",
-        "Roles": "user",
-
-        // ✅ IMPORTANT:
-        // Do NOT touch these if they are residence verification
-        // "residentStatus": ..., "residentVerified": ...
-        // Do NOT set adminStatus/adminVerified here (that blocks resident dashboard)
-
-        // ✅ Collector-only reset (so they can resubmit)
-        "collectorVerified": false, // if you still use this legacy field
-        "collectorStatus": "rejected",
-        "collectorActive": false,
-        "collectorUpdatedAt": FieldValue.serverTimestamp(),
-
-        // ✅ remove junkshop assignment if any
-        "junkshopId": FieldValue.delete(),
-        "junkshopName": FieldValue.delete(),
-        "assignedJunkshopUid": FieldValue.delete(),
-        "assignedJunkshopName": FieldValue.delete(),
-
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      // ✅ mark request as rejected
-      tx.set(reqRef, {
-        "status": "rejected",
-        "adminRejectedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    });
-  }
-
-  // (Optional) keep if used elsewhere
-  Future<void> approveCollector(DocumentReference reqRef) async {
-    await reqRef.set({
-      "status": "adminApproved",
-      "adminApprovedAt": FieldValue.serverTimestamp(),
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  // (Optional) keep if used elsewhere
-  Future<void> rejectCollector(DocumentReference reqRef, {String reason = ""}) async {
-    await reqRef.set({
-      "status": "rejected",
-      "adminRejectedAt": FieldValue.serverTimestamp(),
-      "adminRejectReason": reason,
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  // ✅ Approve collector:
-  // If you want NEW logic: collectorStatus should be "adminApproved"
-  // and role becomes collector.
-  Future<void> _adminApprove(String uid) async {
-    final db = FirebaseFirestore.instance;
-
-    final reqRef = db.collection("collectorRequests").doc(uid);
+    final reqRef = db.collection("residentRequests").doc(uid);
     final userRef = db.collection("Users").doc(uid);
 
     await db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
+      if (!reqSnap.exists) {
+        throw Exception("residentRequests/$uid not found");
+      }
 
-      // request doc status
-      tx.set(reqRef, {
-        "status": "adminApproved",
-        "adminApprovedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      // residentRequests/{uid}
+      tx.set(
+        reqRef,
+        {
+          "status": "adminApproved",
+          "adminReviewedAt": FieldValue.serverTimestamp(),
+          "adminStatus": "approved",
+          "adminVerified": true,
+          "updatedAt": FieldValue.serverTimestamp(),
 
-      // user becomes collector
-      tx.set(userRef, {
-        "role": "collector",
-        "Roles": "collector",
+          // Optional mirror (nice for UI consistency)
+          "residentStatus": "approved",
+        },
+        SetOptions(merge: true),
+      );
 
-        // ✅ NEW: dashboard checks collectorStatus == adminApproved
-        "collectorStatus": "adminApproved",
-        "collectorActive": true,
-        "collectorVerified": true, // legacy if you still use
-        "collectorUpdatedAt": FieldValue.serverTimestamp(),
+      // Users/{uid}
+      tx.set(
+        userRef,
+        {
+          "role": "user",
+          "Roles": "user",
+          "adminReviewedAt": FieldValue.serverTimestamp(),
+          "adminStatus": "approved",
+          "adminVerified": true,
+          "updatedAt": FieldValue.serverTimestamp(),
 
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+          // ✅ FIX: your screenshot shows this stayed "pending"
+          "residentStatus": "approved",
+        },
+        SetOptions(merge: true),
+      );
     });
   }
 
-  // =====================================================
-  // 🔓 ADMIN: download encrypted bytes -> decrypt -> return bytes
-  // =====================================================
-  Future<_DecryptedKyc?> _downloadAndDecryptKyc(String uid) async {
+  // =========================
+  // ADMIN: REJECT + DELETE ACCOUNT
+  // (this is what allows email reuse)
+  // =========================
+  Future<void> _rejectAndDeleteResidentAccount(
+    String uid, {
+    String reason = "",
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
+        .httpsCallable("rejectResidentAndDeleteAccount");
+
+    await callable.call({
+      "uid": uid,
+      "reason": reason,
+    });
+  }
+
+  // =========================
+  // KYC: DOWNLOAD + DECRYPT
+  // =========================
+  Future<_DecryptedKyc?> _downloadAndDecryptResidentKyc(String uid) async {
     final db = FirebaseFirestore.instance;
-    final kycSnap = await db.collection("collectorKYC").doc(uid).get();
+    final kycSnap = await db.collection("residentKYC").doc(uid).get();
+    if (!kycSnap.exists) return null;
+
     final kyc = kycSnap.data() ?? {};
 
-    final storagePath = (kyc["storagePath"] ?? "").toString();
+    final storagePath = (kyc["storagePath"] ?? "").toString().trim();
     if (storagePath.isEmpty) return null;
 
     final originalFileName = (kyc["originalFileName"] ?? "").toString();
@@ -146,26 +114,28 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final nonceB64 = (kyc["nonceB64"] ?? "").toString();
     final macB64 = (kyc["macB64"] ?? "").toString();
 
-    if (ephPubKeyB64.isEmpty || saltB64.isEmpty || nonceB64.isEmpty || macB64.isEmpty) {
-      throw Exception("Missing crypto metadata in collectorKYC/$uid");
+    if (ephPubKeyB64.isEmpty ||
+        saltB64.isEmpty ||
+        nonceB64.isEmpty ||
+        macB64.isEmpty) {
+      throw Exception("Missing crypto metadata in residentKYC/$uid");
     }
 
-    // 1) download encrypted blob
     final ref = FirebaseStorage.instance.ref(storagePath);
     final encryptedBytes = await ref.getData(12 * 1024 * 1024);
-    if (encryptedBytes == null) throw Exception("Failed to download encrypted file.");
+    if (encryptedBytes == null) {
+      throw Exception("Failed to download encrypted KYC bytes.");
+    }
 
-    // 2) derive AES key using Admin private + collector ephemeral public
-    final collectorEphPubBytes = base64Decode(ephPubKeyB64);
+    final ephPubBytes = Uint8List.fromList(base64Decode(ephPubKeyB64));
     final salt = base64Decode(saltB64);
 
     final aesKey = await KycSharedKey.deriveForAdmin(
       adminPrivateKeyB64: AdminKeys.adminPrivateKeyB64,
-      collectorEphemeralPubKeyBytes: Uint8List.fromList(collectorEphPubBytes),
+      collectorEphemeralPubKeyBytes: ephPubBytes,
       salt: salt,
     );
 
-    // 3) decrypt
     final nonce = Uint8List.fromList(base64Decode(nonceB64));
     final macBytes = Uint8List.fromList(base64Decode(macB64));
 
@@ -217,7 +187,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     );
   }
 
-  // ---------- UI helpers ----------
+  // =========================
+  // UI helpers
+  // =========================
   Widget _panel({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
     return Container(
       width: double.infinity,
@@ -323,7 +295,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     return Colors.white54;
   }
 
-  // ---------- page ----------
+  // =========================
+  // PAGE
+  // =========================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -332,7 +306,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
         backgroundColor: AdminTheme.bg,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text("Collector Details"),
+        title: const Text("Resident Details"),
       ),
       body: AdminTheme.background(
         child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -340,8 +314,10 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
           builder: (context, snap) {
             if (snap.hasError) {
               return Center(
-                child: Text("Error: ${snap.error}",
-                    style: const TextStyle(color: Colors.redAccent)),
+                child: Text(
+                  "Error: ${snap.error}",
+                  style: const TextStyle(color: Colors.redAccent),
+                ),
               );
             }
             if (!snap.hasData) {
@@ -356,14 +332,14 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
             final data = snap.data!.data() ?? {};
             final uid = snap.data!.id;
 
-            final name = (data["publicName"] ?? "Collector").toString();
+            final name = (data["publicName"] ?? "Resident").toString();
             final email = (data["emailDisplay"] ?? "").toString();
             final status = (data["status"] ?? "").toString();
             final isPending = status.toLowerCase() == "pending";
             final accent = _statusAccent(status);
 
             final kycBlock = FutureBuilder<_DecryptedKyc?>(
-              future: _downloadAndDecryptKyc(uid),
+              future: _downloadAndDecryptResidentKyc(uid),
               builder: (context, kycSnap) {
                 if (kycSnap.connectionState == ConnectionState.waiting) {
                   return _panel(
@@ -411,21 +387,18 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.picture_as_pdf_outlined,
-                                color: Colors.white.withOpacity(0.75)),
+                            Icon(Icons.picture_as_pdf_outlined, color: Colors.white.withOpacity(0.75)),
                             const SizedBox(width: 10),
                             const Text(
                               "Government ID (PDF)",
-                              style: TextStyle(
-                                  color: Colors.white, fontWeight: FontWeight.w900),
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
                             ),
                           ],
                         ),
                         const SizedBox(height: 10),
                         Text(
                           "PDF decrypted successfully.\n\n"
-                          "To preview it here, add a PDF viewer widget/package "
-                          "(e.g. syncfusion_flutter_pdfviewer or flutter_pdfview).",
+                          "To preview it here, add a PDF viewer widget/package.",
                           style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
                         ),
                       ],
@@ -487,7 +460,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                             borderRadius: BorderRadius.circular(14),
                             border: Border.all(color: _primary.withOpacity(0.22)),
                           ),
-                          child: const Icon(Icons.local_shipping_outlined, color: _primary),
+                          child: const Icon(Icons.home_outlined, color: _primary),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -506,8 +479,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                               if (email.isNotEmpty)
                                 Text(
                                   email,
-                                  style: TextStyle(
-                                      color: Colors.white.withOpacity(0.65), fontSize: 12),
+                                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
                                 ),
                               const SizedBox(height: 10),
                               Wrap(
@@ -537,16 +509,14 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.security,
-                            color: Colors.blueAccent.withOpacity(0.95), size: 18),
+                        Icon(Icons.security, color: Colors.blueAccent.withOpacity(0.95), size: 18),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             "Confidentiality Notice (Admin Responsibility)\n"
-                            "This ID contains sensitive personal information and must be handled with care. "
-                            "Access it only for collector verification and never share, screenshot, download, "
-                            "or distribute it outside official review procedures. "
-                            "You are ethically responsible for maintaining privacy and protecting collector data.",
+                            "This ID contains sensitive personal information. "
+                            "Use it only for residency verification. Do not share, screenshot, "
+                            "download, or distribute it outside official review procedures.",
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.65),
                               height: 1.35,
@@ -568,8 +538,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                         children: [
                           SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                           SizedBox(width: 10),
-                          Text("Processing...",
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                          Text("Processing...", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
                         ],
                       ),
                     ),
@@ -589,8 +558,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
-                                    title: "Approve collector?",
-                                    body: "Approve $name? (This makes it visible to junkshops)",
+                                    title: "Approve resident?",
+                                    body: "Approve $name for Palo Alto access?",
                                     yesValue: true,
                                     yesLabel: "Approve",
                                   );
@@ -598,7 +567,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
-                                    await _adminApprove(uid);
+                                    await _adminApproveResident(uid);
                                     if (mounted) AdminHelpers.toast(context, "Approved $name");
                                     if (mounted) Navigator.pop(context);
                                   } catch (e) {
@@ -612,29 +581,35 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: _outlineActionButton(
-                          icon: Icons.close,
-                          label: "Reject",
+                          icon: Icons.delete_forever,
+                          label: "Reject & Delete",
                           onTap: (_busy || !isPending)
                               ? null
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
-                                    title: "Reject collector?",
-                                    body: "Reject $name? This restores the account to a normal user and allows re-submit.",
+                                    title: "Reject & delete account?",
+                                    body:
+                                        "Reject $name and delete their account so they can re-apply using the same email.\n\n"
+                                        "This will remove:\n"
+                                        "• Auth account\n"
+                                        "• Users/{uid}\n"
+                                        "• residentRequests/{uid}\n"
+                                        "• residentKYC/{uid} + encrypted file",
                                     yesValue: true,
-                                    yesLabel: "Reject",
+                                    yesLabel: "Reject & Delete",
                                   );
                                   if (ok != true) return;
 
                                   setState(() => _busy = true);
                                   try {
-                                    await _rejectCollectorAndRestoreUser(uid);
+                                    await _rejectAndDeleteResidentAccount(uid);
                                     if (mounted) {
-                                      AdminHelpers.toast(context, "Rejected $name. User restored.");
+                                      AdminHelpers.toast(context, "Rejected & deleted $name.");
                                       Navigator.pop(context);
                                     }
                                   } catch (e) {
-                                    if (mounted) AdminHelpers.toast(context, "Reject failed: $e");
+                                    if (mounted) AdminHelpers.toast(context, "Reject/Delete failed: $e");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }
