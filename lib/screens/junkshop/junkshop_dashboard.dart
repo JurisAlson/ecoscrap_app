@@ -3,11 +3,11 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../screens/receipt_screen.dart';
-import '../screens/analytics_home_tab.dart';
-import '../screens/inventory_screen.dart';
-import '../screens/transaction_screen.dart';
-import '../chat/screens/chat_list_page.dart';
+import '../receipt_screen.dart';
+import '../analytics_home_tab.dart';
+import '../inventory_screen.dart';
+import '../transaction_screen.dart';
+import '../../chat/screens/chat_list_page.dart';
 
 class JunkshopDashboardPage extends StatefulWidget {
   final String shopID;

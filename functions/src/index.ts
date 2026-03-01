@@ -1,3 +1,5 @@
+// functions/src/index.ts
+
 import * as admin from "firebase-admin";
 import { setGlobalOptions, logger } from "firebase-functions/v2";
 import { onCall, HttpsError, onRequest } from "firebase-functions/v2/https";
@@ -12,14 +14,131 @@ import * as crypto from "crypto";
 admin.initializeApp();
 setGlobalOptions({ maxInstances: 10 });
 
-/* ADMIN-ONLY: Reject resident
-   - marks residentRequests/{uid} as rejected
-   - cleanup + revert handled by revertResidentOnRejected trigger
-*/
+/* ====================================================
+  PUSH HELPERS
+==================================================== */
+
+async function getAdminUids(): Promise<string[]> {
+  const db = admin.firestore();
+
+  const snapA = await db
+    .collection("Users")
+    .where("Roles", "in", ["admin", "admins", "Admin", "Admins"])
+    .get();
+
+  const snapB = await db
+    .collection("Users")
+    .where("role", "in", ["admin", "admins", "Admin", "Admins"])
+    .get();
+
+  const set = new Set<string>();
+  snapA.docs.forEach((d) => set.add(d.id));
+  snapB.docs.forEach((d) => set.add(d.id));
+
+  return [...set];
+}
+
+async function sendPushToMany(
+  uids: string[],
+  title: string,
+  body: string,
+  data: Record<string, any> = {}
+) {
+  await Promise.allSettled(
+    uids.map((uid) => sendPushToUser(uid, title, body, data))
+  );
+}
+
+async function createInAppNotification(
+  uid: string,
+  title: string,
+  body: string,
+  data: Record<string, any> = {}
+) {
+  await admin
+    .firestore()
+    .collection("Users")
+    .doc(uid)
+    .collection("notifications")
+    .add({
+      title,
+      body,
+      type: String(data.type || ""),
+      data,
+      read: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+}
+
+async function sendPushToUser(
+  uid: string,
+  title: string,
+  body: string,
+  data: Record<string, any> = {}
+) {
+  // Always create in-app notification
+  await createInAppNotification(uid, title, body, data);
+
+  const userRef = admin.firestore().collection("Users").doc(uid);
+  const userSnap = await userRef.get();
+  if (!userSnap.exists) {
+    logger.warn("sendPushToUser: no Users doc", { uid });
+    return;
+  }
+
+  const u = userSnap.data() as any;
+
+  const token =
+    u?.fcmToken ||
+    u?.fcm_token ||
+    u?.deviceToken ||
+    (Array.isArray(u?.fcmTokens) ? u.fcmTokens[0] : undefined);
+
+  if (!token) {
+    logger.warn("sendPushToUser: missing token fields", { uid, keys: Object.keys(u || {}) });
+    return;
+  }
+
+  const stringData: Record<string, string> = Object.fromEntries(
+    Object.entries(data).map(([k, v]) => [k, String(v)])
+  );
+
+  try {
+    await admin.messaging().send({
+      token,
+      notification: { title, body },
+      data: stringData,
+    });
+    logger.info("sendPushToUser: sent", { uid });
+  } catch (e: any) {
+    logger.error("sendPushToUser: FCM send failed", {
+      uid,
+      code: e?.code,
+      message: String(e?.message || e),
+    });
+
+    // auto-remove dead tokens so future sends don’t keep failing
+    if (
+      e?.code === "messaging/registration-token-not-registered" ||
+      e?.code === "messaging/invalid-registration-token"
+    ) {
+      await userRef.set(
+        { fcmToken: admin.firestore.FieldValue.delete() },
+        { merge: true }
+      );
+      logger.warn("sendPushToUser: removed invalid fcmToken", { uid });
+    }
+  }
+}
+
+/* ====================================================
+  ADMIN-ONLY: Reject resident
+==================================================== */
 export const adminRejectResident = onCall(
   { region: "asia-southeast1" },
   async (request) => {
-    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    if (!request.auth)
+      throw new HttpsError("unauthenticated", "Login required.");
     if (request.auth.token?.admin !== true)
       throw new HttpsError("permission-denied", "Admin only.");
 
@@ -42,6 +161,10 @@ export const adminRejectResident = onCall(
     return { ok: true, uid };
   }
 );
+
+/* ====================================================
+  SANITIZE residentRequests PII (remove publicName/emailDisplay)
+==================================================== */
 export const sanitizeResidentRequestPII = onDocumentWritten(
   { document: "residentRequests/{uid}", region: "asia-southeast1" },
   async (event) => {
@@ -51,17 +174,14 @@ export const sanitizeResidentRequestPII = onDocumentWritten(
     const beforeData = event.data?.before?.data() as any | undefined;
     const afterData = after.data() as any;
 
-    // Only act if PII exists now
     const hasPII =
       afterData?.emailDisplay != null || afterData?.publicName != null;
-
     if (!hasPII) return;
 
-    // If it was already removed before, don't repeat
     const alreadySanitized =
-      (beforeData?.emailDisplay == null) &&
-      (beforeData?.publicName == null) &&
-      (beforeData != null);
+      beforeData != null &&
+      beforeData?.emailDisplay == null &&
+      beforeData?.publicName == null;
 
     if (alreadySanitized) return;
 
@@ -75,109 +195,17 @@ export const sanitizeResidentRequestPII = onDocumentWritten(
     });
   }
 );
-/* ====================================================
-  PUSH HELPERS
-==================================================== */
-
-async function getAdminUids(): Promise<string[]> {
-  const db = admin.firestore();
-
-  const snapA = await db.collection("Users")
-    .where("Roles", "in", ["admin", "admins", "Admin", "Admins"])
-    .get();
-
-  const snapB = await db.collection("Users")
-    .where("role", "in", ["admin", "admins", "Admin", "Admins"])
-    .get();
-
-  const set = new Set<string>();
-  snapA.docs.forEach(d => set.add(d.id));
-  snapB.docs.forEach(d => set.add(d.id));
-
-  return [...set];
-}
-
-async function getJunkshopUids(): Promise<string[]> {
-  const db = admin.firestore();
-
-  const s1 = await db.collection("Users").where("Roles", "in", ["junkshop", "junkshops"]).get();
-  const s2 = await db.collection("Users").where("role", "in", ["junkshop", "junkshops"]).get();
-
-  const ids = new Set<string>();
-  s1.docs.forEach(d => ids.add(d.id));
-  s2.docs.forEach(d => ids.add(d.id));
-
-  return [...ids];
-}
-
-async function sendPushToMany(uids: string[], title: string, body: string, data: Record<string, any> = {}) {
-  // simple + safe: reuse your single-user send (good enough for small lists)
-  await Promise.allSettled(uids.map(uid => sendPushToUser(uid, title, body, data)));
-}
-
-async function createInAppNotification(
-  uid: string,
-  title: string,
-  body: string,
-  data: Record<string, any> = {}
-) {
-  await admin.firestore()
-    .collection("Users")
-    .doc(uid)
-    .collection("notifications")
-    .add({
-      title,
-      body,
-      type: String(data.type || ""),
-      data,
-      read: false,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-}
-
-async function sendPushToUser(
-  uid: string,
-  title: string,
-  body: string,
-  data: Record<string, any> = {}
-) {
-  // ✅ Always create in-app notification
-  await createInAppNotification(uid, title, body, data);
-
-  const userSnap = await admin.firestore().collection("Users").doc(uid).get();
-  if (!userSnap.exists) {
-    logger.warn("sendPushToUser: no Users doc", { uid });
-    return;
-  }
-
-  const token = (userSnap.data() as any)?.fcmToken as string | undefined;
-  if (!token) {
-    logger.warn("sendPushToUser: missing fcmToken", { uid });
-    return;
-  }
-
-  const stringData: Record<string, string> = Object.fromEntries(
-    Object.entries(data).map(([k, v]) => [k, String(v)])
-  );
-
-  await admin.messaging().send({
-    token,
-    notification: { title, body },
-    data: stringData,
-  });
-}
 
 /* ====================================================
-    ADMIN-ONLY: Set user role in Firestore (for app routing)
+  ADMIN-ONLY: Set user role in Firestore (routing)
 ==================================================== */
 export const setUserRole = onCall(
   { region: "asia-southeast1" },
   async (request) => {
     if (!request.auth)
       throw new HttpsError("unauthenticated", "Login required.");
-    if (request.auth.token?.admin !== true) {
+    if (request.auth.token?.admin !== true)
       throw new HttpsError("permission-denied", "Admin only.");
-    }
 
     const uid = request.data?.uid as string | undefined;
     let role = String(request.data?.role || "").trim().toLowerCase();
@@ -204,22 +232,20 @@ export const setUserRole = onCall(
 );
 
 /* ====================================================
-   ADMIN-ONLY: Verify junkshop
+  ADMIN-ONLY: Verify junkshop
 ==================================================== */
 export const verifyJunkshop = onCall(
   { region: "asia-southeast1" },
   async (request) => {
     if (!request.auth)
       throw new HttpsError("unauthenticated", "Login required.");
-    if (request.auth.token?.admin !== true) {
+    if (request.auth.token?.admin !== true)
       throw new HttpsError("permission-denied", "Admin only.");
-    }
 
     const uid = request.data?.uid as string | undefined;
     if (!uid || typeof uid !== "string")
       throw new HttpsError("invalid-argument", "uid required");
 
-    // Keep your existing behavior (Junkshop collection + Users role)
     await admin
       .firestore()
       .collection("Junkshop")
@@ -253,16 +279,15 @@ export const verifyJunkshop = onCall(
 );
 
 /* ====================================================
-   ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
+  ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
 ==================================================== */
 export const adminDeleteUser = onCall(
   { region: "asia-southeast1" },
   async (request) => {
     if (!request.auth)
       throw new HttpsError("unauthenticated", "Login required.");
-    if (request.auth.token?.admin !== true) {
+    if (request.auth.token?.admin !== true)
       throw new HttpsError("permission-denied", "Admin only.");
-    }
 
     const uid = request.data?.uid as string | undefined;
     if (!uid || typeof uid !== "string")
@@ -278,6 +303,7 @@ export const adminDeleteUser = onCall(
         .collection("permitRequests")
         .where("uid", "==", uid)
         .get();
+
       const batch = db.batch();
       permits.docs.forEach((d) => batch.delete(d.ref));
       await batch.commit().catch(() => null);
@@ -293,7 +319,10 @@ export const adminDeleteUser = onCall(
     }
   }
 );
-// Revert
+
+/* ====================================================
+  Revert collector on rejection
+==================================================== */
 export const revertCollectorOnRejected = onDocumentUpdated(
   { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
   async (event) => {
@@ -303,16 +332,15 @@ export const revertCollectorOnRejected = onDocumentUpdated(
 
     const uid = String(event.params.collectorUid);
 
-    const b = String(before.status || "").toLowerCase();
-    const a = String(after.status || "").toLowerCase();
+    const b = String(before.status || before.adminStatus || "").toLowerCase();
+    const a = String(after.status || after.adminStatus || "").toLowerCase();
     if (a === b) return;
 
-    // ✅ When admin rejects (or you mark as rejected)
     if (a !== "rejected") return;
 
     const db = admin.firestore();
 
-    // ✅ revert custom claims (collector -> false)
+    // reset collector claim
     try {
       const user = await admin.auth().getUser(uid);
       const existing = user.customClaims || {};
@@ -324,15 +352,12 @@ export const revertCollectorOnRejected = onDocumentUpdated(
       logger.warn("Failed to reset collector claim", { uid, err: String(e) });
     }
 
-    // ✅ revert Firestore role ONLY if they are currently collector
-    // (If they are resident-approved or junkshop, we don't touch those)
+    // revert role if it was collector
     const userRef = db.collection("Users").doc(uid);
     const userSnap = await userRef.get();
     const u = (userSnap.data() || {}) as any;
 
     const currentRole = String(u.Roles || u.role || "").toLowerCase();
-
-    // If they were collector, revert to user.
     if (currentRole === "collector") {
       await userRef.set(
         {
@@ -344,25 +369,27 @@ export const revertCollectorOnRejected = onDocumentUpdated(
       );
     }
 
-    // ✅ delete collectorKYC (optional, for privacy & clean reapply)
+    // cleanup KYC doc
     await db.collection("collectorKYC").doc(uid).delete().catch(() => null);
 
-    // ✅ allow resubmit: easiest is delete the collectorRequests doc
+    // archive request (keeps doc but removes PII)
     await event.data!.after.ref.set(
-  {
-    archived: true,
-    archivedAt: admin.firestore.FieldValue.serverTimestamp(),
-    // remove anything sensitive here too
-    emailDisplay: admin.firestore.FieldValue.delete(),
-    publicName: admin.firestore.FieldValue.delete(),
-  },
-  { merge: true }
-);
+      {
+        archived: true,
+        archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+        emailDisplay: admin.firestore.FieldValue.delete(),
+        publicName: admin.firestore.FieldValue.delete(),
+      },
+      { merge: true }
+    );
 
     logger.info("Collector rejected: reverted + cleared for resubmit", { uid });
   }
 );
 
+/* ====================================================
+  Revert resident on rejection
+==================================================== */
 export const revertResidentOnRejected = onDocumentUpdated(
   { document: "residentRequests/{uid}", region: "asia-southeast1" },
   async (event) => {
@@ -372,16 +399,15 @@ export const revertResidentOnRejected = onDocumentUpdated(
 
     const uid = String(event.params.uid);
 
-    const b = String(before.status || "").toLowerCase();
-    const a = String(after.status || "").toLowerCase();
+    const b = String(before.status || before.adminStatus || "").toLowerCase();
+    const a = String(after.status || after.adminStatus || "").toLowerCase();
     if (a === b) return;
-
     if (a !== "rejected") return;
 
     const db = admin.firestore();
     const bucket = admin.storage().bucket();
 
-    // ✅ delete residentKYC file + doc (optional but recommended)
+    // delete residentKYC file + doc
     try {
       const kycSnap = await db.collection("residentKYC").doc(uid).get();
       const kyc = (kycSnap.data() || {}) as any;
@@ -395,12 +421,12 @@ export const revertResidentOnRejected = onDocumentUpdated(
 
     await db.collection("residentKYC").doc(uid).delete().catch(() => null);
 
-    // ✅ revert user back to normal (ONLY if they were "resident" role)
     const userRef = db.collection("Users").doc(uid);
     const userSnap = await userRef.get();
     const u = (userSnap.data() || {}) as any;
 
     const currentRole = String(u.Roles || u.role || "").toLowerCase();
+
     if (currentRole === "resident") {
       await userRef.set(
         {
@@ -412,7 +438,6 @@ export const revertResidentOnRejected = onDocumentUpdated(
         { merge: true }
       );
     } else {
-      // even if they weren't resident role, still mark status cleanly
       await userRef.set(
         {
           residentStatus: "rejected",
@@ -422,14 +447,15 @@ export const revertResidentOnRejected = onDocumentUpdated(
       );
     }
 
-    // ✅ allow resubmit: delete residentRequests doc
+    // allow resubmit
     await event.data!.after.ref.delete().catch(() => null);
 
     logger.info("Resident rejected: reverted + cleared for resubmit", { uid });
   }
 );
+
 /* ====================================================
-   ADMIN-ONLY: Grant/Revoke admin claim
+  ADMIN-ONLY: Grant/Revoke admin claim
 ==================================================== */
 export const setAdminClaim = onCall(
   { region: "asia-southeast1" },
@@ -462,7 +488,7 @@ export const setAdminClaim = onCall(
 );
 
 /* ====================================================
-   Auto-sync claims whenever Users/{uid}.Roles changes
+  Auto-sync claims whenever Users/{uid}.Roles changes
 ==================================================== */
 export const syncRoleClaims = onDocumentWritten(
   { document: "Users/{uid}", region: "asia-southeast1" },
@@ -497,7 +523,10 @@ export const syncRoleClaims = onDocumentWritten(
       };
 
       const existing = (await admin.auth().getUser(uid)).customClaims || {};
-      await admin.auth().setCustomUserClaims(uid, { ...existing, ...roleClaims });
+      await admin.auth().setCustomUserClaims(uid, {
+        ...existing,
+        ...roleClaims,
+      });
 
       logger.info("RBAC Claims synced", { uid, role, roleClaims });
     } catch (e: any) {
@@ -510,7 +539,7 @@ export const syncRoleClaims = onDocumentWritten(
 );
 
 /* ====================================================
-   KEYS
+  KEYS
 ==================================================== */
 function getKeysOrThrow() {
   const aesKeyB64 = process.env.PII_AES_KEY_B64;
@@ -534,7 +563,7 @@ function getKeysOrThrow() {
 }
 
 /* ====================================================
-   NORMALIZERS
+  NORMALIZERS
 ==================================================== */
 function normalizeText(v: any) {
   return String(v).trim();
@@ -561,7 +590,7 @@ function normalizeMoney(v: any) {
 }
 
 /* ====================================================
-   ENCRYPTION HELPERS
+  ENCRYPTION HELPERS
 ==================================================== */
 function encryptNormalizedToFields(
   normalized: string,
@@ -634,6 +663,7 @@ function encryptStringToFields(
     fieldPrefix
   );
 }
+
 function encryptEmailToFields(email: any, AES_KEY: Buffer, HMAC_KEY: Buffer) {
   return encryptNormalizedToFields(
     normalizeEmail(email),
@@ -642,6 +672,7 @@ function encryptEmailToFields(email: any, AES_KEY: Buffer, HMAC_KEY: Buffer) {
     "shopEmail"
   );
 }
+
 function encryptMoneyToFields(
   value: any,
   AES_KEY: Buffer,
@@ -655,6 +686,7 @@ function encryptMoneyToFields(
     fieldPrefix
   );
 }
+
 function encryptMoneyToFieldsForArray(
   value: any,
   AES_KEY: Buffer,
@@ -670,7 +702,7 @@ function encryptMoneyToFieldsForArray(
 }
 
 /* ====================================================
-   1) AUTO-ENCRYPT Junkshop.email ON CREATE/UPDATE
+  1) AUTO-ENCRYPT Junkshop.email ON WRITE
 ==================================================== */
 export const encryptJunkshopEmailOnWrite = onDocumentWritten(
   {
@@ -711,8 +743,7 @@ export const encryptJunkshopEmailOnWrite = onDocumentWritten(
 );
 
 /* ====================================================
-   2) AUTO-ENCRYPT Transaction customerName + total + items[].subtotal
-   ✅ Keeps UI display fields
+  2) AUTO-ENCRYPT Transaction fields
 ==================================================== */
 export const encryptTransactionCustomerOnWrite = onDocumentWritten(
   {
@@ -732,7 +763,6 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
     try {
       const { AES_KEY, HMAC_KEY } = getKeysOrThrow();
 
-      // customerName (PII) -> encrypt + delete plaintext, but keep customerNameDisplay for UI
       if (!after?.customerName_enc && after?.customerName != null) {
         if (
           typeof after.customerName === "string" &&
@@ -747,7 +777,6 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
         }
       }
 
-      // totalAmount -> encrypt but DO NOT delete plaintext
       if (
         after?.totalAmount !== undefined &&
         after?.totalAmount !== null &&
@@ -759,7 +788,6 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
         );
       }
 
-      // totalPrice (optional)
       if (
         after?.totalPrice !== undefined &&
         after?.totalPrice !== null &&
@@ -771,11 +799,9 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
         );
       }
 
-      // items[].subtotal -> encrypt but DO NOT delete plaintext
       if (Array.isArray(after.items) && after.items.length > 0) {
         const newItems = after.items.map((it: any) => {
           const copy = { ...(it || {}) };
-
           if (copy.subtotal != null && !copy.subtotal_enc) {
             Object.assign(
               copy,
@@ -807,7 +833,7 @@ export const encryptTransactionCustomerOnWrite = onDocumentWritten(
 );
 
 /* ====================================================
-   ADMIN-ONLY: SET/ENCRYPT Junkshop email via callable
+  ADMIN-ONLY: SET/ENCRYPT Junkshop email via callable
 ==================================================== */
 export const setJunkshopEmail = onCall(
   {
@@ -846,7 +872,7 @@ export const setJunkshopEmail = onCall(
 );
 
 /* ====================================================
-   Helper — subtract days
+  Helper — subtract days
 ==================================================== */
 function daysAgo(days: number) {
   const ms = days * 24 * 60 * 60 * 1000;
@@ -854,7 +880,7 @@ function daysAgo(days: number) {
 }
 
 /* ====================================================
-   AUTO add approvedAt + notify user when admin approves/rejects permit
+  AUTO approvedAt + notify user when admin approves/rejects permit
 ==================================================== */
 export const setApprovedAtOnApprove = onDocumentUpdated(
   { document: "permitRequests/{requestId}", region: "asia-southeast1" },
@@ -874,7 +900,6 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
     const afterApproved = after.approved === true;
     const afterStatus = String(after.status || "").trim().toLowerCase();
 
-    // ✅ APPROVED
     if (!beforeApproved && afterApproved) {
       if (!after.approvedAt) {
         await afterSnap.ref.update({
@@ -888,13 +913,10 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
         "Your junkshop application has been approved by the admin.",
         { type: "junkshop_approved", requestId: String(event.params.requestId) }
       );
-
       return;
     }
 
-    // ✅ REJECTED
     if (afterApproved === false && afterStatus === "rejected") {
-      // Only send once (on transition)
       const beforeStatus = String(before.status || "").trim().toLowerCase();
       if (beforeStatus === "rejected") return;
 
@@ -915,14 +937,8 @@ export const setApprovedAtOnApprove = onDocumentUpdated(
 );
 
 /* ====================================================
-   RESIDENT KYC CLEANUP LIFECYCLE
-   Runs every 24 hours (Asia/Manila)
-   Rules:
-   - rejected → delete immediately (file + doc)
-   - pending → delete after 30 days
-   - approved → delete file after 15 days (doc retained, marked expired)
+  RESIDENT KYC CLEANUP (scheduled)
 ==================================================== */
-
 async function cleanupResidentKyc() {
   const db = admin.firestore();
   const bucket = admin.storage().bucket();
@@ -949,19 +965,15 @@ async function cleanupResidentKyc() {
     const storagePath = String(data.storagePath || "").trim();
 
     try {
-      // rejected → delete immediately
       if (status === "rejected") {
         if (storagePath) {
           await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
         }
-
         await doc.ref.delete();
         deleted++;
-        logger.info("Deleted rejected residentKYC", { uid });
         continue;
       }
 
-      // pending → delete after 30 days
       if (
         status === "pending" &&
         createdAt &&
@@ -970,14 +982,11 @@ async function cleanupResidentKyc() {
         if (storagePath) {
           await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
         }
-
         await doc.ref.delete();
         deleted++;
-        logger.info("Deleted expired pending residentKYC", { uid });
         continue;
       }
 
-      // approved → delete file after 15 days, keep doc
       if (
         status === "approved" &&
         approvedAt &&
@@ -987,21 +996,14 @@ async function cleanupResidentKyc() {
         if (storagePath) {
           await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
         }
-
         await doc.ref.update({
           kycExpired: true,
           kycDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-
         deleted++;
-        logger.info("Deleted approved residentKYC file (doc retained)", { uid });
       }
-
     } catch (err: any) {
-      logger.error("residentKYC cleanup failed", {
-        uid,
-        error: String(err),
-      });
+      logger.error("residentKYC cleanup failed", { uid, error: String(err) });
     }
   }
 
@@ -1021,7 +1023,6 @@ export const cleanupResidentKycByRetention = onSchedule(
   }
 );
 
-/* Optional manual trigger */
 export const runResidentKycCleanupNow = onRequest(
   { region: "asia-southeast1" },
   async (req, res) => {
@@ -1035,7 +1036,7 @@ export const runResidentKycCleanupNow = onRequest(
 );
 
 /* ====================================================
-   INVENTORY DEDUCTION (sale) + ADD (buy)
+  INVENTORY DEDUCTION (sale) + ADD (buy)
 ==================================================== */
 export const deductInventoryOnTransactionCreate = onDocumentCreated(
   { document: "Junkshop/{shopId}/transaction/{txId}", region: "asia-southeast1" },
@@ -1053,8 +1054,6 @@ export const deductInventoryOnTransactionCreate = onDocumentCreated(
     if (data.inventoryDeducted === true) return;
 
     const db = admin.firestore();
-
-    // safer float handling
     const EPS = 0.0001;
     const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -1081,7 +1080,7 @@ export const deductInventoryOnTransactionCreate = onDocumentCreated(
         let newKg = round2(currentKg - weight);
         if (newKg < 0 && Math.abs(newKg) <= EPS) newKg = 0;
         if (newKg < 0) {
-          logger.warn("Oversell detected (clamping to 0, not deleting)", {
+          logger.warn("Oversell detected (clamping to 0)", {
             shopId,
             invId,
             currentKg,
@@ -1181,6 +1180,9 @@ export const addInventoryOnBuyCreate = onDocumentCreated(
   }
 );
 
+/* ====================================================
+  ADMIN NOTIFIED: junkshop apply
+==================================================== */
 export const notifyAdminOnJunkshopApply = onDocumentCreated(
   { document: "permitRequests/{requestId}", region: "asia-southeast1" },
   async (event) => {
@@ -1191,25 +1193,27 @@ export const notifyAdminOnJunkshopApply = onDocumentCreated(
     const uid = String(after.uid || "").trim();
     if (!uid) return;
 
-    // Optional: only notify if this permit request is for junkshop
-    // If you have a "type" field, uncomment:
-    // const type = String(after.type || "").toLowerCase();
-    // if (type && type !== "junkshop") return;
-
     const admins = await getAdminUids();
     if (admins.length === 0) return;
 
     await sendPushToMany(
       admins,
       "New Junkshop Application 🏪",
-      `A new junkshop permit request was submitted.`,
+      "A new junkshop permit request was submitted.",
       { type: "admin_new_junkshop_request", uid, requestId }
     );
 
-    logger.info("Admins notified of junkshop application", { uid, requestId, adminCount: admins.length });
+    logger.info("Admins notified of junkshop application", {
+      uid,
+      requestId,
+      adminCount: admins.length,
+    });
   }
 );
 
+/* ====================================================
+  ADMIN NOTIFIED: collector apply (pending)
+==================================================== */
 export const notifyAdminOnCollectorApply = onDocumentWritten(
   { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
   async (event) => {
@@ -1222,7 +1226,7 @@ export const notifyAdminOnCollectorApply = onDocumentWritten(
     const b = String(before?.status || "").trim().toLowerCase();
     const a = String(after?.status || "").trim().toLowerCase();
 
-    // Only when it becomes pending (new or resubmitted)
+    // Only when becomes pending (new or resubmitted)
     if (a !== "pending" || a === b) return;
 
     const name = String(after.publicName || "Collector");
@@ -1243,8 +1247,40 @@ export const notifyAdminOnCollectorApply = onDocumentWritten(
 );
 
 /* ====================================================
-   PICKUP: Notify junkshop when pickup becomes CONFIRMED
-   (household + collector flow)
+  ADMIN NOTIFIED: resident apply (pending)
+==================================================== */
+export const notifyAdminOnResidentApply = onDocumentWritten(
+  { document: "residentRequests/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any | undefined;
+    const after = event.data?.after?.data() as any | undefined;
+    if (!after) return;
+
+    const uid = String(event.params.uid);
+
+    const b = String(before?.status || "").trim().toLowerCase();
+    const a = String(after?.status || "").trim().toLowerCase();
+
+    if (a !== "pending" || a === b) return;
+
+    const name = String(after.publicName || "Resident");
+    const email = String(after.emailDisplay || "");
+
+    const admins = await getAdminUids();
+    logger.info("notifyAdminOnResidentApply", { uid, a, b, adminCount: admins.length });
+    if (admins.length === 0) return;
+
+    await sendPushToMany(
+      admins,
+      "New Resident Request 🏠",
+      `${name}${email ? ` (${email})` : ""} submitted a resident verification request.`,
+      { type: "admin_new_resident_request", residentUid: uid }
+    );
+  }
+);
+
+/* ====================================================
+  PICKUP: Notify junkshop when pickup becomes CONFIRMED
 ==================================================== */
 export const notifyJunkshopOnPickupConfirmed = onDocumentUpdated(
   { document: "requests/{requestId}", region: "asia-southeast1" },
@@ -1298,136 +1334,133 @@ export const notifyJunkshopOnPickupConfirmed = onDocumentUpdated(
       { type: "pickup_confirmed", requestId }
     );
 
-    logger.info("Junkshop notified for confirmed pickup", { requestId, junkshopId });
+    logger.info("Junkshop notified for confirmed pickup", {
+      requestId,
+      junkshopId,
+    });
   }
 );
 
 /* ====================================================
-   COLLECTOR NOTIFICATIONS (ADMIN + JUNKSHOP)
-   ✅ This is the part you needed fixed.
+  RESIDENT: notify on admin reject
+  (supports status OR adminStatus)
 ==================================================== */
+export const notifyResidentAdminRejected = onDocumentUpdated(
+  { document: "residentRequests/{uid}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    if (!before || !after) return;
 
-// 1) ADMIN approves/rejects collectorRequest
-export const notifyCollectorAdminDecision = onDocumentWritten(
+    const uid = String(after?.uid || event.params.uid || "").trim();
+    if (!uid) return;
+
+    const b = String(before.status || before.adminStatus || "").trim().toLowerCase();
+    const a = String(after.status || after.adminStatus || "").trim().toLowerCase();
+    if (a === b) return;
+
+    if (a !== "rejected") return;
+
+    const reason = String(after.rejectReason || after.adminRejectReason || "").trim();
+
+    await sendPushToUser(
+      uid,
+      "Resident verification rejected ❌",
+      reason.length > 0
+        ? `Your residency request was rejected. Reason: ${reason}`
+        : "Your residency request was rejected by the admin.",
+      { type: "resident_admin_rejected" }
+    );
+
+    logger.info("Resident rejected notification sent", { uid });
+  }
+);
+
+/* ====================================================
+  COLLECTOR: notify on admin approve/reject
+  (supports status OR adminStatus)
+==================================================== */
+export const notifyCollectorAdminDecision = onDocumentUpdated(
   { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
   async (event) => {
     const before = event.data?.before?.data() as any;
     const after = event.data?.after?.data() as any;
     if (!before || !after) return;
 
-    const uid = String(event.params.collectorUid);
+    const uid = String(after?.uid || event.params.collectorUid || "").trim();
+    if (!uid) return;
 
-    const b = String(before.status || "").trim().toLowerCase();
-    const a = String(after.status || "").trim().toLowerCase();
+    const b = String(before.status || before.adminStatus || "").trim().toLowerCase();
+    const a = String(after.status || after.adminStatus || "").trim().toLowerCase();
     if (a === b) return;
 
-    if (a === "adminapproved") {
-
-          // ✅ ALSO notify junkshops so they can accept the collector
-    const junkshops = await getJunkshopUids();
-    if (junkshops.length > 0) {
-      await sendPushToMany(
-        junkshops,
-        "Collector Available ✅",
-        "A collector was approved by admin. You can accept them now.",
-        { type: "junkshop_collector_available", collectorUid: uid }
-      );
-      logger.info("Junkshops notified of admin-approved collector", { collectorUid: uid, junkshopCount: junkshops.length });
-    }
-
+    // approved
+    if (a === "adminapproved" || a === "approved") {
       await sendPushToUser(
         uid,
-        "Admin approved ✅",
-        "You are approved by admin. Now wait for a junkshop to accept you.",
+        "Collector approved ✅",
+        "Your collector application has been approved by the admin.",
         { type: "collector_admin_approved" }
       );
-      logger.info("Collector adminApproved notified", { uid });
+      logger.info("Collector approved notification sent", { uid });
       return;
     }
 
+    // rejected
     if (a === "rejected") {
+      const reason = String(after.adminRejectReason || after.rejectReason || "").trim();
+
       await sendPushToUser(
         uid,
-        "Admin rejected ❌",
-        "Your collector application was rejected by the admin.",
+        "Collector rejected ❌",
+        reason.length > 0
+          ? `Your collector application was rejected. Reason: ${reason}`
+          : "Your collector application was rejected by the admin.",
         { type: "collector_admin_rejected" }
       );
-      logger.info("Collector rejected notified", { uid });
+      logger.info("Collector rejected notification sent", { uid });
       return;
     }
   }
 );
 
-// 2) JUNKSHOP accepts collectorRequest (status becomes junkshopAccepted)
-export const notifyCollectorJunkshopAccepted = onDocumentUpdated(
-  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
+/* ====================================================
+  RESIDENT: notify on admin approved
+  (supports status OR adminStatus)
+==================================================== */
+export const notifyResidentAdminApproved = onDocumentUpdated(
+  { document: "residentRequests/{uid}", region: "asia-southeast1" },
   async (event) => {
     const before = event.data?.before?.data() as any;
     const after = event.data?.after?.data() as any;
     if (!before || !after) return;
 
-    const uid = String(event.params.collectorUid);
+    const uid = String(after?.uid || event.params.uid || "").trim();
+    if (!uid) return;
 
-    const b = String(before.status || "").trim().toLowerCase();
-    const a = String(after.status || "").trim().toLowerCase();
+    const b = String(before.status || before.adminStatus || "").trim().toLowerCase();
+    const a = String(after.status || after.adminStatus || "").trim().toLowerCase();
     if (a === b) return;
 
-    if (a !== "junkshopaccepted") return;
+    if (a !== "adminapproved" && a !== "approved") return;
 
     await sendPushToUser(
       uid,
-      "Junkshop approved ✅",
-      "A junkshop accepted you. You can now start as a collector.",
-      { type: "collector_junkshop_accepted" }
+      "Resident approved ✅",
+      "Your residency request has been approved.",
+      { type: "resident_admin_approved" }
     );
-
-    logger.info("Collector junkshopAccepted notified", { uid });
   }
 );
 
-// 3) JUNKSHOP rejects collectorRequest (rejectedByJunkshops array grows)
-export const notifyCollectorJunkshopRejected = onDocumentUpdated(
-  { document: "collectorRequests/{collectorUid}", region: "asia-southeast1" },
-  async (event) => {
-    const before = event.data?.before?.data() as any;
-    const after = event.data?.after?.data() as any;
-    if (!before || !after) return;
-
-    const uid = String(event.params.collectorUid);
-
-    const beforeList = Array.isArray(before.rejectedByJunkshops)
-      ? before.rejectedByJunkshops
-      : [];
-    const afterList = Array.isArray(after.rejectedByJunkshops)
-      ? after.rejectedByJunkshops
-      : [];
-
-    if (afterList.length <= beforeList.length) return;
-
-    const beforeSet = new Set(beforeList.map((x: any) => String(x)));
-    const newlyAdded = afterList
-      .map((x: any) => String(x))
-      .filter((x: string) => !beforeSet.has(x));
-    if (newlyAdded.length === 0) return;
-
-    const rejectedByUid = newlyAdded[0];
-
-    await sendPushToUser(
-      uid,
-      "Junkshop declined ❌",
-      "A junkshop declined your request. You can try another junkshop.",
-      { type: "collector_junkshop_rejected", rejectedByUid }
-    );
-
-    logger.info("Collector junkshop rejection notified", { uid, rejectedByUid });
-  }
-);
-
-//restricted account
+/* ====================================================
+  RESTRICT ACCOUNT (admin)
+==================================================== */
 export const adminSetUserRestricted = onCall(
   { region: "asia-southeast1" },
   async (request) => {
-    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    if (!request.auth)
+      throw new HttpsError("unauthenticated", "Login required.");
     if (request.auth.token?.admin !== true)
       throw new HttpsError("permission-denied", "Admin only.");
 
@@ -1437,27 +1470,29 @@ export const adminSetUserRestricted = onCall(
     if (!uid) throw new HttpsError("invalid-argument", "uid required");
 
     if (request.auth.uid === uid) {
-      throw new HttpsError("failed-precondition", "You cannot restrict your own admin account.");
+      throw new HttpsError(
+        "failed-precondition",
+        "You cannot restrict your own admin account."
+      );
     }
 
-    // ✅ block login
     await admin.auth().updateUser(uid, { disabled: restricted });
-
-    // ✅ kick logged-in sessions too (recommended)
     await admin.auth().revokeRefreshTokens(uid);
 
-    // ✅ Firestore status for UI
     await admin.firestore().collection("Users").doc(uid).set(
       {
         status: restricted ? "restricted" : "active",
-        restrictedAt: restricted ? admin.firestore.FieldValue.serverTimestamp() : null,
-        unrestrictedAt: !restricted ? admin.firestore.FieldValue.serverTimestamp() : null,
+        restrictedAt: restricted
+          ? admin.firestore.FieldValue.serverTimestamp()
+          : null,
+        unrestrictedAt: !restricted
+          ? admin.firestore.FieldValue.serverTimestamp()
+          : null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
 
-    // optional claim
     try {
       const user = await admin.auth().getUser(uid);
       const existing = user.customClaims || {};
@@ -1467,41 +1502,5 @@ export const adminSetUserRestricted = onCall(
     }
 
     return { ok: true, uid, restricted };
-  }
-);
-
-/* ====================================================
-   OPTIONAL: legacy notification when Users/{uid} becomes collector
-   (This happens on junkshop acceptance, so keep it only if you still want it.)
-==================================================== */
-export const notifyCollectorRoleBecameCollector = onDocumentUpdated(
-  { document: "Users/{uid}", region: "asia-southeast1" },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const afterSnap = event.data?.after;
-    if (!beforeSnap || !afterSnap) return;
-
-    const before = beforeSnap.data() as any;
-    const after = afterSnap.data() as any;
-
-    const beforeRole = String(before?.Roles || before?.role || "")
-      .trim()
-      .toLowerCase();
-    const afterRole = String(after?.Roles || after?.role || "")
-      .trim()
-      .toLowerCase();
-
-    if (beforeRole !== "collector" && afterRole === "collector") {
-      const uid = String(event.params.uid);
-
-      await sendPushToUser(
-        uid,
-        "Collector activated ✅",
-        "Your collector account is now active.",
-        { type: "collector_role_activated", uid }
-      );
-
-      logger.info("Collector role activation notified", { uid });
-    }
   }
 );

@@ -27,11 +27,14 @@ class ChatListPage extends StatelessWidget {
       );
     }
 
+    // ✅ FIX: support chats that might not have lastMessageAt yet
+    // Also ensures stable sorting with createdAt.
     final q = FirebaseFirestore.instance
         .collection('chats')
         .where('participants', arrayContains: me)
         .where('type', isEqualTo: type)
-        .orderBy('lastMessageAt', descending: true);
+        .orderBy('lastMessageAt', descending: true)
+        .orderBy('createdAt', descending: true);
 
     return Scaffold(
       backgroundColor: bgColor,
@@ -59,7 +62,6 @@ class ChatListPage extends StatelessWidget {
             left: -120,
             child: _blurCircle(Colors.green.withOpacity(0.10), 360),
           ),
-
           StreamBuilder<QuerySnapshot>(
             stream: q.snapshots(),
             builder: (context, snap) {
@@ -94,7 +96,12 @@ class ChatListPage extends StatelessWidget {
                   final data = d.data() as Map<String, dynamic>;
 
                   final lastMsg = (data['lastMessage'] ?? "").toString();
-                  final lastAt = data['lastMessageAt'];
+
+                  // ✅ time fallback: lastMessageAt -> createdAt
+                  final dynamic lastAtRaw = data['lastMessageAt'];
+                  final dynamic createdAtRaw = data['createdAt'];
+                  final dynamic timeTs =
+                      (lastAtRaw is Timestamp) ? lastAtRaw : createdAtRaw;
 
                   final participants =
                       (data['participants'] as List?)?.cast<String>() ?? [];
@@ -112,6 +119,9 @@ class ChatListPage extends StatelessWidget {
                       (data['junkshopName'] ?? '').toString().trim();
 
                   String displayNameFromChat = "";
+
+                  // ✅ this part is for junkshop/collector naming;
+                  // household chats will fall back to Users doc name.
                   if (me == junkshopUid && collectorName.isNotEmpty) {
                     displayNameFromChat = collectorName;
                   } else if (me == collectorUid && junkshopName.isNotEmpty) {
@@ -127,7 +137,7 @@ class ChatListPage extends StatelessWidget {
                     return _ChatTile(
                       name: displayName,
                       lastMsg: lastMsg,
-                      timeText: _formatTime(lastAt),
+                      timeText: _formatTime(timeTs),
                       onTap: () {
                         Navigator.push(
                           context,
@@ -135,7 +145,7 @@ class ChatListPage extends StatelessWidget {
                             builder: (_) => ChatPage(
                               chatId: d.id,
                               title: displayName,
-                              otherUserId: otherUid, // ✅ required
+                              otherUserId: otherUid,
                             ),
                           ),
                         );
@@ -161,7 +171,7 @@ class ChatListPage extends StatelessWidget {
                       return _ChatTile(
                         name: displayName,
                         lastMsg: lastMsg,
-                        timeText: _formatTime(lastAt),
+                        timeText: _formatTime(timeTs),
                         onTap: () {
                           Navigator.push(
                             context,
@@ -169,7 +179,7 @@ class ChatListPage extends StatelessWidget {
                               builder: (_) => ChatPage(
                                 chatId: d.id,
                                 title: displayName,
-                                otherUserId: otherUid, // ✅ required
+                                otherUserId: otherUid,
                               ),
                             ),
                           );

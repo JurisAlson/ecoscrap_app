@@ -10,6 +10,7 @@ import '../image_detection.dart';
 import 'household_order_page.dart';
 import '../auth/CollectorAccountCreation.dart';
 import '../services/notification_service.dart';
+import 'package:ecoscrap_app/chat/screens/chat_list_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -39,16 +40,16 @@ class _DashboardPageState extends State<DashboardPage> {
 
   // ================= TAB SCREENS =================
   List<Widget> get _tabScreens => [
-        _householdHome(),
-        _historyScreen(),
-        const HouseholdOrderPage(),
-        const Center(
-          child: Text(
-            "Chat Screen",
-            style: TextStyle(color: Colors.white, fontSize: 22),
-          ),
-        ),
-      ];
+    _householdHome(),
+    _historyScreen(),
+    const HouseholdOrderPage(),
+
+    // ✅ FIX: household chat list
+    const ChatListPage(
+      type: "pickup",
+      title: "Chats",
+    ),
+  ];
 
   @override
   void initState() {
