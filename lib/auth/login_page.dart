@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
-import '../junkshop/junkshop_dashboard.dart';
+import '../screens/junkshop/junkshop_dashboard.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'forgot_password.dart';

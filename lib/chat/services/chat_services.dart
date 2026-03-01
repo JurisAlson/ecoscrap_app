@@ -20,7 +20,6 @@ class ChatService {
     final chatRef = _db.collection('chats').doc(chatId);
     final messagesRef = chatRef.collection('messages');
 
-    // Delete messages in batches
     while (true) {
       final snap = await messagesRef.limit(400).get();
       if (snap.docs.isEmpty) break;
@@ -32,7 +31,6 @@ class ChatService {
       await batch.commit();
     }
 
-    // Delete chat doc
     await chatRef.delete();
   }
 
@@ -43,7 +41,6 @@ class ChatService {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) throw Exception("Not logged in");
 
-    // create message doc id first so we can use it in the filename
     final msgRef = _db.collection('chats').doc(chatId).collection('messages').doc();
     final msgId = msgRef.id;
 
@@ -53,20 +50,17 @@ class ChatService {
         .child(chatId)
         .child('$msgId.jpg');
 
-    // upload
     await storageRef.putFile(file);
     final imageUrl = await storageRef.getDownloadURL();
 
-    // write message
     await msgRef.set({
       'senderId': uid,
-      'type': 'image',
+      'type': 'image',              // ✅ add
       'imageUrl': imageUrl,
-      'text': '', // keep for compatibility
+      'text': '',
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    // update chat preview
     await _db.collection('chats').doc(chatId).set({
       'lastMessage': '📷 Photo',
       'lastMessageAt': FieldValue.serverTimestamp(),
@@ -85,6 +79,7 @@ class ChatService {
 
     await msgRef.set({
       'senderId': uid,
+      'type': 'text',               // ✅ add
       'text': text.trim(),
       'createdAt': FieldValue.serverTimestamp(),
     });
@@ -171,8 +166,10 @@ class ChatService {
 
     final data = snap.data() ?? {};
 
-    final hasCollectorName = (data['collectorName'] ?? '').toString().trim().isNotEmpty;
-    final hasJunkshopName = (data['junkshopName'] ?? '').toString().trim().isNotEmpty;
+    final hasCollectorName =
+        (data['collectorName'] ?? '').toString().trim().isNotEmpty;
+    final hasJunkshopName =
+        (data['junkshopName'] ?? '').toString().trim().isNotEmpty;
 
     if (hasCollectorName && hasJunkshopName) return;
 
@@ -182,8 +179,10 @@ class ChatService {
     final c = collectorDoc.data() ?? {};
     final j = junkshopDoc.data() ?? {};
 
-    final collectorName = (c["name"] ?? c["Name"] ?? c["publicName"] ?? "Collector").toString();
-    final junkshopName = (j["name"] ?? j["shopName"] ?? j["Name"] ?? "Junkshop").toString();
+    final collectorName =
+        (c["name"] ?? c["Name"] ?? c["publicName"] ?? "Collector").toString();
+    final junkshopName =
+        (j["name"] ?? j["shopName"] ?? j["Name"] ?? "Junkshop").toString();
 
     await ref.update({
       if (!hasCollectorName) 'collectorName': collectorName,

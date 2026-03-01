@@ -77,6 +77,47 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     });
   }
 
+  Future<void> adminApproveCollector(String uid) async {
+  final db = FirebaseFirestore.instance;
+
+  final reqRef = db.collection("collectorRequests").doc(uid);
+  final userRef = db.collection("Users").doc(uid);
+
+  await db.runTransaction((tx) async {
+    final reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
+
+    // collectorRequests/{uid}
+    tx.set(
+      reqRef,
+      {
+        "status": "adminApproved",
+        "adminApprovedAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+
+    // Users/{uid}
+    tx.set(
+      userRef,
+      {
+        "collectorStatus": "adminApproved", // ✅ RoleGate expects this
+        "collectorVerified": true,
+        "collectorActive": true,            // optional (if you use it)
+        "adminReviewedAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+
+        // Optional: keep Roles as "collector" or leave as "user"
+        // If your collector dashboard should open, you can set:
+        "Roles": "collector",
+        "role": "collector",
+      },
+      SetOptions(merge: true),
+    );
+  });
+}
+
   // =========================
   // ADMIN: REJECT + DELETE ACCOUNT
   // (this is what allows email reuse)
@@ -335,7 +376,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
             final name = (data["publicName"] ?? "Resident").toString();
             final email = (data["emailDisplay"] ?? "").toString();
             final status = (data["status"] ?? "").toString();
-            final isPending = status.toLowerCase() == "pending";
+            final isPending = status.trim().toLowerCase() == "pending";
             final accent = _statusAccent(status);
 
             final kycBlock = FutureBuilder<_DecryptedKyc?>(
