@@ -40,7 +40,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   // ✅ BUY source dropdown values (UPDATED: added Walk-in)
   static const List<String> _buySources = [
     "Walk-in",
-    "Resident",
+    "Collector",
   ];
   String _selectedBuySource = _buySources.first;
 
@@ -113,7 +113,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     if (widget.prefillName != null && widget.prefillName!.isNotEmpty) {
       _txType = "buy";
-      _selectedBuySource = "Resident";
+      _selectedBuySource = "Collector";
 
       _sourceNameCtrl.text = widget.prefillName!;
 
