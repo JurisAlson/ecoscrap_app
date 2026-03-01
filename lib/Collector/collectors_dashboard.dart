@@ -29,9 +29,35 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   // ✅ Chat service
   final ChatService _chat = ChatService();
+  
 
   // ✅ Footer current tab
   int _tabIndex = 0;
+
+  Future<void> _acceptPickup(String requestId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+        'status': 'accepted',
+        'active': true,
+        'collectorId': user.uid,
+        'acceptedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Pickup accepted.")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Accept failed: $e")),
+      );
+    }
+  }
 
   @override
   void initState() {
@@ -432,11 +458,15 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         final pages = <Widget>[
           _CollectorHomeTab(
             collectorId: user.uid,
-            onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(), // ✅ LEFT drawer
-            onOpenNotifs: () => _scaffoldKey.currentState?.openEndDrawer(), // ✅ RIGHT drawer
+            onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
+            onOpenNotifs: () => _scaffoldKey.currentState?.openEndDrawer(),
+            onAcceptPickup: _acceptPickup,
           ),
           const CollectorChatListPage(),
-          _CollectorMapTab(collectorId: user.uid),
+          _CollectorMapTab(
+            collectorId: user.uid,
+            onAcceptPickup: _acceptPickup,
+          ),
         ];
 
         return Scaffold(
@@ -730,11 +760,13 @@ class _CollectorHomeTab extends StatelessWidget {
     required this.collectorId,
     required this.onOpenProfile,
     required this.onOpenNotifs,
+    required this.onAcceptPickup,
   });
 
   final String collectorId;
   final VoidCallback onOpenProfile;
   final VoidCallback onOpenNotifs;
+  final Future<void> Function(String requestId) onAcceptPickup;
 
   static const Color primaryColor = Color(0xFF1FA9A7);
 
@@ -852,7 +884,10 @@ class _CollectorHomeTab extends StatelessWidget {
           ),
           const SizedBox(height: 10),
 
-          _CollectorLogsHome(collectorId: collectorId),
+          _CollectorLogsHome(
+            collectorId: collectorId,
+            onAcceptPickup: onAcceptPickup,
+          ),
         ],
       ),
     );
@@ -873,8 +908,13 @@ class _CollectorHomeTab extends StatelessWidget {
 
 // ===================== MAP TAB =====================
 class _CollectorMapTab extends StatelessWidget {
-  const _CollectorMapTab({required this.collectorId});
+  const _CollectorMapTab({
+    required this.collectorId,
+    required this.onAcceptPickup,
+  });
+
   final String collectorId;
+  final Future<void> Function(String requestId) onAcceptPickup;
 
   @override
   Widget build(BuildContext context) {
@@ -919,6 +959,8 @@ class _CollectorMapTab extends StatelessWidget {
               final name = (data['householdName'] ?? 'Household').toString();
               final address = (data['pickupAddress'] ?? '').toString();
 
+              final isAcceptable = status == 'pending' || status == 'scheduled';
+
               return Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
@@ -962,7 +1004,12 @@ class _CollectorMapTab extends StatelessWidget {
                       ),
                     ),
                     ElevatedButton(
-                      onPressed: () {
+                      onPressed: () async {
+                        if (isAcceptable) {
+                          await onAcceptPickup(doc.id);
+                          return;
+                        }
+
                         Navigator.push(
                           context,
                           MaterialPageRoute(
@@ -970,7 +1017,7 @@ class _CollectorMapTab extends StatelessWidget {
                           ),
                         );
                       },
-                      child: const Text("OPEN"),
+                      child: Text(isAcceptable ? "ACCEPT" : "OPEN"),
                     ),
                   ],
                 ),
@@ -1003,9 +1050,14 @@ class _CollectorMapTab extends StatelessWidget {
 }
 
 // ================= LOGS HOME (unchanged) =================
-class _CollectorLogsHome extends StatelessWidget {
-  const _CollectorLogsHome({required this.collectorId});
+  class _CollectorLogsHome extends StatelessWidget {
+    const _CollectorLogsHome({
+    required this.collectorId,
+    required this.onAcceptPickup,
+  });
+
   final String collectorId;
+  final Future<void> Function(String requestId) onAcceptPickup;
 
   @override
   Widget build(BuildContext context) {
@@ -1030,8 +1082,8 @@ class _CollectorLogsHome extends StatelessWidget {
         .where('type', isEqualTo: 'pickup')
         .where('collectorId', isEqualTo: collectorId)
         .where('active', isEqualTo: true)
-        .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
-        .orderBy('updatedAt', descending: true)
+        .where('status', whereIn: ['pending', 'accepted', 'arrived', 'scheduled'])
+        .orderBy('updatedAt', descending: true) 
         .limit(1);
 
     return StreamBuilder<QuerySnapshot>(
@@ -1100,6 +1152,8 @@ class _CollectorLogsHome extends StatelessWidget {
                     final status = (data['status'] ?? '').toString().toLowerCase();
                     final name = (data['householdName'] ?? 'Household').toString();
                     final address = (data['pickupAddress'] ?? '').toString();
+
+                    final isAcceptable = status == 'pending' || status == 'scheduled';
 
                     return Container(
                       margin: const EdgeInsets.only(bottom: 14),
@@ -1309,6 +1363,7 @@ class _CollectorLogsHome extends StatelessWidget {
     return t(data['updatedAt']) ?? t(data['createdAt']);
   }
 
+  
   static String _formatTimestamp(Timestamp? ts) {
     if (ts == null) return "—";
     final dt = ts.toDate();
