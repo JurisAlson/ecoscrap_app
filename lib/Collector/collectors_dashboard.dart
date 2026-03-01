@@ -29,6 +29,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   // ✅ Chat service
   final ChatService _chat = ChatService();
+  String _two(int n) => n.toString().padLeft(2, '0');
   
 
   // ✅ Footer current tab
@@ -136,6 +137,116 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     } catch (e) {
       debugPrint("❌ setOnline failed: $e");
     }
+  }
+  Future<void> _declinePickup(String requestId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+        'status': 'declined',
+        'active': false,
+        'declinedBy': FieldValue.arrayUnion([user.uid]),
+        'declinedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Declined.")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Decline failed: $e")),
+      );
+    }
+  }
+
+  Future<void> _promptPickupAction({
+    required BuildContext context,
+    required String requestId,
+    required Map<String, dynamic> data,
+  }) async {
+    final address = (data['pickupAddress'] ?? 'Unknown address').toString();
+    final household = (data['householdName'] ?? 'Household').toString();
+    final bagLabel = (data['bagLabel'] ?? '').toString();
+    final bagKgNum = (data['bagKg'] is num) ? (data['bagKg'] as num).toDouble() : null;
+
+    final deliveryFee = (data['deliveryFee'] is num) ? (data['deliveryFee'] as num).toDouble() : null;
+    final distanceKm = (data['distanceKm'] is num) ? (data['distanceKm'] as num).toDouble() : null;
+    final etaMinutes = (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
+
+    final scheduleText = _formatPickupSchedule(data);
+    final source = (data['pickupSource'] ?? '').toString();
+
+    final choice = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text("Pickup Request"),
+      content: SingleChildScrollView(
+        child: Text(
+          "Household: $household\n"
+          "Address: $address\n"
+          "${bagLabel.isNotEmpty ? "Bag: $bagLabel${bagKgNum != null ? " (${bagKgNum.toStringAsFixed(1)} kg)" : ""}\n" : ""}"
+          "${distanceKm != null ? "Distance: ${distanceKm.toStringAsFixed(2)} km\n" : ""}"
+          "${etaMinutes != null ? "ETA: $etaMinutes min\n" : ""}"
+          "${deliveryFee != null ? "Delivery Fee: ₱${deliveryFee.toStringAsFixed(2)}\n" : ""}"
+          "Schedule: $scheduleText\n"
+          "${source.isNotEmpty ? "Pickup Source: $source\n" : ""}",
+        ),
+      ),
+      actionsAlignment: MainAxisAlignment.spaceBetween,
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.pop(ctx, "decline"),
+          child: const Text("DECLINE"),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(ctx, "accept"),
+          child: const Text("ACCEPT"),
+        ),
+      ],
+    ),
+  );
+
+    if (choice == "accept") {
+      await _acceptPickup(requestId);
+    } else if (choice == "decline") {
+      await _declinePickup(requestId);
+    }
+  }
+
+  // Helper: show schedule nicely
+  String _formatPickupSchedule(Map<String, dynamic> data) {
+    final type = (data['pickupType'] ?? '').toString(); // "now" | "window"
+    if (type == 'now') return "Now (ASAP)";
+
+    Timestamp? ts(dynamic v) => v is Timestamp ? v : null;
+
+    final startTs = ts(data['windowStart']) ?? ts(data['scheduledAt']);
+    final endTs = ts(data['windowEnd']);
+
+    // ✅ If no schedule fields exist
+    if (startTs == null) return "Scheduled";
+
+    String hm(DateTime d) {
+      int hour = d.hour % 12;
+      if (hour == 0) hour = 12;
+      final ampm = d.hour >= 12 ? "PM" : "AM";
+      return "$hour:${_two(d.minute)} $ampm";
+    }
+
+    final s = startTs.toDate();
+    final date = "${s.year}-${_two(s.month)}-${_two(s.day)}";
+
+    // ✅ Start-only schedule
+    if (endTs == null) {
+      return "$date • ${hm(s)}";
+    }
+
+    final e = endTs.toDate();
+    return "$date • ${hm(s)}–${hm(e)}";
   }
 
   // ✅ Direct collector <-> junkshop chat
@@ -477,6 +588,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           _CollectorMapTab(
             collectorId: user.uid,
             onAcceptPickup: _acceptPickup,
+            onDeclinePickup: _declinePickup,
           ),
         ];
 
@@ -545,7 +657,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: "HOME"),
           BottomNavigationBarItem(icon: Icon(Icons.forum_outlined), label: "CHATS"),
-          BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: "MAP"),
+          BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: "ORDERS"),
         ],
       ),
     );
@@ -566,7 +678,21 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   // ================== RIGHT DRAWER: NOTIFICATIONS ==================
   Widget _collectorNotificationsDrawer(BuildContext context) {
-    return SingleChildScrollView(
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Center(
+        child: Text("Not logged in", style: TextStyle(color: Colors.white)),
+      );
+    }
+
+    final stream = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: user.uid)
+        .where('status', whereIn: ['pending', 'scheduled'])
+        .snapshots();
+
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -579,29 +705,177 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
               ),
               const SizedBox(width: 8),
               const Text(
-                "Notifications",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+                "Pickup Requests",
+                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
 
-          _notifTile(
-            icon: Icons.info_outline,
-            title: "Welcome!",
-            subtitle: "Your pickup updates will appear here.",
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: stream,
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snap.hasError) {
+                  return Center(
+                    child: Text(
+                      "Failed to load pickups:\n${snap.error}",
+                      style: const TextStyle(color: Colors.white70),
+                      textAlign: TextAlign.center,
+                    ),
+                  );
+                }
+
+                final uid = user.uid;
+                final allDocs = snap.data?.docs ?? [];
+
+                // Hide those that collector declined already
+                final docs = allDocs.where((d) {
+                  final data = d.data() as Map<String, dynamic>;
+                  final declinedBy = (data['declinedBy'] as List?) ?? [];
+                  return !declinedBy.contains(uid);
+                }).toList();
+
+                if (docs.isEmpty) {
+                  return const Center(
+                    child: Text("No pending pickup requests.", style: TextStyle(color: Colors.white70)),
+                  );
+                }
+
+                return ListView.builder(
+                  itemCount: docs.length,
+                  itemBuilder: (_, i) {
+                    final doc = docs[i];
+                    final data = doc.data() as Map<String, dynamic>;
+
+                    final household = (data['householdName'] ?? 'Household').toString();
+                    final address = (data['pickupAddress'] ?? '').toString();
+
+                    final bagLabel = (data['bagLabel'] ?? '').toString();
+                    final bagKg = (data['bagKg'] is num) ? (data['bagKg'] as num).toInt() : null;
+
+                    final deliveryFee = (data['deliveryFee'] is num) ? (data['deliveryFee'] as num).toDouble() : null;
+                    final distanceKm = (data['distanceKm'] is num) ? (data['distanceKm'] as num).toDouble() : null;
+                    final etaMinutes = (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
+
+                    final scheduleText = _formatPickupSchedule(data);
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          InkWell(
+                            onTap: () => _promptPickupAction(
+                              context: context,
+                              requestId: doc.id,
+                              data: data,
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: primaryColor.withOpacity(0.18),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: const Icon(Icons.local_shipping_outlined, color: Colors.white),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        household,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        address.isEmpty ? "No address" : address,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(Icons.chevron_right, color: Colors.grey.shade500),
+                              ],
+                            ),
+                          ),
+
+                          const SizedBox(height: 10),
+
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _pill("Schedule: $scheduleText"),
+                              if (bagLabel.isNotEmpty)
+                                _pill("Bag: $bagLabel${bagKg != null ? " • ${bagKg}kg" : ""}"),
+                              if (distanceKm != null) _pill("Distance: ${distanceKm.toStringAsFixed(2)} km"),
+                              if (etaMinutes != null) _pill("ETA: $etaMinutes min"),
+                              if (deliveryFee != null) _pill("Fee: ₱${deliveryFee.toStringAsFixed(2)}"),
+                            ],
+                          ),
+
+                          const SizedBox(height: 12),
+
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () => _declinePickup(doc.id),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    side: BorderSide(color: Colors.white.withOpacity(0.18)),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  ),
+                                  child: const Text("DECLINE", style: TextStyle(fontWeight: FontWeight.w900)),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () => _acceptPickup(doc.id),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: primaryColor,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  ),
+                                  child: const Text("ACCEPT", style: TextStyle(fontWeight: FontWeight.w900)),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
           ),
-          const SizedBox(height: 12),
-          _notifTile(
-            icon: Icons.eco_outlined,
-            title: "Tip",
-            subtitle: "Keep bottles dry and clean for better acceptance.",
-          ),
-          const SizedBox(height: 12),
+
+          const SizedBox(height: 10),
+
+          // Keep your help tile
           _notifTile(
             icon: Icons.message_outlined,
             title: "Need help?",
@@ -615,6 +889,25 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _pill(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.25),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.10)),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -920,18 +1213,47 @@ class _CollectorMapTab extends StatelessWidget {
   const _CollectorMapTab({
     required this.collectorId,
     required this.onAcceptPickup,
+    required this.onDeclinePickup,
   });
 
   final String collectorId;
   final Future<void> Function(String requestId) onAcceptPickup;
+  final Future<void> Function(String requestId) onDeclinePickup;
 
+  String _two(int n) => n.toString().padLeft(2, '0');
+
+  String _formatPickupSchedule(Map<String, dynamic> data) {
+    final type = (data['pickupType'] ?? '').toString();
+    if (type == 'now') return "Now (ASAP)";
+
+    Timestamp? ts(dynamic v) => v is Timestamp ? v : null;
+
+    final startTs = ts(data['windowStart']) ?? ts(data['scheduledAt']);
+    final endTs = ts(data['windowEnd']);
+
+    if (startTs == null) return "Scheduled";
+
+    String hm(DateTime d) {
+      int hour = d.hour % 12;
+      if (hour == 0) hour = 12;
+      final ampm = d.hour >= 12 ? "PM" : "AM";
+      return "$hour:${_two(d.minute)} $ampm";
+    }
+
+    final s = startTs.toDate();
+    final date = "${s.year}-${_two(s.month)}-${_two(s.day)}";
+
+    if (endTs == null) return "$date • ${hm(s)}";
+
+    final e = endTs.toDate();
+    return "$date • ${hm(s)}–${hm(e)}";
+  }
   @override
   Widget build(BuildContext context) {
     final resumeQuery = FirebaseFirestore.instance
         .collection('requests')
         .where('type', isEqualTo: 'pickup')
         .where('collectorId', isEqualTo: collectorId)
-        .where('active', isEqualTo: true)
         .where('status', whereIn: ['pending', 'accepted', 'arrived', 'scheduled'])
         .orderBy('updatedAt', descending: true)
         .limit(1);
@@ -968,69 +1290,161 @@ class _CollectorMapTab extends StatelessWidget {
               final name = (data['householdName'] ?? 'Household').toString();
               final address = (data['pickupAddress'] ?? '').toString();
 
+              final bagLabel = (data['bagLabel'] ?? '').toString();
+              final bagKgNum = (data['bagKg'] is num) ? (data['bagKg'] as num).toDouble() : null;
+
+              final etaMinutes = (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
+              final deliveryFee = (data['deliveryFee'] is num) ? (data['deliveryFee'] as num).toDouble() : null;
+
+              // schedule text (you already use this in drawer page)
+              // If this function is not accessible here, I’ll show you the quick fix below.
+              final pickupTimeText = _formatPickupSchedule(data);
+
               final isAcceptable = status == 'pending' || status == 'scheduled';
 
               return Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(14),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Top row: icon + title + status chip
+                  Row(
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: Colors.green.withOpacity(0.14),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Icon(Icons.navigation_rounded, color: Colors.green),
                       ),
-                      child: const Icon(Icons.play_arrow_rounded, color: Colors.green),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            "Resume current pickup",
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            "$name • $status",
-                            style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
-                          ),
-                          if (address.isNotEmpty)
-                            Text(
-                              address,
+                      const SizedBox(width: 12),
+
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              "Current pickup",
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
                             ),
-                        ],
+                            const SizedBox(height: 4),
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.grey.shade300,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    ElevatedButton(
-                      onPressed: () async {
-                        if (isAcceptable) {
-                          await onAcceptPickup(doc.id);
-                          return;
-                        }
 
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => CollectorPickupMapPage(requestId: doc.id),
+                      _statusChip(status),
+                    ],
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  if (address.isNotEmpty)
+                    Row(
+                      children: [
+                        Icon(Icons.place_outlined, size: 16, color: Colors.grey.shade400),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            address,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.grey.shade400,
+                              fontSize: 12,
+                              height: 1.25,
+                            ),
                           ),
-                        );
-                      },
-                      child: Text(isAcceptable ? "ACCEPT" : "OPEN"),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              );
+
+                  const SizedBox(height: 12),
+
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _metaChip(Icons.access_time_rounded, "Pickup: $pickupTimeText"),
+
+                      if (bagLabel.isNotEmpty)
+                        _metaChip(
+                          Icons.shopping_bag_outlined,
+                          "Bag: $bagLabel${bagKgNum != null ? " • ${bagKgNum.toStringAsFixed(1)} kg" : ""}",
+                        ),
+
+                      if (etaMinutes != null)
+                        _metaChip(Icons.timer_outlined, "ETA: $etaMinutes min"),
+
+                      if (deliveryFee != null)
+                        _metaChip(Icons.payments_outlined, "Fee: ₱${deliveryFee.toStringAsFixed(2)}"),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // Buttons row
+                  Row(
+                    children: [
+                      if (isAcceptable) ...[
+                        Expanded(
+                          child: _pillButton(
+                            label: "DECLINE",
+                            isPrimary: false,
+                            onTap: () async => await onDeclinePickup(doc.id),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _pillButton(
+                            label: "ACCEPT",
+                            isPrimary: true,
+                            onTap: () async => await onAcceptPickup(doc.id),
+                          ),
+                        ),
+                      ] else ...[
+                        Expanded(
+                          child: _pillButton(
+                            label: "OPEN",
+                            isPrimary: true,
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => CollectorPickupMapPage(requestId: doc.id),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            );
             },
           ),
         ],
@@ -1054,6 +1468,121 @@ class _CollectorMapTab extends StatelessWidget {
           Text(body, style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.35)),
         ],
       ),
+    );
+  }
+  Widget _metaChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.20),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: Colors.white70),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  Widget _statusChip(String status) {
+    final s = status.toLowerCase();
+
+    String label = s.isEmpty ? "UNKNOWN" : s.toUpperCase();
+    IconData icon = Icons.info_outline;
+    Color bg = Colors.white.withOpacity(0.10);
+    Color fg = Colors.white70;
+
+    if (s == "pending" || s == "scheduled") {
+      label = "PENDING";
+      icon = Icons.schedule_rounded;
+      bg = Colors.amber.withOpacity(0.15);
+      fg = Colors.amberAccent;
+    } else if (s == "accepted") {
+      label = "ACCEPTED";
+      icon = Icons.check_circle_outline;
+      bg = Colors.lightBlue.withOpacity(0.16);
+      fg = Colors.lightBlueAccent;
+    } else if (s == "arrived") {
+      label = "ARRIVED";
+      icon = Icons.near_me_outlined;
+      bg = Colors.green.withOpacity(0.15);
+      fg = Colors.greenAccent;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: fg),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: fg,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _pillButton({
+    required String label,
+    required bool isPrimary,
+    required VoidCallback onTap,
+  }) {
+    return SizedBox(
+      height: 44,
+      child: isPrimary
+          ? ElevatedButton(
+              onPressed: onTap,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1FA9A7),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            )
+          : OutlinedButton(
+              onPressed: onTap,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: BorderSide(color: Colors.white.withOpacity(0.18)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
     );
   }
 }
@@ -1381,12 +1910,12 @@ class _CollectorMapTab extends StatelessWidget {
     final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
     final yesterday = dt.year == now.year && dt.month == now.month && dt.day == now.day - 1;
 
-    String two(int n) => n.toString().padLeft(2, '0');
+    String _two(int n) => n.toString().padLeft(2, '0');
 
     int hour = dt.hour % 12;
     if (hour == 0) hour = 12;
     final ampm = dt.hour >= 12 ? "PM" : "AM";
-    final time = "$hour:${two(dt.minute)} $ampm";
+    final time = "$hour:${_two(dt.minute)} $ampm";
 
     if (sameDay) return "Today • $time";
     if (yesterday) return "Yesterday • $time";
