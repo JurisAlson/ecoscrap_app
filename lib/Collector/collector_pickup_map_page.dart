@@ -267,45 +267,56 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     );
   }
 
-  /// ✅ ARRIVED -> COMPLETE (and delete chats)
   Future<void> _markArrivedOrComplete() async {
     final s = _status.toLowerCase();
 
     // COMPLETE
     if (s == 'arrived') {
       try {
-        await FirebaseFirestore.instance.collection('requests').doc(widget.requestId).update({
+        await FirebaseFirestore.instance
+            .collection('requests')
+            .doc(widget.requestId)
+            .update({
           'status': 'completed',
           'active': false,
           'completedAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
-
           'junkshopId': "07Wi7N8fALh2yqNdt1CQgIYVGE43",
           'junkshopName': "Mores Scrap",
         });
 
         // ✅ delete both chats tied to request
         final requestId = widget.requestId;
-        // await _chat.deleteChat("pickup_$requestId");
-        // await _chat.deleteChat("junkshop_pickup_$requestId");
+        await _chat.deleteChat("pickup_$requestId");
+        await _chat.deleteChat("junkshop_pickup_$requestId");
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Marked as completed.")),
         );
         Navigator.pop(context);
+      } on FirebaseException catch (e) {
+        debugPrint("❌ Complete failed: ${e.code} | ${e.message}");
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Complete failed: ${e.code}")),
+        );
       } catch (e) {
+        debugPrint("❌ Complete failed: $e");
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Complete failed: $e")),
         );
       }
-      return;
+      return; // ✅ IMPORTANT: stop here so it won’t run ARRIVED after COMPLETE
     }
 
     // ARRIVED
     try {
-      await FirebaseFirestore.instance.collection('requests').doc(widget.requestId).update({
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(widget.requestId)
+          .update({
         'status': 'arrived',
         'arrived': true,
         'arrivedAt': FieldValue.serverTimestamp(),
@@ -316,6 +327,12 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       setState(() => _status = 'arrived');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Marked as arrived.")),
+      );
+    } on FirebaseException catch (e) {
+      debugPrint("❌ Arrived failed: ${e.code} | ${e.message}");
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Arrived failed: ${e.code}")),
       );
     } catch (e) {
       if (!mounted) return;
