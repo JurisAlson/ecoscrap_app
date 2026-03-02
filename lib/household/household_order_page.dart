@@ -100,7 +100,7 @@ class _OrderCard extends StatelessWidget {
     final windowStart = data['windowStart'] is Timestamp ? data['windowStart'] as Timestamp : null;
     final windowEnd = data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
 
-    final canCancel = !['completed', 'cancelled', 'declined'].contains(status);
+    final canCancel = !arrived && !['completed', 'cancelled', 'declined'].contains(status);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -135,27 +135,42 @@ class _OrderCard extends StatelessWidget {
 
             const SizedBox(height: 16),
 
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: canCancel
-                        ? () => _cancelOrder(context, bgColor)
-                        : null,
-                    icon: const Icon(Icons.cancel_outlined),
-                    label: const Text("Cancel Order"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: Colors.white12,
-                      disabledForegroundColor: Colors.white38,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+            if (canCancel) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _cancelOrder(context, bgColor),
+                      icon: const Icon(Icons.cancel_outlined),
+                      label: const Text("Cancel Order"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.redAccent,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
+                ],
+              ),
+            ] else ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ],
-            ),
+                child: Text(
+                  arrived
+                      ? "Collector has arrived. Cancellation is no longer available."
+                      : "This order can no longer be cancelled.",
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ),
+            ],
 
             const SizedBox(height: 10),
             Text(
