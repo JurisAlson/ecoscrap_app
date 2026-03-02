@@ -1490,6 +1490,10 @@ export const adminSetUserRestricted = onCall(
     const uid = String(request.data?.uid || "").trim();
     const restricted = Boolean(request.data?.restricted);
 
+    // ✅ NEW: accept reasons (from your admin UI)
+    const reasonCode = String(request.data?.reasonCode || "").trim();
+    const reasonText = String(request.data?.reasonText || "").trim();
+
     if (!uid) throw new HttpsError("invalid-argument", "uid required");
 
     if (request.auth.uid === uid) {
@@ -1499,12 +1503,39 @@ export const adminSetUserRestricted = onCall(
       );
     }
 
-    await admin.auth().updateUser(uid, { disabled: restricted });
+    // ✅ Optional validation (safe + minimal)
+    if (restricted && !reasonCode) {
+      throw new HttpsError(
+        "invalid-argument",
+        "reasonCode is required when restricting a user."
+      );
+    }
+
+    // ✅ Reason label map (same as Flutter)
+    const restrictionReasonMap: Record<string, string> = {
+      potential_fake: "Potential fake account / identity",
+      false_information: "False information",
+      suspicious_activity: "Suspicious activity / fraud",
+      spam_abuse: "Spam / abuse",
+      duplicate_account: "Duplicate account",
+      policy_violation: "Violation of app rules / policy",
+      other: "Others",
+    };
+
+    // ✅ IMPORTANT: keep login possible (do NOT disable users)
+    // Restricted users will be blocked in-app via Firestore status + RoleGate/Login routing.
+    await admin.auth().updateUser(uid, { disabled: false });
     await admin.auth().revokeRefreshTokens(uid);
 
+    // ✅ Firestore status + reason fields
     await admin.firestore().collection("Users").doc(uid).set(
       {
         status: restricted ? "restricted" : "active",
+
+        restrictedReasonCode: restricted ? reasonCode : "",
+        restrictedReasonText:
+          restricted && reasonCode === "other" ? reasonText : "",
+
         restrictedAt: restricted
           ? admin.firestore.FieldValue.serverTimestamp()
           : null,
@@ -1516,6 +1547,7 @@ export const adminSetUserRestricted = onCall(
       { merge: true }
     );
 
+    // ✅ restricted claim (kept)
     try {
       const user = await admin.auth().getUser(uid);
       const existing = user.customClaims || {};
@@ -1524,6 +1556,37 @@ export const adminSetUserRestricted = onCall(
       logger.warn("Failed to set restricted claim", { uid, err: String(e) });
     }
 
-    return { ok: true, uid, restricted };
+    // ✅ notify user (push + in-app)
+    try {
+      if (restricted) {
+        const reasonLine =
+          reasonCode === "other" && reasonText
+            ? reasonText
+            : reasonCode
+            ? (restrictionReasonMap[reasonCode] ?? reasonCode)
+            : "Restricted";
+
+        await sendPushToUser(
+          uid,
+          "Account restricted ⚠️",
+          `Your EcoScrap account was restricted.\nReason: ${reasonLine}\n\nPlease contact the admin if you believe this is a mistake.`,
+          { type: "account_restricted", reasonCode, reasonText }
+        );
+      } else {
+        await sendPushToUser(
+          uid,
+          "Account restored ✅",
+          "Your EcoScrap account access has been restored.",
+          { type: "account_unrestricted" }
+        );
+      }
+    } catch (e) {
+      logger.warn("Failed to notify user about restriction change", {
+        uid,
+        err: String(e),
+      });
+    }
+
+    return { ok: true, uid, restricted, reasonCode, reasonText };
   }
 );

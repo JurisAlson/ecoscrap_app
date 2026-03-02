@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'login_page.dart';
 
 class RestrictedAccountPage extends StatelessWidget {
   final String reasonTitle;     // e.g. "False information"
@@ -175,7 +176,11 @@ class RestrictedAccountPage extends StatelessWidget {
                       ),
                       onPressed: () async {
                         await FirebaseAuth.instance.signOut();
-                        if (context.mounted) Navigator.pop(context);
+if (!context.mounted) return;
+Navigator.of(context).pushAndRemoveUntil(
+  MaterialPageRoute(builder: (_) => const LoginPage()),
+  (_) => false,
+);
                       },
                       child: const Text(
                         "Log out",
