@@ -403,6 +403,29 @@ export const revertResidentOnRejected = onDocumentUpdated(
     const a = String(after.status || after.adminStatus || "").toLowerCase();
     if (a === b) return;
     if (a !== "rejected") return;
+    
+        // ✅ Send notification BEFORE deleting the request doc (prevents race condition)
+    const targetUid = String(after?.uid || event.params.uid || "").trim();
+    const reason = String(after.rejectReason || after.adminRejectReason || "").trim();
+
+    if (targetUid) {
+      await sendPushToUser(
+        targetUid,
+        "Resident verification rejected ❌",
+        reason.length > 0
+          ? `Your residency request was rejected. Reason: ${reason}`
+          : "Your residency request was rejected by the admin.",
+        { type: "resident_admin_rejected" }
+      );
+
+      logger.info("Resident rejected notification sent (from revertResidentOnRejected)", {
+        uid: targetUid,
+      });
+    } else {
+      logger.warn("Rejected request missing target uid (cannot notify)", {
+        docId: event.params.uid,
+      });
+    }
 
     const db = admin.firestore();
     const bucket = admin.storage().bucket();
@@ -1345,7 +1368,7 @@ export const notifyJunkshopOnPickupConfirmed = onDocumentUpdated(
   RESIDENT: notify on admin reject
   (supports status OR adminStatus)
 ==================================================== */
-export const notifyResidentAdminRejected = onDocumentUpdated(
+/*export const notifyResidentAdminRejected = onDocumentUpdated(
   { document: "residentRequests/{uid}", region: "asia-southeast1" },
   async (event) => {
     const before = event.data?.before?.data() as any;
@@ -1374,7 +1397,7 @@ export const notifyResidentAdminRejected = onDocumentUpdated(
 
     logger.info("Resident rejected notification sent", { uid });
   }
-);
+); 
 
 /* ====================================================
   COLLECTOR: notify on admin approve/reject

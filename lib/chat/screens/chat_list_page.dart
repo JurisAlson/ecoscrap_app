@@ -1,7 +1,8 @@
+import 'dart:ui';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'dart:ui';
 
 import 'chat_page.dart';
 
@@ -27,14 +28,11 @@ class ChatListPage extends StatelessWidget {
       );
     }
 
-    // ✅ FIX: support chats that might not have lastMessageAt yet
-    // Also ensures stable sorting with createdAt.
     final q = FirebaseFirestore.instance
         .collection('chats')
         .where('participants', arrayContains: me)
         .where('type', isEqualTo: type)
-        .orderBy('lastMessageAt', descending: true)
-        .orderBy('createdAt', descending: true);
+        .orderBy('lastMessageAt', descending: true);
 
     return Scaffold(
       backgroundColor: bgColor,
@@ -97,7 +95,6 @@ class ChatListPage extends StatelessWidget {
 
                   final lastMsg = (data['lastMessage'] ?? "").toString();
 
-                  // ✅ time fallback: lastMessageAt -> createdAt
                   final dynamic lastAtRaw = data['lastMessageAt'];
                   final dynamic createdAtRaw = data['createdAt'];
                   final dynamic timeTs =
@@ -110,25 +107,36 @@ class ChatListPage extends StatelessWidget {
                     orElse: () => "",
                   );
 
-                  final junkshopUid = (data['junkshopUid'] ?? '').toString();
-                  final collectorUid = (data['collectorUid'] ?? '').toString();
+                  // ✅ ids + names on chat doc (recommended)
+                  final householdUid = (data['householdUid'] ?? '').toString().trim();
+                  final collectorUid = (data['collectorUid'] ?? '').toString().trim();
+                  final householdName = (data['householdName'] ?? '').toString().trim();
+                  final collectorName = (data['collectorName'] ?? '').toString().trim();
 
-                  final collectorName =
-                      (data['collectorName'] ?? '').toString().trim();
-                  final junkshopName =
-                      (data['junkshopName'] ?? '').toString().trim();
+                  final junkshopUid = (data['junkshopUid'] ?? '').toString().trim();
+                  final junkshopName = (data['junkshopName'] ?? '').toString().trim();
 
                   String displayNameFromChat = "";
 
-                  // ✅ this part is for junkshop/collector naming;
-                  // household chats will fall back to Users doc name.
-                  if (me == junkshopUid && collectorName.isNotEmpty) {
-                    displayNameFromChat = collectorName;
-                  } else if (me == collectorUid && junkshopName.isNotEmpty) {
-                    displayNameFromChat = junkshopName;
+                  // ✅ Pickup chats: show "the other person"
+                  if (type == "pickup") {
+                    if (me == householdUid && collectorName.isNotEmpty) {
+                      displayNameFromChat = collectorName;
+                    } else if (me == collectorUid && householdName.isNotEmpty) {
+                      displayNameFromChat = householdName;
+                    }
                   }
 
-                  // if we have name already OR otherUid missing
+                  // ✅ Junkshop chats (your existing logic)
+                  if (type == "junkshop") {
+                    if (me == junkshopUid && collectorName.isNotEmpty) {
+                      displayNameFromChat = collectorName;
+                    } else if (me == collectorUid && junkshopName.isNotEmpty) {
+                      displayNameFromChat = junkshopName;
+                    }
+                  }
+
+                  // ✅ if we already have name OR otherUid missing
                   if (displayNameFromChat.isNotEmpty || otherUid.isEmpty) {
                     final displayName = displayNameFromChat.isNotEmpty
                         ? displayNameFromChat
@@ -153,7 +161,7 @@ class ChatListPage extends StatelessWidget {
                     );
                   }
 
-                  // fallback: read Users
+                  // ✅ fallback: read Users doc for the otherUid
                   return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                     stream: FirebaseFirestore.instance
                         .collection('Users')

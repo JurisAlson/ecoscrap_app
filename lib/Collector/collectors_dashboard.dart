@@ -1910,12 +1910,12 @@ class _CollectorMapTab extends StatelessWidget {
     final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
     final yesterday = dt.year == now.year && dt.month == now.month && dt.day == now.day - 1;
 
-    String _two(int n) => n.toString().padLeft(2, '0');
+    String two(int n) => n.toString().padLeft(2, '0');
 
     int hour = dt.hour % 12;
     if (hour == 0) hour = 12;
     final ampm = dt.hour >= 12 ? "PM" : "AM";
-    final time = "$hour:${_two(dt.minute)} $ampm";
+    final time = "$hour:${two(dt.minute)} $ampm";
 
     if (sameDay) return "Today • $time";
     if (yesterday) return "Yesterday • $time";
