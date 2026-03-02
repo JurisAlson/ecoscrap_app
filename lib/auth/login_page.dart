@@ -6,6 +6,7 @@ import 'package:firebase_core/firebase_core.dart';
 import '../screens/junkshop/junkshop_dashboard.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
+import 'restricted_account_page.dart';
 import 'forgot_password.dart';
 import 'UserAccountCreation.dart';
 import '../role_gate.dart';
@@ -23,6 +24,17 @@ class _LoginPageState extends State<LoginPage> {
 
   bool _isLoading = false;
   bool _obscurePassword = true;
+
+  // ✅ same reason mapping used by admin
+  static const Map<String, String> restrictionReasonMap = {
+    "potential_fake": "Potential fake account / identity",
+    "false_information": "False information",
+    "suspicious_activity": "Suspicious activity / fraud",
+    "spam_abuse": "Spam / abuse",
+    "duplicate_account": "Duplicate account",
+    "policy_violation": "Violation of app rules / policy",
+    "other": "Others",
+  };
 
   @override
   void dispose() {
@@ -96,6 +108,43 @@ class _LoginPageState extends State<LoginPage> {
     });
   }
 
+  /// ✅ Build detailed restriction title + details from Firestore fields
+  /// Fields expected:
+  /// - status: "restricted"
+  /// - restrictedReasonCode
+  /// - restrictedReasonText (only for "other")
+  Map<String, String> _buildRestrictionInfo(Map<String, dynamic> data) {
+    final reasonCode = (data['restrictedReasonCode'] ?? '').toString().trim();
+    final reasonText = (data['restrictedReasonText'] ?? '').toString().trim();
+
+    final title = (reasonCode.isNotEmpty)
+        ? (restrictionReasonMap[reasonCode] ?? "Restricted")
+        : "Restricted";
+
+    // ✅ detailed message
+    String details;
+
+    if (reasonCode == "other" && reasonText.isNotEmpty) {
+      details =
+          "Admin note:\n$reasonText\n\n"
+          "If you believe this is a mistake, please contact the admin and provide supporting details.";
+    } else if (reasonCode.isNotEmpty) {
+      details =
+          "Your account was restricted due to:\n$title\n\n"
+          "You can still sign in, but you cannot use EcoScrap until the admin reviews your account.\n\n"
+          "If you believe this is a mistake, contact the admin and request an appeal/unrestriction.";
+    } else {
+      details =
+          "Your account has been restricted by an administrator.\n\n"
+          "If you believe this is a mistake, please contact the admin to request a review.";
+    }
+
+    return {
+      "title": title,
+      "details": details,
+    };
+  }
+
   Future<void> _login() async {
     if (_isLoading) return;
 
@@ -137,14 +186,22 @@ class _LoginPageState extends State<LoginPage> {
           await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
       final data = snap.data() ?? {};
 
-      // ✅ EXTRA SAFETY: Firestore status check (in case auth-disable not deployed yet)
+      // ✅ Restriction check -> go to RestrictedAccountPage (NOT toast)
       final status =
           (data['status'] ?? 'active').toString().trim().toLowerCase();
       if (status == 'restricted') {
-        await FirebaseAuth.instance.signOut();
-        _showToast(
-          "Your account has been restricted. Please contact the admin.",
-          isError: true,
+        final info = _buildRestrictionInfo(data);
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RestrictedAccountPage(
+              reasonTitle: info["title"] ?? "Restricted",
+              reasonDetails: info["details"] ?? "",
+              uid: u.uid,
+              email: u.email,
+            ),
+          ),
         );
         return;
       }
@@ -156,6 +213,7 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!mounted) return;
 
+      // junkshop goes to junkshop dashboard
       if (role == 'junkshop' || role == 'junkshops') {
         final shopName =
             (data['Name'] ?? data['name'] ?? data['shopName'] ?? 'Junkshop')
@@ -397,8 +455,8 @@ class _LoginPageState extends State<LoginPage> {
                     icon: Icons.lock_outline,
                     isPassword: true,
                     obscureText: _obscurePassword,
-                    onToggleVisibility: () =>
-                        setState(() => _obscurePassword = !_obscurePassword),
+                    onToggleVisibility: () => setState(
+                        () => _obscurePassword = !_obscurePassword),
                   ),
                   Align(
                     alignment: Alignment.centerRight,
@@ -434,7 +492,8 @@ class _LoginPageState extends State<LoginPage> {
                           : const Text(
                               "Continue",
                               style: TextStyle(
-                                  fontSize: 17, fontWeight: FontWeight.bold),
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold),
                             ),
                     ),
                   ),
