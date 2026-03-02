@@ -35,6 +35,25 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
     "households",
   ];
 
+  // ✅ Restriction reason options (6+ + Others last)
+  static const List<Map<String, String>> restrictionReasons = [
+    {"code": "potential_fake", "label": "Potential fake account / identity"},
+    {"code": "false_information", "label": "False information"},
+    {"code": "suspicious_activity", "label": "Suspicious activity / fraud"},
+    {"code": "spam_abuse", "label": "Spam / abuse"},
+    {"code": "duplicate_account", "label": "Duplicate account"},
+    {"code": "policy_violation", "label": "Violation of app rules / policy"},
+    {"code": "other", "label": "Others"},
+  ];
+
+  String _reasonLabelFromCode(String code) {
+    final hit = restrictionReasons.firstWhere(
+      (e) => e["code"] == code,
+      orElse: () => {"label": "Restricted"},
+    );
+    return hit["label"] ?? "Restricted";
+  }
+
   String _normRole(dynamic raw) {
     final s = (raw ?? "").toString().trim().toLowerCase();
 
@@ -98,6 +117,125 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
     );
   }
 
+  // ✅ FB-like reason picker dialog
+  Future<Map<String, String>?> _pickRestrictionReason({
+    required String name,
+    required String uid,
+  }) async {
+    String selectedCode = restrictionReasons.first["code"]!;
+    final otherCtrl = TextEditingController();
+
+    final res = await showDialog<Map<String, String>?>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.6),
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setD) {
+            final isOther = selectedCode == "other";
+
+            return AlertDialog(
+              backgroundColor: bgColor.withOpacity(0.96),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              title: const Text(
+                "Why restrict this user?",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              content: SizedBox(
+                width: 420,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "User: $name\nUID: $uid",
+                        style: const TextStyle(color: Colors.white70, height: 1.35),
+                      ),
+                      const SizedBox(height: 14),
+
+                      ...restrictionReasons.map((r) {
+                        final code = r["code"]!;
+                        final label = r["label"]!;
+                        return RadioListTile<String>(
+                          dense: true,
+                          value: code,
+                          groupValue: selectedCode,
+                          activeColor: Colors.orangeAccent,
+                          title: Text(label, style: const TextStyle(color: Colors.white)),
+                          onChanged: (v) => setD(() => selectedCode = v ?? selectedCode),
+                        );
+                      }).toList(),
+
+                      if (isOther) ...[
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: otherCtrl,
+                          style: const TextStyle(color: Colors.white),
+                          maxLines: 2,
+                          decoration: InputDecoration(
+                            hintText: "Type the reason...",
+                            hintStyle: TextStyle(color: Colors.grey.shade500),
+                            filled: true,
+                            fillColor: Colors.white.withOpacity(0.06),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: Colors.orangeAccent.withOpacity(0.75), width: 1.2),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.white70)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orangeAccent,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    final otherText = otherCtrl.text.trim();
+
+                    if (selectedCode == "other" && otherText.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          backgroundColor: bgColor.withOpacity(0.95),
+                          content: const Text(
+                            "Please enter a reason for 'Others'.",
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+
+                    Navigator.pop(context, {
+                      "reasonCode": selectedCode,
+                      "reasonText": selectedCode == "other" ? otherText : "",
+                    });
+                  },
+                  child: const Text("Continue"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return res;
+  }
+
   Future<void> _setRestricted({
     required String uid,
     required String name,
@@ -112,6 +250,13 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       return;
     }
 
+    // ✅ If restricting, pick reason first
+    Map<String, String>? reason;
+    if (restricted) {
+      reason = await _pickRestrictionReason(name: name, uid: uid);
+      if (reason == null) return; // canceled
+    }
+
     final ok = await showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withOpacity(0.6),
@@ -124,7 +269,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
         ),
         content: Text(
           restricted
-              ? "This user can still log in, but will see a restricted page and cannot use the app.\n\nUser: $name\nUID: $uid\n\nContinue?"
+              ? "This user can still log in, but will see a restricted page and cannot use the app.\n\nUser: $name\nUID: $uid\n\nReason: ${_reasonLabelFromCode(reason!["reasonCode"]!)}"
               : "Restore access for:\n\nUser: $name\nUID: $uid\n\nContinue?",
           style: const TextStyle(color: Colors.white70, height: 1.35),
         ),
@@ -157,6 +302,8 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
       await callable.call({
         "uid": uid,
         "restricted": restricted,
+        "reasonCode": restricted ? (reason?["reasonCode"] ?? "") : "",
+        "reasonText": restricted ? (reason?["reasonText"] ?? "") : "",
       });
 
       if (!mounted) return;
@@ -193,7 +340,6 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
         children: [
           const SizedBox(height: 6),
 
-          // ✅ Simple header row
           const Row(
             children: [
               Icon(Icons.people, color: Colors.white),
@@ -206,7 +352,6 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
           ),
           const SizedBox(height: 14),
 
-          // ✅ Search
           _panel(
             child: TextField(
               onChanged: (v) => setState(() => _query = v),
@@ -232,7 +377,6 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
 
           const SizedBox(height: 10),
 
-          // ✅ Filters
           _sectionLabel("Filter"),
           const SizedBox(height: 8),
           Wrap(
@@ -241,7 +385,6 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
             children: _filterRoles.map((role) {
               final selected = _roleFilter == role;
 
-              // ✅ Special label for restricted (optional)
               final labelWidget = role == "restricted"
                   ? Row(
                       mainAxisSize: MainAxisSize.min,
@@ -315,20 +458,14 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                   // Hide admin + junkshop + unknown
                   if (role == "admin" || role == "junkshop" || role == "unknown") return false;
 
-                  // status restricted?
                   final status = (data["status"] ?? "active").toString().trim().toLowerCase();
                   final restricted = status == "restricted";
 
-                  // ✅ If filter is restricted, show ONLY restricted (role can be collector/residence)
                   if (_roleFilter == "restricted") {
-                    // still hide unverified residence for cleanliness? up to you.
-                    // BUT since these are restricted users, admins usually want to see them all.
-                    // We'll show restricted regardless of resident verification.
                     return restricted && _matchesSearch(d, data, q);
                   }
 
-                  // ✅ Existing rule:
-                  // If it is a resident/user, show ONLY if admin approved.
+                  // If resident, only show if approved
                   if (role == "residence" && !_isVerifiedResident(data)) return false;
 
                   final matchesSearch = _matchesSearch(d, data, q);
@@ -350,12 +487,21 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
 
                     final uid = d.id;
                     final name = (data["Name"] ?? data["name"] ?? "").toString();
-                    final email =
-                        (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
+                    final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
                     final role = _normRole(data["Roles"] ?? data["role"] ?? data["roles"]);
 
                     final status = (data["status"] ?? "active").toString().trim().toLowerCase();
                     final restricted = status == "restricted";
+
+                    // ✅ reason display
+                    final reasonCode = (data["restrictedReasonCode"] ?? "").toString().trim();
+                    final reasonText = (data["restrictedReasonText"] ?? "").toString().trim();
+
+                    String reasonLine = "";
+                    if (restricted) {
+                      final label = _reasonLabelFromCode(reasonCode);
+                      reasonLine = (reasonCode == "other" && reasonText.isNotEmpty) ? reasonText : label;
+                    }
 
                     final title = name.isNotEmpty ? name : (email.isNotEmpty ? email : uid);
                     final managing = _manageUid == uid;
@@ -380,10 +526,9 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                         children: [
                           Container(
                             width: 4,
-                            height: restricted ? 84 : 78,
+                            height: restricted ? 98 : 78,
                             decoration: BoxDecoration(
-                              color: (restricted ? Colors.orangeAccent : _roleColor(role))
-                                  .withOpacity(0.55),
+                              color: (restricted ? Colors.orangeAccent : _roleColor(role)).withOpacity(0.55),
                               borderRadius: BorderRadius.circular(999),
                             ),
                           ),
@@ -408,6 +553,19 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                                       email,
                                       style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                                     ),
+
+                                  if (restricted && reasonLine.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      "Reason: $reasonLine",
+                                      style: TextStyle(
+                                        color: Colors.orangeAccent.withOpacity(0.85),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ],
+
                                   const SizedBox(height: 10),
                                   Wrap(
                                     spacing: 8,
