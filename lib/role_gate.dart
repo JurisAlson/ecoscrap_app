@@ -8,6 +8,9 @@ import 'auth/login_page.dart';
 import 'Collector/collectors_dashboard.dart';
 import 'household/household_dashboard.dart';
 
+// ✅ add this import
+import 'auth/restricted_account_page.dart';
+
 Future<void> grantMeAdminClaimIfOwner(User user) async {
   if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
 
@@ -38,6 +41,48 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     return "unknown";
   }
 
+  // ✅ same reason mapping used by admin/login
+  static const Map<String, String> restrictionReasonMap = {
+    "potential_fake": "Potential fake account / identity",
+    "false_information": "False information",
+    "suspicious_activity": "Suspicious activity / fraud",
+    "spam_abuse": "Spam / abuse",
+    "duplicate_account": "Duplicate account",
+    "policy_violation": "Violation of app rules / policy",
+    "other": "Others",
+  };
+
+  Map<String, String> _buildRestrictionInfo(Map<String, dynamic> data) {
+    final reasonCode = (data['restrictedReasonCode'] ?? '').toString().trim();
+    final reasonText = (data['restrictedReasonText'] ?? '').toString().trim();
+
+    final title = (reasonCode.isNotEmpty)
+        ? (restrictionReasonMap[reasonCode] ?? "Restricted")
+        : "Restricted";
+
+    String details;
+
+    if (reasonCode == "other" && reasonText.isNotEmpty) {
+      details =
+          "Admin note:\n$reasonText\n\n"
+          "If you believe this is a mistake, please contact the admin and provide supporting details.";
+    } else if (reasonCode.isNotEmpty) {
+      details =
+          "Your account was restricted due to:\n$title\n\n"
+          "You can still sign in, but you cannot use EcoScrap until the admin reviews your account.\n\n"
+          "If you believe this is a mistake, contact the admin and request an appeal/unrestriction.";
+    } else {
+      details =
+          "Your account has been restricted by an administrator.\n\n"
+          "If you believe this is a mistake, please contact the admin to request a review.";
+    }
+
+    return {
+      "title": title,
+      "details": details,
+    };
+  }
+
   // ✅ USERS: only residentStatus matters
   bool _isResidentApproved(Map<String, dynamic> data) {
     final residentStatus = (data['residentStatus'] ?? "")
@@ -47,20 +92,17 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     return residentStatus == "approved";
   }
 
-  // ✅ COLLECTORS: only collectorStatus matters (NEW FLOW)
-  // Accept both:
-  // - "adminApproved" (new)
-  // - "approved" (legacy)
+  // ✅ COLLECTORS: only collectorStatus matters
   bool _isCollectorApproved(Map<String, dynamic> data) {
     final status = (data['collectorStatus'] ?? "")
         .toString()
         .trim()
         .toLowerCase();
 
-    if (status == "adminapproved") return true; // ✅ NEW
-    if (status == "approved") return true;      // ✅ LEGACY (optional)
+    if (status == "adminapproved") return true; // NEW
+    if (status == "approved") return true;      // LEGACY
 
-    // Optional legacy fallback if older accounts used adminVerified/adminStatus/collectorActive
+    // Optional legacy fallback
     final legacyAdminOk = data['adminVerified'] == true;
     final legacyAdminStatus =
         (data['adminStatus'] ?? "").toString().toLowerCase() == "approved";
@@ -159,10 +201,26 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
         }
 
         final data = docSnap.data!.data() ?? {};
+
+        // ✅ HARD BLOCK: Restricted users always go to RestrictedAccountPage
+        final status = (data['status'] ?? 'active').toString().trim().toLowerCase();
+        if (status == "restricted") {
+          final info = _buildRestrictionInfo(data);
+
+          return RestrictedAccountPage(
+            reasonTitle: info["title"] ?? "Restricted",
+            reasonDetails: info["details"] ?? "",
+            uid: user.uid,
+            email: user.email,
+          );
+        }
+
         final role = _normRole(data['Roles'] ?? data['roles'] ?? data['role']);
 
         // ✅ Debug (remove later)
-        debugPrint("RoleGate => role=$role | residentStatus=${data['residentStatus']} | collectorStatus=${data['collectorStatus']}");
+        debugPrint(
+          "RoleGate => role=$role | status=$status | residentStatus=${data['residentStatus']} | collectorStatus=${data['collectorStatus']}",
+        );
 
         // ===== ADMIN =====
         if (role == 'admin') {
