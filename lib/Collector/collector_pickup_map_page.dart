@@ -56,7 +56,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return LatLng(gp.latitude, gp.longitude);
   }
 
-  LatLng get _origin => _pos == null ? _pickup : LatLng(_pos!.latitude, _pos!.longitude);
+  LatLng get _origin =>
+      _pos == null ? _pickup : LatLng(_pos!.latitude, _pos!.longitude);
 
   @override
   void initState() {
@@ -67,7 +68,11 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   Future<void> _loadRequestInfo() async {
     try {
-      final doc = await FirebaseFirestore.instance.collection('requests').doc(widget.requestId).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(widget.requestId)
+          .get();
+
       final data = doc.data() ?? {};
       final gp = data['pickupLocation'];
 
@@ -88,7 +93,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));
       }
     } catch (e) {
-      // optional
+      debugPrint("❌ _loadRequestInfo error: $e");
     }
   }
 
@@ -96,7 +101,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     final ok = await _ensureLocationPermission();
     if (!ok) return;
 
-    final p = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
+    final p = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best);
     if (!mounted) return;
     setState(() => _pos = p);
 
@@ -112,12 +118,14 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return false;
-
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      return false;
+    }
     return true;
   }
 
-  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+  final FirebaseFunctions _functions =
+      FirebaseFunctions.instanceFor(region: 'asia-southeast1');
 
   Future<void> _buildRoute() async {
     final o = _origin;
@@ -221,7 +229,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return points;
   }
 
-  // ✅ pickup chat only when accepted/arrived
+  /// ✅ Pickup chat available only when accepted/arrived
+  /// ✅ Collector opens chat with the household as "otherUserId"
   Future<void> _openPickupChat() async {
     final s = _status.toLowerCase();
     final canChat = s == "accepted" || s == "arrived";
@@ -236,12 +245,38 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     final me = FirebaseAuth.instance.currentUser?.uid ?? "";
     final householdUid = _householdId.trim();
-    final collectorUid = _collectorId.trim().isNotEmpty ? _collectorId.trim() : me;
+    var collectorUid = _collectorId.trim();
 
-    if (householdUid.isEmpty || collectorUid.isEmpty) {
+    if (me.isEmpty || householdUid.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Chat IDs not loaded yet. Please try again.")),
+      );
+      return;
+    }
+
+    // ✅ If request has no collectorId yet, assign it to me (collector)
+    if (collectorUid.isEmpty) {
+      collectorUid = me;
+      try {
+        await FirebaseFirestore.instance
+            .collection('requests')
+            .doc(widget.requestId)
+            .update({
+          'collectorId': me,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+
+        if (mounted) setState(() => _collectorId = me);
+      } catch (e) {
+        debugPrint("❌ Failed to write collectorId: $e");
+      }
+    }
+
+    if (collectorUid.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Collector not assigned yet.")),
       );
       return;
     }
@@ -258,7 +293,11 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       MaterialPageRoute(
         builder: (_) => ChatPage(
           chatId: chatId,
-          title: _householdName.isEmpty ? "Chat" : _householdName,
+
+          // ✅ Collector sees the household name
+          title: _householdName.isEmpty ? "Household" : _householdName,
+
+          // ✅ Important: other user is the household
           otherUserId: householdUid,
         ),
       ),
@@ -285,8 +324,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
         // ✅ delete both chats tied to request
         final requestId = widget.requestId;
-        await _chat.deleteChat("pickup_$requestId");
-        await _chat.deleteChat("junkshop_pickup_$requestId");
+        await _chat.cleanupPickupChats(requestId);
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -306,7 +344,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
           SnackBar(content: Text("Complete failed: $e")),
         );
       }
-      return; // ✅ IMPORTANT: stop here so it won’t run ARRIVED after COMPLETE
+      return;
     }
 
     // ARRIVED
