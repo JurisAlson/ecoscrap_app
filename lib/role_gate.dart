@@ -7,8 +7,6 @@ import 'admin/admin_home_page.dart';
 import 'auth/login_page.dart';
 import 'Collector/collectors_dashboard.dart';
 import 'household/household_dashboard.dart';
-
-// ✅ add this import
 import 'auth/restricted_account_page.dart';
 
 Future<void> grantMeAdminClaimIfOwner(User user) async {
@@ -37,7 +35,10 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final s = (raw ?? "").toString().trim().toLowerCase();
     if (s == "admins" || s == "admin") return "admin";
     if (s == "collectors" || s == "collector") return "collector";
-    if (s == "users" || s == "user" || s == "household" || s == "households") return "user";
+    if (s == "users" ||
+        s == "user" ||
+        s == "household" ||
+        s == "households") return "user";
     return "unknown";
   }
 
@@ -85,22 +86,18 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
   // ✅ USERS: only residentStatus matters
   bool _isResidentApproved(Map<String, dynamic> data) {
-    final residentStatus = (data['residentStatus'] ?? "")
-        .toString()
-        .trim()
-        .toLowerCase();
+    final residentStatus =
+        (data['residentStatus'] ?? "").toString().trim().toLowerCase();
     return residentStatus == "approved";
   }
 
   // ✅ COLLECTORS: only collectorStatus matters
   bool _isCollectorApproved(Map<String, dynamic> data) {
-    final status = (data['collectorStatus'] ?? "")
-        .toString()
-        .trim()
-        .toLowerCase();
+    final status =
+        (data['collectorStatus'] ?? "").toString().trim().toLowerCase();
 
     if (status == "adminapproved") return true; // NEW
-    if (status == "approved") return true;      // LEGACY
+    if (status == "approved") return true; // LEGACY
 
     // Optional legacy fallback
     final legacyAdminOk = data['adminVerified'] == true;
@@ -109,10 +106,6 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final legacyActive = data['collectorActive'] == true;
 
     return legacyAdminOk && legacyAdminStatus && legacyActive;
-  }
-
-  Future<DocumentSnapshot<Map<String, dynamic>>> _getUserDoc(String uid) {
-    return FirebaseFirestore.instance.collection('Users').doc(uid).get();
   }
 
   Future<bool> _hasAdminClaim(User user) async {
@@ -175,11 +168,18 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     // Optional:
     // grantMeAdminClaimIfOwner(user);
 
-    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      future: _getUserDoc(user.uid),
+    final docStream = FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .snapshots();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: docStream,
       builder: (context, docSnap) {
         if (docSnap.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
 
         if (docSnap.hasError) {
@@ -203,10 +203,10 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
         final data = docSnap.data!.data() ?? {};
 
         // ✅ HARD BLOCK: Restricted users always go to RestrictedAccountPage
-        final status = (data['status'] ?? 'active').toString().trim().toLowerCase();
+        final status =
+            (data['status'] ?? 'active').toString().trim().toLowerCase();
         if (status == "restricted") {
           final info = _buildRestrictionInfo(data);
-
           return RestrictedAccountPage(
             reasonTitle: info["title"] ?? "Restricted",
             reasonDetails: info["details"] ?? "",
@@ -228,7 +228,9 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
             future: _hasAdminClaim(user),
             builder: (context, claimSnap) {
               if (claimSnap.connectionState == ConnectionState.waiting) {
-                return const Scaffold(body: Center(child: CircularProgressIndicator()));
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
               }
 
               if (claimSnap.hasError) {
@@ -260,7 +262,8 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
           final ok = _isCollectorApproved(data);
 
           if (!ok) {
-            final cs = (data['collectorStatus'] ?? "").toString().toLowerCase();
+            final cs =
+                (data['collectorStatus'] ?? "").toString().toLowerCase();
 
             final msg = cs == "rejected"
                 ? "Your collector request was rejected.\n\nPlease resubmit your application."
@@ -281,7 +284,8 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
           final ok = _isResidentApproved(data);
 
           if (!ok) {
-            final rs = (data['residentStatus'] ?? "").toString().toLowerCase();
+            final rs =
+                (data['residentStatus'] ?? "").toString().toLowerCase();
 
             final msg = rs == "rejected"
                 ? "Account verification rejected.\n\nPlease re-submit a valid Government ID."
