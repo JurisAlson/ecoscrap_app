@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
+import '../geomapping.dart';
 import '../image_detection.dart';
 import 'household_order_page.dart';
 import '../auth/CollectorAccountCreation.dart';
@@ -355,6 +355,40 @@ class _DashboardPageState extends State<DashboardPage> {
                   Expanded(
                     child: Text(
                       "Scan an item\nCheck if it’s recyclable",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          GestureDetector(
+            onTap: () {
+              _closeCameraBar();
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const GeoMappingPage()),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [Colors.green, primaryColor]),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.location_on_outlined, color: Colors.white, size: 36),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      "Drop-off & Pickup\nSet a schedule for recyclables",
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
