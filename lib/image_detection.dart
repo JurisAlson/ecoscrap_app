@@ -24,147 +24,418 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  // ✅ Show instructions BEFORE opening camera
-  Future<bool> _showScanInstructions() async {
-    bool agreed = false;
-
-    final result = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setLocalState) {
-            return AlertDialog(
-              backgroundColor: bgColor,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
+  void _showScanningDialog({File? previewImage}) {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    barrierColor: Colors.black.withOpacity(0.55),
+    builder: (_) {
+      return Center(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              width: 320,
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: Colors.white.withOpacity(0.12)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.25),
+                    blurRadius: 24,
+                    offset: const Offset(0, 16),
+                  ),
+                ],
               ),
-              title: const Text(
-                "Before you scan",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (previewImage != null) ...[
+                    Container(
+                      width: double.infinity,
+                      height: 140,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white.withOpacity(0.10)),
+                        color: Colors.white.withOpacity(0.04),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.file(previewImage, fit: BoxFit.cover),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: primaryColor.withOpacity(0.16),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: primaryColor.withOpacity(0.22)),
+                    ),
+                    child: const Center(
+                      child: CircularProgressIndicator(strokeWidth: 3),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    "Scanning your photo…",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    "Please hold on. This will only take a moment.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontSize: 12,
+                      height: 1.25,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      minHeight: 8,
+                      backgroundColor: Colors.white.withOpacity(0.10),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+
+
+  // ✅ Show instructions BEFORE opening camera
+  // ✅ Show photo guide BEFORE opening camera (picture-based, no repeated text)
+// ✅ 4x4 Photo Guide Grid BEFORE opening camera
+// ✅ 4×4 grid per slide + swipe (PageView) BEFORE opening camera
+// ✅ 2×2 grid per slide + 4 slides + instructions (PageView) BEFORE opening camera
+Future<bool> _showScanInstructions() async {
+  bool agreed = false;
+  final result = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setLocalState) {
+          int pageIndex = 0;
+          final PageController controller = PageController();
+
+          // 👉 Replace these with your real asset paths (4 images per slide)
+          final pages = [
+            {
+              "title": "1) Good lighting",
+              "subtitle": "Scan in a bright area. Avoid dark or yellow lighting.",
+              "items": [
+                {"asset": "assets/images/guide_light_good1.png", "good": true},
+                {"asset": "assets/images/guide_light_good2.png", "good": true},
+                {"asset": "assets/images/guide_light_bad1.png", "good": false},
+                {"asset": "assets/images/guide_light_bad2.png", "good": false},
+              ],
+            },
+            {
+              "title": "2) Fill the frame",
+              "subtitle": "Move closer so the item fills most of the photo.",
+              "items": [
+                {"asset": "assets/images/guide_frame_good1.png", "good": true},
+                {"asset": "assets/images/guide_frame_good2.png", "good": true},
+                {"asset": "assets/images/guide_frame_bad1.png", "good": false},
+                {"asset": "assets/images/guide_frame_bad2.png", "good": false},
+              ],
+            },
+            {
+              "title": "3) One item only",
+              "subtitle": "Scan 1 plastic item at a time. Avoid multiple objects.",
+              "items": [
+                {"asset": "assets/images/guide_one_good1.png", "good": true},
+                {"asset": "assets/images/guide_one_good2.png", "good": true},
+                {"asset": "assets/images/guide_one_bad1.png", "good": false},
+                {"asset": "assets/images/guide_one_bad2.png", "good": false},
+              ],
+            },
+            {
+              "title": "4) Avoid glare & blur",
+              "subtitle": "Keep steady and reduce reflections on shiny plastics.",
+              "items": [
+                {"asset": "assets/images/guide_glare_good1.png", "good": true},
+                {"asset": "assets/images/guide_glare_good2.png", "good": true},
+                {"asset": "assets/images/guide_glare_bad1.png", "good": false},
+                {"asset": "assets/images/guide_glare_bad2.png", "good": false},
+              ],
+            },
+          ];
+
+          Widget swipeHint() {
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.chevron_left,
+                      size: 18, color: Colors.white.withOpacity(0.65)),
+                  const SizedBox(width: 2),
+                  Icon(Icons.swipe,
+                      size: 18, color: Colors.white.withOpacity(0.85)),
+                  const SizedBox(width: 2),
+                  Icon(Icons.chevron_right,
+                      size: 18, color: Colors.white.withOpacity(0.65)),
+                ],
+              ),
+            );
+          }
+
+          Widget safeAssetImage(String path) {
+            return Image.asset(
+              path,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Center(
+                child: Icon(
+                  Icons.photo_outlined,
+                  color: Colors.white.withOpacity(0.35),
+                  size: 22,
                 ),
               ),
-              content: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      "This scanner detects PLASTICS.",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        height: 1.3,
-                      ),
+            );
+          }
+
+          Widget tile(Map<String, dynamic> item) {
+            final bool good = item["good"] as bool;
+            final Color badgeColor = good ? Colors.green : Colors.red;
+            final IconData badgeIcon = good ? Icons.check : Icons.close;
+
+            return Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: safeAssetImage(item["asset"] as String),
                     ),
-                    const SizedBox(height: 10),
-                    Text(
-                      "It will tell you if the item is recyclable and likely accepted by nearby junkshops.",
-                      style: TextStyle(
-                        color: Colors.grey.shade300,
-                        fontSize: 13,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      "For best results:",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      "• Take a clear photo in good lighting.\n"
-                      "• Fill the frame with the item.\n"
-                      "• Avoid blur and reflections.\n"
-                      "• Show 1 item ONLY.",
-                      style: TextStyle(
-                        color: Colors.grey.shade300,
-                        fontSize: 13,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(10),
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      width: 22,
+                      height: 22,
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.08),
-                        ),
+                        color: badgeColor.withOpacity(0.90),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            color: primaryColor,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              "Tip: If the result looks wrong, try again with a closer and brighter photo.",
-                              style: TextStyle(
-                                color: Colors.grey.shade300,
-                                fontSize: 12,
-                                height: 1.3,
+                      child: Icon(badgeIcon, size: 14, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          Widget dots() {
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(
+                pages.length,
+                (i) => AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  height: 6,
+                  width: pageIndex == i ? 18 : 6,
+                  decoration: BoxDecoration(
+                    color: pageIndex == i ? primaryColor : Colors.white24,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: bgColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            title: Row(
+              children: [
+                Icon(Icons.camera_alt, color: primaryColor),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    "Before you scan",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                swipeHint(),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    "Swipe through the guides. Try to match the GOOD examples.",
+                    style: TextStyle(
+                      color: Colors.grey.shade300,
+                      fontSize: 13,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // ✅ 4 slides, each slide shows 2×2 images
+                  SizedBox(
+                    height: 290,
+                    child: PageView.builder(
+                      controller: controller,
+                      itemCount: pages.length,
+                      onPageChanged: (i) => setLocalState(() => pageIndex = i),
+                      itemBuilder: (_, p) {
+                        final page = pages[p];
+                        final items = (page["items"] as List)
+                            .cast<Map<String, dynamic>>();
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              page["title"] as String,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w900,
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    CheckboxListTile(
-                      value: agreed,
-                      onChanged: (v) => setLocalState(() => agreed = v ?? false),
-                      controlAffinity: ListTileControlAffinity.leading,
-                      dense: true,
-                      activeColor: primaryColor,
-                      checkColor: bgColor,
-                      title: const Text(
-                        "I understand and want to continue",
-                        style: TextStyle(color: Colors.white, fontSize: 13),
-                      ),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(
-                    "Cancel",
-                    style: TextStyle(color: Colors.grey.shade300),
-                  ),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: bgColor,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                            const SizedBox(height: 4),
+                            Text(
+                              page["subtitle"] as String,
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                                height: 1.25,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                itemCount: items.length,
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2, // ✅ 2×2
+                                  mainAxisSpacing: 10,
+                                  crossAxisSpacing: 10,
+                                  childAspectRatio: 1,
+                                ),
+                                itemBuilder: (_, i) => tile(items[i]),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
-                  onPressed: agreed ? () => Navigator.pop(ctx, true) : null,
-                  child: const Text("Continue"),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
 
-    return result ?? false;
-  }
+                  const SizedBox(height: 10),
+                  dots(),
+
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.info_outline, color: primaryColor, size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            "Best accuracy: 1 plastic item only, bright light, close-up, steady hands.",
+                            style: TextStyle(
+                              color: Colors.grey.shade300,
+                              fontSize: 12,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+                  CheckboxListTile(
+                    value: agreed,
+                    onChanged: (v) => setLocalState(() => agreed = v ?? false),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    dense: true,
+                    activeColor: primaryColor,
+                    checkColor: bgColor,
+                    title: const Text(
+                      "I understand and want to continue",
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text("Cancel", style: TextStyle(color: Colors.grey.shade300)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  foregroundColor: bgColor,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: agreed ? () => Navigator.pop(ctx, true) : null,
+                child: const Text("Continue"),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+
+  return result ?? false;
+}
 
   Future<void> _captureImageWithCamera() async {
     if (_isPickingImage) return;
@@ -185,11 +456,7 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
 
       if (!mounted) return;
 
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator()),
-      );
+      _showScanningDialog(previewImage: _image);
 
       final double p = await TFLiteService.runModel(_image!.path);
 
@@ -242,6 +509,7 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
       _isPickingImage = false;
     }
   }
+
 
   @override
   Widget build(BuildContext context) {

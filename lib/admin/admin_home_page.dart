@@ -347,10 +347,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            "UID: ${user?.uid ?? "-"}",
-            style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-          ),
           const SizedBox(height: 24),
           Container(
             width: double.infinity,
