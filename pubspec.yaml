@@ -55,3 +55,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/models/plastic_model.tflite
+    - assets/plastics/colored/
+    - assets/plastics/HD/
+    - assets/plastics/Trans/
+    - assets/plastics/White/
