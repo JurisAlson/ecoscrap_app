@@ -71,7 +71,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             shopID: shopId,
             shopName: shopName,
             onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
-            onOpenNotifications: () => _scaffoldKey.currentState?.openEndDrawer(),
+            notifBell: _buildJunkshopNotifBell(),
           ),
           InventoryScreen(shopID: shopId),
           TransactionScreen(shopID: shopId),
@@ -156,7 +156,122 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       ),
     );
   }
+  Widget _buildJunkshopNotifBell() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
 
+    if (uid == null) {
+      return InkWell(
+        onTap: () => _scaffoldKey.currentState?.openEndDrawer(),
+        borderRadius: BorderRadius.circular(50),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(Icons.notifications_outlined, color: Colors.grey.shade300),
+        ),
+      );
+    }
+
+    final userDocStream =
+        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
+
+    // latest completed pickup for this junkshop
+    final latestNotifQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('status', isEqualTo: 'completed')
+        .where('active', isEqualTo: false)
+        .where('junkshopId', isEqualTo: uid)
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: userDocStream,
+      builder: (context, userSnap) {
+        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+
+        // ✅ you can reuse lastNotifSeenAt, OR use a separate one:
+        final lastSeen = userData['lastJunkshopNotifSeenAt'] as Timestamp?;
+
+        return StreamBuilder<QuerySnapshot>(
+          stream: latestNotifQuery.snapshots(),
+          builder: (context, snap) {
+            bool hasUnread = false;
+
+            final docs = snap.data?.docs ?? [];
+            if (docs.isNotEmpty) {
+              final data = docs.first.data() as Map<String, dynamic>;
+
+              // prefer completedAt, else updatedAt
+              final updatedAt = (data['completedAt'] is Timestamp)
+                  ? data['completedAt'] as Timestamp
+                  : (data['updatedAt'] is Timestamp)
+                      ? data['updatedAt'] as Timestamp
+                      : null;
+
+              if (updatedAt != null) {
+                if (lastSeen == null) {
+                  hasUnread = true;
+                } else {
+                  hasUnread = updatedAt.toDate().isAfter(lastSeen.toDate());
+                }
+              }
+            }
+
+            return Stack(
+              children: [
+                InkWell(
+                  onTap: () async {
+                    _scaffoldKey.currentState?.openEndDrawer();
+                    await _markJunkshopNotifsSeen();
+                  },
+                  borderRadius: BorderRadius.circular(50),
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.notifications_outlined,
+                        color: Colors.grey.shade300),
+                  ),
+                ),
+
+                // ✅ red dot (same style as household)
+                if (hasUnread)
+                  Positioned(
+                    right: 8,
+                    top: 8,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _markJunkshopNotifsSeen() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    await FirebaseFirestore.instance.collection('Users').doc(uid).set(
+      {
+        'lastJunkshopNotifSeenAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
   // ================= DRAWERS =================
   Widget _notificationsDrawer() {
     final user = FirebaseAuth.instance.currentUser;
@@ -235,8 +350,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                     final d = docs[i];
                     final data = d.data() as Map<String, dynamic>;
 
-                    // ✅ name to prefill (householdName)
-                    final name = (data['householdName'] ?? '').toString().trim();
+                    final name = (data['collectorName'] ?? '').toString().trim();
+                    final collectorId = (data['collectorId'] ?? '').toString().trim();
 
                     // ✅ use completedAt if available, else updatedAt
                     final Timestamp? ts = (data['completedAt'] is Timestamp)
@@ -256,15 +371,18 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                       ),
                       child: ListTile(
                         onTap: () {
-                          Navigator.pop(context); // close drawer first
+                          Navigator.pop(context);
 
-                          // ✅ minimal safe payload for TransactionDetailScreen
+                          final collectorName = (data['collectorName'] ?? '').toString().trim();
+                          final collectorId = (data['collectorId'] ?? '').toString().trim();
+
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => ReceiptScreen(
                                 shopID: FirebaseAuth.instance.currentUser!.uid,
-                                prefillName: name, // householdName
+                                prefillCollectorName: collectorName.isEmpty ? null : collectorName,
+                                prefillCollectorId: collectorId.isEmpty ? null : collectorId,
                               ),
                             ),
                           );

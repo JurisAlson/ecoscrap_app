@@ -38,6 +38,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   late String _timeString;
   late Timer _timer;
 
+  bool _pinMode = false;
+
   // Map
   GoogleMapController? _mapController;
 
@@ -56,15 +58,15 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   // Route polyline
   List<LatLng> _routePoints = [];
-
+  String _dirDistanceText = "";
+  String _dirDurationText = "";
+  int? _dirDurationValueSec;
   // Trip stage
   TripStage _tripStage = TripStage.planning;
 
   bool get _isPickup => _tripStage == TripStage.pickup;
   bool get _isDelivering => _tripStage == TripStage.delivering;
 
-  // Delivery fee model (demo)
-  double get _ratePerKm => 12.0;
 
   LatLng get _originLatLng {
     final p = _currentPosition;
@@ -86,11 +88,15 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   // ✅ Simple consistent ETA
   int get _etaMinutes {
+    final sec = _dirDurationValueSec;
+    if (sec != null && sec > 0) {
+      final m = (sec / 60).round();
+      return m.clamp(3, 999);
+    }
     final base = (_distanceKm * 4.0).round();
     return base.clamp(3, 999);
   }
 
-  double get _deliveryFee => _distanceKm * _ratePerKm;
 
   // ----- Available collectors dropdown -----
   String? _selectedCollectorId;
@@ -231,7 +237,12 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       });
 
       final data = result.data;
-      final points = (data is Map) ? data['points'] as String? : null;
+      if (data is! Map) return;
+
+      final points = data['points'] as String?;
+      final distText = (data['distanceText'] ?? '').toString();
+      final durText = (data['durationText'] ?? '').toString();
+      final durVal = data['durationValueSec'];
 
       if (points == null || points.isEmpty) {
         if (!mounted) return;
@@ -392,14 +403,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
   void _onMapTap(LatLng tapped) {
+    if (!_pinMode) return;
+
     setState(() {
       _pinnedPickupLatLng = tapped;
       _pickupSource = "pin";
     });
 
     _snack("Pickup location pinned.", bg: _sheet);
-
-    // Optional: zoom to the pin so user sees it clearly
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(tapped, 16));
   }
 
@@ -582,9 +593,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                       ),
                       const SizedBox(height: 10),
                       _miniInfoCard(
-                        title: "Estimated Delivery Fee",
-                        value: "₱${_deliveryFee.toStringAsFixed(2)} • ${_distanceKm.toStringAsFixed(1)} km • $_etaMinutes min",
-                        icon: Icons.payments_outlined,
+                        title: "Estimated Trip",
+                        value: "${_distanceKm.toStringAsFixed(1)} km • $_etaMinutes min",
+                        icon: Icons.route_outlined,
                         valueColor: _accent,
                       ),
                       const SizedBox(height: 10),
@@ -646,8 +657,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
                             Text(
                               _pinnedPickupLatLng == null
-                                  ? "Using your current location. Tap the map to pin a different pickup point."
-                                  : "Pinned at: ${_pinnedPickupLatLng!.latitude.toStringAsFixed(5)}, ${_pinnedPickupLatLng!.longitude.toStringAsFixed(5)}\nTap the map again to move the pin.",
+                                  ? "Using your current location. (Details will be shared with the collector.)"
+                                  : "Pinned pickup location set. (Details will be shared with the collector.)",
                               style: const TextStyle(
                                 color: _textSecondary,
                                 fontSize: 12,
@@ -944,6 +955,16 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                     ? () async {
                                         Navigator.pop(ctx);
 
+                                        // ✅ verify collector still online
+                                        final selectedId = _selectedCollectorId;
+                                        final stillOnline = selectedId != null &&
+                                            _availableCollectors.any((c) => c['uid'] == selectedId);
+
+                                        if (!stillOnline) {
+                                          _snack("Selected driver is no longer available. Please choose another.", bg: Colors.red);
+                                          return;
+                                        }
+
                                         final pickupLatLng = _effectivePickupLatLng;
 
                                         await requestPickupWithConfirm(
@@ -953,7 +974,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                           bagKey: _selectedBagKey!,
                                           bagLabel: bagLabel,
                                           bagKg: bagKg,
-                                          deliveryFee: _deliveryFee,
                                           distanceKm: _distanceKm,
                                           etaMinutes: _etaMinutes,
                                         );
@@ -985,7 +1005,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
                       const SizedBox(height: 8),
                       Text(
-                        "Note: Delivery fee is sent to the collector with this request.",
+                        "Note: Your request will be sent to the selected collector.",
                         style: TextStyle(
                           color: _textSecondary.o(0.90),
                           fontSize: 12,
@@ -1068,7 +1088,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     required String bagKey,
     required String bagLabel,
     required int bagKg,
-    required double deliveryFee,
     required double distanceKm,
     required int etaMinutes,
   }) async {
@@ -1121,12 +1140,11 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         title: const Text("Confirm Pickup Request"),
         content: Text(
           "Send pickup request to $collectorName?\n\n"
-          "Destination: $_moresName\n"
-          "Address: ${pickupAddress ?? "Unknown"}\n"
+          "Driver: $collectorName\n"
+          "Pickup Location: ${_pickupSource == "pin" ? "Pinned location" : "Current GPS"}\n"
           "$_scheduleSummary\n"
           "Bag: $bagLabel (${bagKg}kg)\n"
           "Distance/ETA: ${distanceKm.toStringAsFixed(1)} km • $etaMinutes min\n"
-          "Delivery Fee: ₱${deliveryFee.toStringAsFixed(2)}\n",
         ),
         actions: [
           TextButton(
@@ -1177,7 +1195,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         'bagKg': bagKg,
 
         // ✅ new: fee + route summary (collector can see this)
-        'deliveryFee': double.parse(deliveryFee.toStringAsFixed(2)),
         'distanceKm': double.parse(distanceKm.toStringAsFixed(2)),
         'etaMinutes': etaMinutes,
 
@@ -1318,7 +1335,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
             ),
           ),
 
-          // Top bar (fixed destination pill)
+          // Top bar (fixed destination pill) 
           Positioned(
             top: 62,
             left: 20,
@@ -1370,6 +1387,41 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                       ],
                     ),
                   ),
+                ),
+              ],
+            ),
+          ),
+          Positioned(
+            right: 16,
+            bottom: 220, // adjust if it overlaps your sheet
+            child: Column(
+              children: [
+                FloatingActionButton(
+                  heroTag: "pinMode",
+                  mini: true,
+                  backgroundColor: _pinMode ? _accent : _bg.o(0.92),
+                  onPressed: () {
+                    setState(() => _pinMode = !_pinMode);
+                    _snack(
+                      _pinMode ? "Pin mode ON: tap map to pin pickup." : "Pin mode OFF.",
+                      bg: _sheet,
+                    );
+                  },
+                  child: Icon(_pinMode ? Icons.push_pin : Icons.push_pin_outlined, color: _textPrimary),
+                ),
+                const SizedBox(height: 10),
+                FloatingActionButton(
+                  heroTag: "goMe",
+                  mini: true,
+                  backgroundColor: _bg.o(0.92),
+                  onPressed: () {
+                    if (_currentPosition == null) return;
+                    final p = _currentPosition!;
+                    _mapController?.animateCamera(
+                      CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), 16),
+                    );
+                  },
+                  child: const Icon(Icons.my_location, color: _textPrimary),
                 ),
               ],
             ),
@@ -1511,18 +1563,11 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          _statItem(Icons.access_time, "$_etaMinutes min"),
+                          _statItem(Icons.access_time, _dirDurationText.isEmpty ? "$_etaMinutes min" : _dirDurationText),
                           _statDivider(),
-                          _statItem(Icons.navigation_outlined, "${_distanceKm.toStringAsFixed(1)} km"),
+                          _statItem(Icons.navigation_outlined, _dirDistanceText.isEmpty ? "${_distanceKm.toStringAsFixed(1)} km" : _dirDistanceText),
                           _statDivider(),
-                          Text(
-                            "₱${_deliveryFee.toStringAsFixed(2)}",
-                            style: const TextStyle(
-                              color: _accent,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 14,
-                            ),
-                          ),
+                          _statItem(Icons.store_mall_directory, "Mores"),
                         ],
                       ),
                     ),
