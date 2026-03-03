@@ -33,6 +33,9 @@ class _ChatPageState extends State<ChatPage> {
   final _scroll = ScrollController();
   final _picker = ImagePicker();
 
+  // ✅ MULTI IMAGE QUEUE (preview before sending)
+  final List<File> _pendingImages = [];
+
   String? get _me => FirebaseAuth.instance.currentUser?.uid;
 
   @override
@@ -58,15 +61,38 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _pickAndSendImage() async {
-    final picked = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 80,
-    );
-    if (picked == null) return;
+  // ✅ Pick MULTIPLE images (adds to queue)
+  Future<void> _pickImages() async {
+    try {
+      final picked = await _picker.pickMultiImage(imageQuality: 80);
+      if (picked.isEmpty) return;
+
+      if (!mounted) return;
+      setState(() {
+        _pendingImages.addAll(picked.map((x) => File(x.path)));
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Pick images failed: $e")),
+      );
+    }
+  }
+
+  // ✅ Send ALL queued images (one-by-one)
+  Future<void> _sendPendingImages() async {
+    if (_pendingImages.isEmpty) return;
+
+    // copy so we can clear UI immediately
+    final imagesToSend = List<File>.from(_pendingImages);
+
+    if (!mounted) return;
+    setState(() => _pendingImages.clear());
 
     try {
-      await _chat.sendImage(chatId: widget.chatId, file: File(picked.path));
+      for (final file in imagesToSend) {
+        await _chat.sendImage(chatId: widget.chatId, file: file);
+      }
       _jumpToBottomSoon();
     } catch (e) {
       if (!mounted) return;
@@ -248,38 +274,116 @@ class _ChatPageState extends State<ChatPage> {
                           border: Border.all(color: Colors.white.withOpacity(0.08)),
                           borderRadius: BorderRadius.circular(18),
                         ),
-                        child: Row(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            IconButton(
-                              onPressed: _pickAndSendImage,
-                              icon: const Icon(Icons.image_outlined, color: Colors.white70),
-                            ),
-                            Expanded(
-                              child: TextField(
-                                controller: _controller,
-                                style: const TextStyle(color: Colors.white),
-                                cursorColor: primaryColor,
-                                decoration: InputDecoration(
-                                  hintText: "Type a message...",
-                                  hintStyle: TextStyle(color: Colors.grey.shade400),
-                                  border: InputBorder.none,
+                            // ✅ MULTI IMAGE PREVIEW STRIP
+                            if (_pendingImages.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                                child: SizedBox(
+                                  height: 110,
+                                  child: ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: _pendingImages.length,
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(width: 8),
+                                    itemBuilder: (context, index) {
+                                      final file = _pendingImages[index];
+
+                                      return Stack(
+                                        children: [
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(12),
+                                            child: Image.file(
+                                              file,
+                                              height: 110,
+                                              width: 110,
+                                              fit: BoxFit.cover,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            right: 4,
+                                            top: 4,
+                                            child: InkWell(
+                                              onTap: () {
+                                                setState(() {
+                                                  _pendingImages.removeAt(index);
+                                                });
+                                              },
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                              child: Container(
+                                                padding: const EdgeInsets.all(4),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black.withOpacity(0.6),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                  Icons.close,
+                                                  size: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
                                 ),
-                                textInputAction: TextInputAction.send,
-                                onSubmitted: (_) => _send(),
                               ),
-                            ),
-                            const SizedBox(width: 6),
-                            InkWell(
-                              onTap: _send,
-                              borderRadius: BorderRadius.circular(14),
-                              child: Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: primaryColor.withOpacity(0.95),
+
+                            // ✅ INPUT ROW (unchanged UI, just logic updated)
+                            Row(
+                              children: [
+                                IconButton(
+                                  // ✅ pick multiple
+                                  onPressed: _pickImages,
+                                  icon: const Icon(Icons.image_outlined,
+                                      color: Colors.white70),
+                                ),
+                                Expanded(
+                                  child: TextField(
+                                    controller: _controller,
+                                    style: const TextStyle(color: Colors.white),
+                                    cursorColor: primaryColor,
+                                    decoration: InputDecoration(
+                                      hintText: "Type a message...",
+                                      hintStyle: TextStyle(color: Colors.grey.shade400),
+                                      border: InputBorder.none,
+                                    ),
+                                    textInputAction: TextInputAction.send,
+                                    onSubmitted: (_) {
+                                      if (_pendingImages.isNotEmpty) {
+                                        _sendPendingImages();
+                                      } else {
+                                        _send();
+                                      }
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                InkWell(
+                                  onTap: () {
+                                    if (_pendingImages.isNotEmpty) {
+                                      _sendPendingImages();
+                                    } else {
+                                      _send();
+                                    }
+                                  },
                                   borderRadius: BorderRadius.circular(14),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: primaryColor.withOpacity(0.95),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: const Icon(Icons.send,
+                                        color: Colors.white, size: 18),
+                                  ),
                                 ),
-                                child: const Icon(Icons.send, color: Colors.white, size: 18),
-                              ),
+                              ],
                             ),
                           ],
                         ),
@@ -397,7 +501,6 @@ class _MessageBubble extends StatelessWidget {
                 ),
               ),
             ),
-
           Container(
             constraints: BoxConstraints(
               maxWidth: MediaQuery.of(context).size.width * 0.78,

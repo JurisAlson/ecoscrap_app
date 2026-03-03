@@ -10,6 +10,7 @@ import 'collector_pickup_map_page.dart';
 // ✅ Chat (pickup list + junkshop direct chat)
 import '../chat/services/chat_services.dart';
 import '../chat/screens/chat_page.dart';
+import '../../constants/app_constants.dart';
 
 class CollectorsDashboardPage extends StatefulWidget {
   const CollectorsDashboardPage({super.key});
@@ -289,72 +290,53 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   // ✅ Direct collector <-> junkshop chat
   // Needs Users/{collectorUid}.assignedJunkshopUid
   Future<void> _openJunkshopChat() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    final db = FirebaseFirestore.instance;
+  final junkshopUid = AppConstants.primaryJunkshopUid;
 
-    final userDoc = await db.collection('Users').doc(user.uid).get();
-    final userData = userDoc.data() ?? {};
-
-    String junkshopUid = (userData['assignedJunkshopUid'] ?? "").toString().trim();
-    String junkshopName = (userData['assignedJunkshopName'] ?? "").toString().trim();
-
-    if (junkshopUid.isEmpty) {
-      final reqDoc = await db.collection('collectorRequests').doc(user.uid).get();
-      final reqData = reqDoc.data() ?? {};
-
-      junkshopUid = (reqData['acceptedByJunkshopUid'] ?? "").toString().trim();
-      junkshopName = (reqData['acceptedByJunkshopName'] ??
-              reqData['junkshopName'] ??
-              junkshopName)
-          .toString()
-          .trim();
-
-      if (junkshopUid.isNotEmpty) {
-        await db.collection('Users').doc(user.uid).set({
-          'assignedJunkshopUid': junkshopUid,
-          'assignedJunkshopName': junkshopName.isEmpty ? "Junkshop" : junkshopName,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-    }
-
-    if (junkshopUid.isEmpty) {
+    if (junkshopUid.isEmpty || junkshopUid == "07Wi7N8fALh2yqNdt1CQgIYVGE43") {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No assigned junkshop yet.")),
+        const SnackBar(content: Text("Junkshop UID is not configured.")),
       );
       return;
     }
 
-    // ✅ ONLY open if active pickup exists
-    final chatId = await _chat.ensureJunkshopChatForActivePickup(
-      junkshopUid: junkshopUid,
-      collectorUid: user.uid,
-    );
+  // ✅ ONLY open if active pickup exists (your rule decision)
+  final chatId = await _chat.ensureJunkshopChatForActivePickup(
+    junkshopUid: junkshopUid,
+    collectorUid: user.uid,
+  );
 
-    if (chatId == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Chat is only available during an active pickup.")),
-      );
-      return;
-    }
-
+  if (chatId == null) {
     if (!mounted) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatPage(
-          chatId: chatId,
-          title: junkshopName.isEmpty ? "Junkshop" : junkshopName,
-          otherUserId: junkshopUid,
-        ),
-      ),
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Chat is only available during an active pickup.")),
     );
+    return;
   }
+
+  // optional: fetch junkshop display name for title
+  String junkshopName = "Junkshop";
+  try {
+    final jDoc = await FirebaseFirestore.instance.collection("Users").doc(junkshopUid).get();
+    final j = jDoc.data() ?? {};
+    junkshopName = (j["shopName"] ?? j["name"] ?? "Junkshop").toString();
+  } catch (_) {}
+
+  if (!mounted) return;
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatPage(
+        chatId: chatId,
+        title: junkshopName,
+        otherUserId: junkshopUid,
+      ),
+    ),
+  );
+}
 
   Widget _collectorProfileDrawer(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -2125,134 +2107,90 @@ class CollectorChatListPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      return const Scaffold(
-        body: Center(child: Text("Not logged in")),
-      );
+      return const Scaffold(body: Center(child: Text("Not logged in")));
     }
 
     final chatService = ChatService();
+    final junkshopUid = AppConstants.primaryJunkshopUid;
 
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: bgColor,
-        title: const Text(
-          "Chats",
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        title: const Text("Chats", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
       ),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('Users').doc(user.uid).snapshots(),
-        builder: (context, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          InkWell(
+            onTap: () async {
+              final chatId = await chatService.ensureJunkshopChatForActivePickup(
+                junkshopUid: junkshopUid,
+                collectorUid: user.uid,
+              );
 
-          final data = snap.data!.data() ?? {};
+              if (chatId == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Chat is only available during an active pickup.")),
+                );
+                return;
+              }
 
-          final junkshopUid = (data['assignedJunkshopUid'] ?? '').toString().trim();
-          final junkshopName = (data['assignedJunkshopName'] ?? 'Junkshop').toString().trim();
+              // optional title
+              String junkshopName = "Junkshop";
+              try {
+                final jDoc = await FirebaseFirestore.instance.collection("Users").doc(junkshopUid).get();
+                final j = jDoc.data() ?? {};
+                junkshopName = (j["shopName"] ?? j["name"] ?? "Junkshop").toString();
+              } catch (_) {}
 
-          if (junkshopUid.isEmpty) {
-            return Center(
-              child: Container(
-                margin: const EdgeInsets.all(16),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+              if (!context.mounted) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ChatPage(
+                    chatId: chatId,
+                    title: junkshopName,
+                    otherUserId: junkshopUid,
+                  ),
                 ),
-                child: const Text(
-                  "No assigned junkshop yet.\n\nOnce a junkshop accepts you, it will appear here.",
-                  style: TextStyle(color: Colors.white70),
-                  textAlign: TextAlign.center,
-                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
               ),
-            );
-          }
-
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              InkWell(
-                onTap: () async {
-                  final chatId = await chatService.ensureJunkshopChatForActivePickup(
-                    junkshopUid: junkshopUid,
-                    collectorUid: user.uid,
-                  );
-
-                  if (chatId == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Chat is only available during an active pickup.")),
-                    );
-                    return;
-                  }
-
-                  if (!context.mounted) return;
-
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ChatPage(
-                        chatId: chatId,
-                        title: junkshopName.isEmpty ? "Junkshop" : junkshopName,
-                        otherUserId: junkshopUid,
-                      ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: primaryColor.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                  );
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    child: const Icon(Icons.storefront_outlined, color: Colors.white),
                   ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: primaryColor.withOpacity(0.18),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: const Icon(Icons.storefront_outlined, color: Colors.white),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              junkshopName.isEmpty ? "Junkshop" : junkshopName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              "Tap to open chat",
-                              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Icon(Icons.chevron_right, color: Colors.grey.shade500),
-                    ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Junkshop", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Text("Tap to open chat", style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+                      ],
+                    ),
                   ),
-                ),
+                  Icon(Icons.chevron_right, color: Colors.grey.shade500),
+                ],
               ),
-            ],
-          );
-        },
+            ),
+          ),
+        ],
       ),
     );
   }
