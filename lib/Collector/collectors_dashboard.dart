@@ -39,8 +39,28 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    final db = FirebaseFirestore.instance;
+
     try {
-      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+      // ✅ block if collector already has an active accepted/arrived pickup
+      final existing = await db
+          .collection('requests')
+          .where('type', isEqualTo: 'pickup')
+          .where('collectorId', isEqualTo: user.uid)
+          .where('active', isEqualTo: true)
+          .where('status', whereIn: ['accepted', 'arrived'])
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("You already have an active pickup. Complete it first.")),
+        );
+        return;
+      }
+
+      await db.collection('requests').doc(requestId).update({
         'status': 'accepted',
         'active': true,
         'collectorId': user.uid,
@@ -162,6 +182,25 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       );
     }
   }
+  Stream<int> _pendingCountStream(String collectorUid) {
+    final base = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorUid)
+        .where('status', whereIn: ['pending', 'scheduled'])
+        .snapshots();
+
+    return base.map((snap) {
+      // hide ones declined by this collector
+      final docs = snap.docs.where((d) {
+        final data = d.data() as Map<String, dynamic>;
+        final declinedBy = (data['declinedBy'] as List?) ?? [];
+        return !declinedBy.contains(collectorUid);
+      }).toList();
+
+      return docs.length;
+    });
+  }
 
   Future<void> _promptPickupAction({
     required BuildContext context,
@@ -173,7 +212,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     final bagLabel = (data['bagLabel'] ?? '').toString();
     final bagKgNum = (data['bagKg'] is num) ? (data['bagKg'] as num).toDouble() : null;
 
-    final deliveryFee = (data['deliveryFee'] is num) ? (data['deliveryFee'] as num).toDouble() : null;
     final distanceKm = (data['distanceKm'] is num) ? (data['distanceKm'] as num).toDouble() : null;
     final etaMinutes = (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
 
@@ -191,7 +229,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           "${bagLabel.isNotEmpty ? "Bag: $bagLabel${bagKgNum != null ? " (${bagKgNum.toStringAsFixed(1)} kg)" : ""}\n" : ""}"
           "${distanceKm != null ? "Distance: ${distanceKm.toStringAsFixed(2)} km\n" : ""}"
           "${etaMinutes != null ? "ETA: $etaMinutes min\n" : ""}"
-          "${deliveryFee != null ? "Delivery Fee: ₱${deliveryFee.toStringAsFixed(2)}\n" : ""}"
           "Schedule: $scheduleText\n"
           "${source.isNotEmpty ? "Pickup Source: $source\n" : ""}",
         ),
@@ -514,6 +551,121 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
+Future<void> _markCollectorNotifsSeen() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+    'lastNotifSeenAt': FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
+}
+  Widget _buildCollectorNotifBell() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+
+    // fallback (no badge)
+    if (uid == null) {
+      return InkWell(
+        onTap: _openNotifsDrawer,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
+          ),
+          child: Icon(Icons.notifications_outlined, color: Colors.grey.shade300),
+        ),
+      );
+    }
+
+    final userDocStream =
+        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
+
+    // IMPORTANT: must match notifications drawer content
+    final latestNotifQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: uid)
+        .where('status', whereIn: ['pending', 'scheduled'])
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: userDocStream,
+      builder: (context, userSnap) {
+        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+        final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
+
+        return StreamBuilder<QuerySnapshot>(
+          stream: latestNotifQuery.snapshots(),
+          builder: (context, snap) {
+            bool hasUnread = false;
+
+            final docs = snap.data?.docs ?? [];
+            if (docs.isNotEmpty) {
+              final data = docs.first.data() as Map<String, dynamic>;
+              final updatedAt = data['updatedAt'] as Timestamp?;
+
+              if (updatedAt != null) {
+                if (lastSeen == null) {
+                  hasUnread = true;
+                } else {
+                  hasUnread = updatedAt.toDate().isAfter(lastSeen.toDate());
+                }
+              }
+            }
+
+            return InkWell(
+              onTap: () async {
+                _openNotifsDrawer();
+                await _markCollectorNotifsSeen(); // ✅ mark read
+              },
+              borderRadius: BorderRadius.circular(999),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  AnimatedScale(
+                    scale: hasUnread ? 1.08 : 1.0, // ✅ “pop”
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutBack,
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.05),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                      ),
+                      child: Icon(
+                        Icons.notifications_outlined,
+                        color: hasUnread ? Colors.amberAccent : Colors.grey.shade300,
+                      ),
+                    ),
+                  ),
+
+                  // ✅ red dot badge (same as household)
+                  if (hasUnread)
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+    
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -581,7 +733,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           _CollectorHomeTab(
             collectorId: user.uid,
             onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
-            onOpenNotifs: () => _scaffoldKey.currentState?.openEndDrawer(),
+            notifBell: _buildCollectorNotifBell(), 
             onAcceptPickup: _acceptPickup,
           ),
           const CollectorChatListPage(),
@@ -757,7 +909,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                     final bagLabel = (data['bagLabel'] ?? '').toString();
                     final bagKg = (data['bagKg'] is num) ? (data['bagKg'] as num).toInt() : null;
 
-                    final deliveryFee = (data['deliveryFee'] is num) ? (data['deliveryFee'] as num).toDouble() : null;
                     final distanceKm = (data['distanceKm'] is num) ? (data['distanceKm'] as num).toDouble() : null;
                     final etaMinutes = (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
 
@@ -831,7 +982,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                                 _pill("Bag: $bagLabel${bagKg != null ? " • ${bagKg}kg" : ""}"),
                               if (distanceKm != null) _pill("Distance: ${distanceKm.toStringAsFixed(2)} km"),
                               if (etaMinutes != null) _pill("ETA: $etaMinutes min"),
-                              if (deliveryFee != null) _pill("Fee: ₱${deliveryFee.toStringAsFixed(2)}"),
                             ],
                           ),
 
@@ -1061,13 +1211,12 @@ class _CollectorHomeTab extends StatelessWidget {
   const _CollectorHomeTab({
     required this.collectorId,
     required this.onOpenProfile,
-    required this.onOpenNotifs,
+    required this.notifBell,
     required this.onAcceptPickup,
   });
-
+  final Widget notifBell;
   final String collectorId;
   final VoidCallback onOpenProfile;
-  final VoidCallback onOpenNotifs;
   final Future<void> Function(String requestId) onAcceptPickup;
 
   static const Color primaryColor = Color(0xFF1FA9A7);
@@ -1124,19 +1273,9 @@ class _CollectorHomeTab extends StatelessWidget {
                   ],
                 ),
               ),
-              InkWell(
-                onTap: onOpenNotifs,
-                borderRadius: BorderRadius.circular(50),
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.05),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(Icons.notifications_outlined,
-                      color: Colors.grey.shade300),
-                ),
-              ),
+
+              // ✅ uniform bell widget from parent
+              notifBell,
             ],
           ),
 
@@ -1294,7 +1433,6 @@ class _CollectorMapTab extends StatelessWidget {
               final bagKgNum = (data['bagKg'] is num) ? (data['bagKg'] as num).toDouble() : null;
 
               final etaMinutes = (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
-              final deliveryFee = (data['deliveryFee'] is num) ? (data['deliveryFee'] as num).toDouble() : null;
 
               // schedule text (you already use this in drawer page)
               // If this function is not accessible here, I’ll show you the quick fix below.
@@ -1398,8 +1536,6 @@ class _CollectorMapTab extends StatelessWidget {
                       if (etaMinutes != null)
                         _metaChip(Icons.timer_outlined, "ETA: $etaMinutes min"),
 
-                      if (deliveryFee != null)
-                        _metaChip(Icons.payments_outlined, "Fee: ₱${deliveryFee.toStringAsFixed(2)}"),
                     ],
                   ),
 
