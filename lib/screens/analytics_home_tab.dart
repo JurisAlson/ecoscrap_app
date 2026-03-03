@@ -13,14 +13,14 @@ class AnalyticsHomeTab extends StatefulWidget {
   final String shopName;
 
   final VoidCallback onOpenProfile;
-  final VoidCallback onOpenNotifications;
+  final Widget notifBell;
 
   const AnalyticsHomeTab({
     super.key,
     required this.shopID,
     required this.shopName,
     required this.onOpenProfile,
-    required this.onOpenNotifications,
+    required this.notifBell,
   });
 
   @override
@@ -127,7 +127,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             for (final doc in snap.data!.docs) {
               final data = doc.data() as Map<String, dynamic>;
               final type = (data['transactionType'] ?? '').toString();
-              if (type != 'sale') continue;
+              if (type != 'sell' && type != 'sale') continue;
 
               final ts = data['transactionDate'] as Timestamp?;
               final dt = ts?.toDate();
@@ -194,7 +194,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             for (final doc in snap.data!.docs) {
               final data = doc.data() as Map<String, dynamic>;
               final type = (data['transactionType'] ?? '').toString();
-              if (type != 'sale') continue;
+              if (type != 'sell' && type != 'sale') continue;
 
               salesCount++;
 
@@ -581,11 +581,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             ],
           ),
         ),
-        _iconButton(
-          Icons.notifications_outlined,
-          badge: true,
-          onTap: widget.onOpenNotifications,
-        ),
+        widget.notifBell,
       ],
     );
   }

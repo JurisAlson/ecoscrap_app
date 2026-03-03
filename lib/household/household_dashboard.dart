@@ -111,6 +111,17 @@ class _DashboardPageState extends State<DashboardPage> {
   void _closeCameraBar() {
     if (_cameraBarOpen) setState(() => _cameraBarOpen = false);
   }
+  Future<void> _markNotifsSeen() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .set({
+      'lastNotifSeenAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
 
   // ================= CAMERA =================
   Future<void> _openLens(BuildContext context) async {
@@ -131,6 +142,62 @@ class _DashboardPageState extends State<DashboardPage> {
     } else if (status.isPermanentlyDenied) {
       openAppSettings();
     }
+  }
+  
+  Stream<int> _householdNotifCountStream(String householdUid) {
+    // Count "important updates" for the household:
+    // - accepted / arrived / completed / cancelled (and scheduled if you want)
+    return FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('householdId', isEqualTo: householdUid)
+        .where('active', isEqualTo: true) // focus on current order notifications
+        .where('status', whereIn: ['accepted', 'arrived', 'completed', 'cancelled', 'canceled'])
+        .snapshots()
+        .map((snap) => snap.docs.length);
+  }
+
+  Widget _pickupNotificationTile(QueryDocumentSnapshot d) {
+    final data = d.data() as Map<String, dynamic>;
+
+    final status = (data['status'] ?? '').toString().toLowerCase();
+    final driver = (data['collectorName'] ?? 'Driver').toString();
+
+    String title;
+    IconData icon;
+
+    switch (status) {
+      case 'accepted':
+        title = "Pickup accepted • Driver: $driver";
+        icon = Icons.thumb_up_alt_outlined;
+        break;
+      case 'arrived':
+        title = "Driver arrived at pickup location";
+        icon = Icons.location_on_outlined;
+        break;
+      case 'completed':
+        title = "Pickup completed";
+        icon = Icons.check_circle_outline;
+        break;
+      case 'cancelled':
+      case 'canceled':
+        title = "Pickup cancelled";
+        icon = Icons.cancel_outlined;
+        break;
+      case 'scheduled':
+        title = "Pickup scheduled";
+        icon = Icons.event_available_outlined;
+        break;
+      default:
+        title = "Pickup update";
+        icon = Icons.receipt_long;
+    }
+
+    return _notificationTile(
+      icon: icon,
+      title: title,
+      subtitle: "Tap Order tab to view details.",
+    );
   }
 
   Future<bool> _showScanHowToSheet(BuildContext context) async {
@@ -231,9 +298,85 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
   }
+  Widget _buildNotifBell() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+
+    if (uid == null) {
+      return _iconButton(
+        Icons.notifications_outlined,
+        badge: false,
+        onTap: () {
+          _closeCameraBar();
+          _scaffoldKey.currentState?.openEndDrawer();
+        },
+      );
+    }
+
+    final userDocStream =
+        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: userDocStream,
+      builder: (context, userSnap) {
+        final userData =
+            userSnap.data?.data() as Map<String, dynamic>? ?? {};
+        final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
+
+        final requestQuery = FirebaseFirestore.instance
+            .collection('requests')
+            .where('type', isEqualTo: 'pickup')
+            .where('householdId', isEqualTo: uid)
+            .orderBy('updatedAt', descending: true)
+            .limit(1);
+
+        return StreamBuilder<QuerySnapshot>(
+          stream: requestQuery.snapshots(),
+          builder: (context, snap) {
+            bool hasUnread = false;
+
+            final docs = snap.data?.docs ?? [];
+            if (docs.isNotEmpty) {
+              final data = docs.first.data() as Map<String, dynamic>;
+              final updatedAt = data['updatedAt'] as Timestamp?;
+
+              if (updatedAt != null) {
+                if (lastSeen == null) {
+                  hasUnread = true;
+                } else {
+                  hasUnread =
+                      updatedAt.toDate().isAfter(lastSeen.toDate());
+                }
+              }
+            }
+
+            return _iconButton(
+              Icons.notifications_outlined,
+              badge: hasUnread,
+              onTap: () async {
+                _closeCameraBar();
+                _scaffoldKey.currentState?.openEndDrawer();
+                await _markNotifsSeen(); // mark as read
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+  
 
   // ================= HEADER =================
   Widget _header(User? user) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final notifQuery = (uid == null)
+        ? null
+        : FirebaseFirestore.instance
+            .collection('requests')
+            .where('type', isEqualTo: 'pickup')
+            .where('householdId', isEqualTo: uid)
+            .orderBy('updatedAt', descending: true)
+            .limit(1);
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
@@ -265,13 +408,8 @@ class _DashboardPageState extends State<DashboardPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  "Welcome back,",
-                  style: TextStyle(
-                    color: Colors.grey.shade400,
-                    fontSize: 12,
-                  ),
-                ),
+                Text("Welcome back,",
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
                 Text(
                   user?.displayName ?? "Household User",
                   overflow: TextOverflow.ellipsis,
@@ -285,14 +423,7 @@ class _DashboardPageState extends State<DashboardPage> {
               ],
             ),
           ),
-          _iconButton(
-            Icons.notifications_outlined,
-            badge: true,
-            onTap: () {
-              _closeCameraBar();
-              _scaffoldKey.currentState?.openEndDrawer();
-            },
-          ),
+          _buildNotifBell(),
         ],
       ),
     );
@@ -1167,7 +1298,24 @@ class _DashboardPageState extends State<DashboardPage> {
 
   // ================= NOTIFICATIONS DRAWER (RIGHT) =================
   Widget _notificationsDrawer() {
-    return SingleChildScrollView(
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return const Center(
+        child: Text("Not logged in", style: TextStyle(color: Colors.white)),
+      );
+    }
+
+    final userDocStream =
+        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
+
+    final query = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('householdId', isEqualTo: uid)
+        .orderBy('updatedAt', descending: true)
+        .limit(20);
+
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1182,31 +1330,165 @@ class _DashboardPageState extends State<DashboardPage> {
               const Text(
                 "Notifications",
                 style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900),
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          _notificationTile(
-            icon: Icons.info_outline,
-            title: "Welcome!",
-            subtitle: "Scan an item to see if it’s recyclable.",
-          ),
           const SizedBox(height: 12),
-          _notificationTile(
-            icon: Icons.eco_outlined,
-            title: "Community",
-            subtitle:
-                "Your actions help support cleaner, safer neighborhoods (SDG 11).",
+
+          Expanded(
+            child: StreamBuilder<DocumentSnapshot>(
+              stream: userDocStream,
+              builder: (context, userSnap) {
+                final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+                final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
+
+                return StreamBuilder<QuerySnapshot>(
+                  stream: query.snapshots(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snap.hasError) {
+                      return Center(
+                        child: Text(
+                          "Failed to load notifications:\n${snap.error}",
+                          style: const TextStyle(color: Colors.white70),
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    }
+
+                    final docs = snap.data?.docs ?? [];
+                    if (docs.isEmpty) {
+                      return const Center(
+                        child: Text("No notifications yet.",
+                            style: TextStyle(color: Colors.white70)),
+                      );
+                    }
+
+                    return ListView.builder(
+                      itemCount: docs.length,
+                      itemBuilder: (_, i) {
+                        final d = docs[i];
+                        final data = d.data() as Map<String, dynamic>;
+
+                        final status = (data['status'] ?? '').toString().toLowerCase();
+                        final driver = (data['collectorName'] ?? '—').toString();
+
+                        final updatedAt = data['updatedAt'] as Timestamp?;
+                        final isUnread = (lastSeen == null || (updatedAt != null && updatedAt.toDate().isAfter(lastSeen.toDate())));
+
+                        return _notificationLogTile(
+                          title: _pickupStatusToTitle(status),
+                          subtitle: "Driver: $driver",
+                          time: _formatTimestamp(updatedAt),
+                          unread: isUnread,
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
           ),
-          const SizedBox(height: 12),
-          _notificationTile(
-            icon: Icons.recycling_outlined,
-            title: "Tip",
-            subtitle: "Rinse plastic containers before recycling.",
+        ],
+      ),
+    );
+  }
+
+  String _pickupStatusToTitle(String status) {
+    switch (status) {
+      case 'completed':
+        return "Pickup completed";
+      case 'arrived':
+        return "Collector arrived";
+      case 'accepted':
+        return "Pickup accepted";
+      case 'scheduled':
+        return "Pickup scheduled";
+      case 'pending':
+        return "Pickup request sent";
+      case 'cancelled':
+      case 'canceled':
+        return "Pickup cancelled";
+      case 'declined':
+        return "Pickup declined";
+      default:
+        return status.isEmpty ? "Pickup update" : "Pickup $status";
+    }
+  }
+
+  String _formatTimestamp(Timestamp? ts) {
+    if (ts == null) return "—";
+    final dt = ts.toDate();
+    final now = DateTime.now();
+
+    final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
+    final yesterday = dt.year == now.year && dt.month == now.month && dt.day == (now.day - 1);
+
+    String two(int n) => n.toString().padLeft(2, '0');
+
+    int hour = dt.hour % 12;
+    if (hour == 0) hour = 12;
+    final ampm = dt.hour >= 12 ? "PM" : "AM";
+    final time = "$hour:${two(dt.minute)} $ampm";
+
+    if (sameDay) return "Today • $time";
+    if (yesterday) return "Yesterday • $time";
+
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    final m = months[dt.month - 1];
+    return "$m ${dt.day} • $time";
+  }
+
+  Widget _notificationLogTile({
+    required String title,
+    required String subtitle,
+    required String time,
+    required bool unread,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: unread ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(unread ? 0.10 : 0.06)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: primaryColor.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.notifications_outlined, color: Colors.white70),
           ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: unread ? FontWeight.w900 : FontWeight.w800,
+                    )),
+                const SizedBox(height: 6),
+                Text(subtitle,
+                    style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(time, style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
         ],
       ),
     );
