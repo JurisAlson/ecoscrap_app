@@ -117,10 +117,10 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
     );
   }
 
-  // ✅ FB-like reason picker dialog
+  // ✅ FB-like reason picker dialog (NO UID SHOWN IN UI)
   Future<Map<String, String>?> _pickRestrictionReason({
     required String name,
-    required String uid,
+    required String uid, // keep for internal usage only
   }) async {
     String selectedCode = restrictionReasons.first["code"]!;
     final otherCtrl = TextEditingController();
@@ -147,7 +147,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        "User: $name\nUID: $uid",
+                        "User: $name",
                         style: const TextStyle(color: Colors.white70, height: 1.35),
                       ),
                       const SizedBox(height: 14),
@@ -269,8 +269,8 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
         ),
         content: Text(
           restricted
-              ? "This user can still log in, but will see a restricted page and cannot use the app.\n\nUser: $name\nUID: $uid\n\nReason: ${_reasonLabelFromCode(reason!["reasonCode"]!)}"
-              : "Restore access for:\n\nUser: $name\nUID: $uid\n\nContinue?",
+              ? "This user can still log in, but will see a restricted page and cannot use the app.\n\nUser: $name\n\nReason: ${_reasonLabelFromCode(reason!["reasonCode"]!)}"
+              : "Restore access for:\n\nUser: $name\n\nContinue?",
           style: const TextStyle(color: Colors.white70, height: 1.35),
         ),
         actions: [
@@ -300,7 +300,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
           .httpsCallable("adminSetUserRestricted");
 
       await callable.call({
-        "uid": uid,
+        "uid": uid, // internal only
         "restricted": restricted,
         "reasonCode": restricted ? (reason?["reasonCode"] ?? "") : "",
         "reasonText": restricted ? (reason?["reasonText"] ?? "") : "",
@@ -358,7 +358,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
               style: const TextStyle(color: Colors.white),
               cursorColor: primaryColor,
               decoration: InputDecoration(
-                hintText: "Search name / email / uid...",
+                hintText: "Search name / email...",
                 hintStyle: TextStyle(color: Colors.grey.shade500),
                 filled: true,
                 fillColor: Colors.white.withOpacity(0.06),
@@ -485,7 +485,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                     final d = filtered[i];
                     final data = d.data();
 
-                    final uid = d.id;
+                    final uid = d.id; // internal only
                     final name = (data["Name"] ?? data["name"] ?? "").toString();
                     final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
                     final role = _normRole(data["Roles"] ?? data["role"] ?? data["roles"]);
@@ -503,7 +503,11 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                       reasonLine = (reasonCode == "other" && reasonText.isNotEmpty) ? reasonText : label;
                     }
 
-                    final title = name.isNotEmpty ? name : (email.isNotEmpty ? email : uid);
+                    // ✅ DO NOT show UID as fallback title
+                    final title = name.isNotEmpty
+                        ? name
+                        : (email.isNotEmpty ? email : "Unknown user");
+
                     final managing = _manageUid == uid;
 
                     final cardColor =
@@ -630,6 +634,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
     final name = (data["Name"] ?? data["name"] ?? "").toString();
     final email = (data["emailDisplay"] ?? data["Email"] ?? data["email"] ?? "").toString();
 
+    // ✅ UID remains searchable internally, but never displayed in UI
     return q.isEmpty ||
         name.toLowerCase().contains(q) ||
         email.toLowerCase().contains(q) ||

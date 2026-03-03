@@ -103,7 +103,10 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
     await db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
+      if (!reqSnap.exists) {
+        // Do not include uid in surfaced messages
+        throw Exception("Collector request not found");
+      }
 
       // request doc status
       tx.set(reqRef, {
@@ -147,13 +150,14 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final macB64 = (kyc["macB64"] ?? "").toString();
 
     if (ephPubKeyB64.isEmpty || saltB64.isEmpty || nonceB64.isEmpty || macB64.isEmpty) {
-      throw Exception("Missing crypto metadata in collectorKYC/$uid");
+      // Avoid including uid/path in errors that might be shown
+      throw Exception("Missing required encryption metadata");
     }
 
     // 1) download encrypted blob
     final ref = FirebaseStorage.instance.ref(storagePath);
     final encryptedBytes = await ref.getData(12 * 1024 * 1024);
-    if (encryptedBytes == null) throw Exception("Failed to download encrypted file.");
+    if (encryptedBytes == null) throw Exception("Failed to download encrypted file");
 
     // 2) derive AES key using Admin private + collector ephemeral public
     final collectorEphPubBytes = base64Decode(ephPubKeyB64);
@@ -174,7 +178,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       macBytes: macBytes,
       nonce: nonce,
       key: aesKey,
-      aad: utf8.encode(uid),
+      aad: utf8.encode(uid), // keep uid internally for AAD; not shown in UI
     );
 
     return _DecryptedKyc(
@@ -339,9 +343,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
           stream: widget.requestRef.snapshots(),
           builder: (context, snap) {
             if (snap.hasError) {
-              return Center(
-                child: Text("Error: ${snap.error}",
-                    style: const TextStyle(color: Colors.redAccent)),
+              // Do not show raw error (might contain identifiers)
+              return const Center(
+                child: Text("Failed to load request.", style: TextStyle(color: Colors.redAccent)),
               );
             }
             if (!snap.hasData) {
@@ -354,7 +358,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
             }
 
             final data = snap.data!.data() ?? {};
-            final uid = snap.data!.id;
+            final uid = snap.data!.id; // internal only (do not display)
 
             final name = (data["publicName"] ?? "Collector").toString();
             final email = (data["emailDisplay"] ?? "").toString();
@@ -375,10 +379,11 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                   );
                 }
                 if (kycSnap.hasError) {
+                  // Do not show raw error
                   return _panel(
-                    child: Text(
-                      "ID decrypt failed: ${kycSnap.error}",
-                      style: const TextStyle(color: Colors.redAccent, height: 1.3),
+                    child: const Text(
+                      "ID file could not be opened.",
+                      style: TextStyle(color: Colors.redAccent, height: 1.3),
                     ),
                   );
                 }
@@ -411,13 +416,11 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.picture_as_pdf_outlined,
-                                color: Colors.white.withOpacity(0.75)),
+                            Icon(Icons.picture_as_pdf_outlined, color: Colors.white.withOpacity(0.75)),
                             const SizedBox(width: 10),
                             const Text(
                               "Government ID (PDF)",
-                              style: TextStyle(
-                                  color: Colors.white, fontWeight: FontWeight.w900),
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
                             ),
                           ],
                         ),
@@ -506,8 +509,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                               if (email.isNotEmpty)
                                 Text(
                                   email,
-                                  style: TextStyle(
-                                      color: Colors.white.withOpacity(0.65), fontSize: 12),
+                                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
                                 ),
                               const SizedBox(height: 10),
                               Wrap(
@@ -537,8 +539,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.security,
-                            color: Colors.blueAccent.withOpacity(0.95), size: 18),
+                        Icon(Icons.security, color: Colors.blueAccent.withOpacity(0.95), size: 18),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -568,8 +569,10 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                         children: [
                           SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                           SizedBox(width: 10),
-                          Text("Processing...",
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                          Text(
+                            "Processing...",
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                          ),
                         ],
                       ),
                     ),
@@ -601,8 +604,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                     await _adminApprove(uid);
                                     if (mounted) AdminHelpers.toast(context, "Approved $name");
                                     if (mounted) Navigator.pop(context);
-                                  } catch (e) {
-                                    if (mounted) AdminHelpers.toast(context, "Approve failed: $e");
+                                  } catch (_) {
+                                    // Do not surface raw error
+                                    if (mounted) AdminHelpers.toast(context, "Approve failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }
@@ -620,7 +624,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Reject collector?",
-                                    body: "Reject $name? This restores the account to a normal user and allows re-submit.",
+                                    body:
+                                        "Reject $name? This restores the account to a normal user and allows re-submit.",
                                     yesValue: true,
                                     yesLabel: "Reject",
                                   );
@@ -633,8 +638,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                       AdminHelpers.toast(context, "Rejected $name. User restored.");
                                       Navigator.pop(context);
                                     }
-                                  } catch (e) {
-                                    if (mounted) AdminHelpers.toast(context, "Reject failed: $e");
+                                  } catch (_) {
+                                    // Do not surface raw error
+                                    if (mounted) AdminHelpers.toast(context, "Reject failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }

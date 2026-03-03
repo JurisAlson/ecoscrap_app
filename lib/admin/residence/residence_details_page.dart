@@ -39,7 +39,8 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     await db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
       if (!reqSnap.exists) {
-        throw Exception("residentRequests/$uid not found");
+        // Do not include uid in messages (avoid surfacing in UI)
+        throw Exception("Resident request not found");
       }
 
       // residentRequests/{uid}
@@ -78,45 +79,48 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   }
 
   Future<void> adminApproveCollector(String uid) async {
-  final db = FirebaseFirestore.instance;
+    final db = FirebaseFirestore.instance;
 
-  final reqRef = db.collection("collectorRequests").doc(uid);
-  final userRef = db.collection("Users").doc(uid);
+    final reqRef = db.collection("collectorRequests").doc(uid);
+    final userRef = db.collection("Users").doc(uid);
 
-  await db.runTransaction((tx) async {
-    final reqSnap = await tx.get(reqRef);
-    if (!reqSnap.exists) throw Exception("collectorRequests/$uid not found");
+    await db.runTransaction((tx) async {
+      final reqSnap = await tx.get(reqRef);
+      if (!reqSnap.exists) {
+        // Do not include uid in messages
+        throw Exception("Collector request not found");
+      }
 
-    // collectorRequests/{uid}
-    tx.set(
-      reqRef,
-      {
-        "status": "adminApproved",
-        "adminApprovedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
+      // collectorRequests/{uid}
+      tx.set(
+        reqRef,
+        {
+          "status": "adminApproved",
+          "adminApprovedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
 
-    // Users/{uid}
-    tx.set(
-      userRef,
-      {
-        "collectorStatus": "adminApproved", // ✅ RoleGate expects this
-        "collectorVerified": true,
-        "collectorActive": true,            // optional (if you use it)
-        "adminReviewedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
+      // Users/{uid}
+      tx.set(
+        userRef,
+        {
+          "collectorStatus": "adminApproved", // ✅ RoleGate expects this
+          "collectorVerified": true,
+          "collectorActive": true, // optional (if you use it)
+          "adminReviewedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
 
-        // Optional: keep Roles as "collector" or leave as "user"
-        // If your collector dashboard should open, you can set:
-        "Roles": "collector",
-        "role": "collector",
-      },
-      SetOptions(merge: true),
-    );
-  });
-}
+          // Optional: keep Roles as "collector" or leave as "user"
+          // If your collector dashboard should open, you can set:
+          "Roles": "collector",
+          "role": "collector",
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
 
   // =========================
   // ADMIN: REJECT + DELETE ACCOUNT
@@ -155,17 +159,15 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     final nonceB64 = (kyc["nonceB64"] ?? "").toString();
     final macB64 = (kyc["macB64"] ?? "").toString();
 
-    if (ephPubKeyB64.isEmpty ||
-        saltB64.isEmpty ||
-        nonceB64.isEmpty ||
-        macB64.isEmpty) {
-      throw Exception("Missing crypto metadata in residentKYC/$uid");
+    if (ephPubKeyB64.isEmpty || saltB64.isEmpty || nonceB64.isEmpty || macB64.isEmpty) {
+      // Avoid including uid/path in any surfaced errors
+      throw Exception("Missing required encryption metadata");
     }
 
     final ref = FirebaseStorage.instance.ref(storagePath);
     final encryptedBytes = await ref.getData(12 * 1024 * 1024);
     if (encryptedBytes == null) {
-      throw Exception("Failed to download encrypted KYC bytes.");
+      throw Exception("Failed to download encrypted ID file");
     }
 
     final ephPubBytes = Uint8List.fromList(base64Decode(ephPubKeyB64));
@@ -185,7 +187,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
       macBytes: macBytes,
       nonce: nonce,
       key: aesKey,
-      aad: utf8.encode(uid),
+      aad: utf8.encode(uid), // keep uid internally for AAD, not shown in UI
     );
 
     return _DecryptedKyc(
@@ -354,10 +356,10 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
           stream: widget.requestRef.snapshots(),
           builder: (context, snap) {
             if (snap.hasError) {
-              return Center(
+              return const Center(
                 child: Text(
-                  "Error: ${snap.error}",
-                  style: const TextStyle(color: Colors.redAccent),
+                  "Failed to load request.",
+                  style: TextStyle(color: Colors.redAccent),
                 ),
               );
             }
@@ -371,7 +373,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
             }
 
             final data = snap.data!.data() ?? {};
-            final uid = snap.data!.id;
+            final uid = snap.data!.id; // internal only (do not display)
 
             final name = (data["publicName"] ?? "Resident").toString();
             final email = (data["emailDisplay"] ?? "").toString();
@@ -392,10 +394,11 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                   );
                 }
                 if (kycSnap.hasError) {
+                  // Do not show raw error (it can include identifiers/paths)
                   return _panel(
-                    child: Text(
-                      "ID decrypt failed: ${kycSnap.error}",
-                      style: const TextStyle(color: Colors.redAccent, height: 1.3),
+                    child: const Text(
+                      "ID file could not be opened.",
+                      style: TextStyle(color: Colors.redAccent, height: 1.3),
                     ),
                   );
                 }
@@ -611,8 +614,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                     await _adminApproveResident(uid);
                                     if (mounted) AdminHelpers.toast(context, "Approved $name");
                                     if (mounted) Navigator.pop(context);
-                                  } catch (e) {
-                                    if (mounted) AdminHelpers.toast(context, "Approve failed: $e");
+                                  } catch (_) {
+                                    // Do not surface raw error
+                                    if (mounted) AdminHelpers.toast(context, "Approve failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }
@@ -634,9 +638,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                         "Reject $name and delete their account so they can re-apply using the same email.\n\n"
                                         "This will remove:\n"
                                         "• Auth account\n"
-                                        "• Users/{uid}\n"
-                                        "• residentRequests/{uid}\n"
-                                        "• residentKYC/{uid} + encrypted file",
+                                        "• User profile\n"
+                                        "• Request record\n"
+                                        "• ID record + encrypted file",
                                     yesValue: true,
                                     yesLabel: "Reject & Delete",
                                   );
@@ -649,8 +653,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                       AdminHelpers.toast(context, "Rejected & deleted $name.");
                                       Navigator.pop(context);
                                     }
-                                  } catch (e) {
-                                    if (mounted) AdminHelpers.toast(context, "Reject/Delete failed: $e");
+                                  } catch (_) {
+                                    // Do not surface raw error
+                                    if (mounted) AdminHelpers.toast(context, "Reject/Delete failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }
