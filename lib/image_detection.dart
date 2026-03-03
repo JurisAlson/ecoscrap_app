@@ -8,6 +8,8 @@ import 'package:image_picker/image_picker.dart';
 import 'detection_result_page.dart'; // must contain DetectionResultPage + DetectionStatus enum
 import '../services/tflite_service.dart';
 
+import '../widgets/app_loader.dart';
+
 class ImageDetectionPage extends StatefulWidget {
   const ImageDetectionPage({super.key});
 
@@ -24,102 +26,7 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  void _showScanningDialog({File? previewImage}) {
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    barrierColor: Colors.black.withOpacity(0.55),
-    builder: (_) {
-      return Center(
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(22),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              width: 320,
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: Colors.white.withOpacity(0.12)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.25),
-                    blurRadius: 24,
-                    offset: const Offset(0, 16),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (previewImage != null) ...[
-                    Container(
-                      width: double.infinity,
-                      height: 140,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white.withOpacity(0.10)),
-                        color: Colors.white.withOpacity(0.04),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: Image.file(previewImage, fit: BoxFit.cover),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: primaryColor.withOpacity(0.16),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: primaryColor.withOpacity(0.22)),
-                    ),
-                    child: const Center(
-                      child: CircularProgressIndicator(strokeWidth: 3),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    "Scanning your photo…",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    "Please hold on. This will only take a moment.",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 12,
-                      height: 1.25,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(
-                      minHeight: 8,
-                      backgroundColor: Colors.white.withOpacity(0.10),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    },
-  );
-}
-
-
-
+  
   // ✅ Show instructions BEFORE opening camera
   // ✅ Show photo guide BEFORE opening camera (picture-based, no repeated text)
 // ✅ 4x4 Photo Guide Grid BEFORE opening camera
@@ -438,79 +345,88 @@ Future<bool> _showScanInstructions() async {
 }
 
   Future<void> _captureImageWithCamera() async {
-    if (_isPickingImage) return;
+  if (_isPickingImage) return;
 
-    final ok = await _showScanInstructions();
-    if (!ok) return;
+  final ok = await _showScanInstructions();
+  if (!ok) return;
 
-    _isPickingImage = true;
+  _isPickingImage = true;
 
-    try {
-      final XFile? capturedFile =
-          await _picker.pickImage(source: ImageSource.camera);
-      if (capturedFile == null) return;
+  try {
+    final XFile? capturedFile =
+        await _picker.pickImage(source: ImageSource.camera);
+    if (capturedFile == null) return;
 
-      setState(() {
-        _image = File(capturedFile.path);
-      });
+    setState(() {
+      _image = File(capturedFile.path);
+    });
 
-      if (!mounted) return;
+    if (!mounted) return;
 
-      _showScanningDialog(previewImage: _image);
+    // ✅ Show ONE uniform loader (AppLoader)
+    AppLoader.show(
+      context,
+      title: "Scanning your photo…",
+      message: "Analyzing plastic type. This will only take a moment.",
+      preview: Image.file(_image!, fit: BoxFit.cover),
+    );
 
-      final double p = await TFLiteService.runModel(_image!.path);
+    // ✅ Let the loader paint before heavy work
+    await Future.delayed(Duration.zero);
+    await WidgetsBinding.instance.endOfFrame;
 
-      // ✅ Conservative YES + Uncertain band
-      const double yesThreshold = 0.80; // strong YES
-      const double noThreshold = 0.35; // strong NO
+    final double p = await TFLiteService.runModel(_image!.path);
 
-      DetectionStatus status;
-      String itemName;
-      double confidence;
+    const double yesThreshold = 0.80;
+    const double noThreshold = 0.35;
 
-      if (p >= yesThreshold) {
-        status = DetectionStatus.recyclable;
-        itemName = "Recyclable Plastic";
-        confidence = p;
-      } else if (p <= noThreshold) {
-        status = DetectionStatus.nonRecyclable;
-        itemName = "Non-Recyclable Item";
-        confidence = 1.0 - p;
-      } else {
-        status = DetectionStatus.uncertain;
-        itemName = "Uncertain Result";
-        confidence = (p - 0.5).abs() * 2.0; // 0..1 strength
-      }
+    late DetectionStatus status;
+    late String itemName;
+    late double confidence;
 
-      if (!mounted) return;
-
-      // ✅ close loading dialog safely
-      Navigator.of(context, rootNavigator: true).pop();
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => DetectionResultPage(
-            status: status,
-            itemName: itemName,
-            confidence: confidence,
-          ),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        // close loader if open
-        Navigator.of(context, rootNavigator: true).maybePop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
-      }
-    } finally {
-      _isPickingImage = false;
+    if (p >= yesThreshold) {
+      status = DetectionStatus.recyclable;
+      itemName = "Recyclable Plastic";
+      confidence = p;
+    } else if (p <= noThreshold) {
+      status = DetectionStatus.nonRecyclable;
+      itemName = "Non-Recyclable Item";
+      confidence = 1.0 - p;
+    } else {
+      status = DetectionStatus.uncertain;
+      itemName = "Uncertain Result";
+      confidence = (p - 0.5).abs() * 2.0;
     }
+
+    if (!mounted) return;
+
+    // ✅ Close loader
+    AppLoader.hide(context);
+
+    // ✅ Navigate
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DetectionResultPage(
+          status: status,
+          itemName: itemName,
+          confidence: confidence,
+        ),
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+
+    // ✅ Always close loader on error too
+    AppLoader.hide(context);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$e')),
+    );
+  } finally {
+    _isPickingImage = false;
   }
-
-
+}
   @override
   Widget build(BuildContext context) {
     return Scaffold(

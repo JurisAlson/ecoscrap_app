@@ -5,12 +5,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'services/notification_service.dart';
+import 'services/tflite_service.dart'; // ✅ ADD THIS
 import 'firebase_options.dart';
 import 'role_gate.dart';
 import 'auth/login_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -18,6 +20,9 @@ void main() async {
   await FirebaseAppCheck.instance.activate(
     androidProvider: AndroidProvider.debug,
   );
+
+  // ✅ PRELOAD TFLITE (prevents first-scan lag + helps loader show properly)
+  await TFLiteService.init();
 
   runApp(const MyApp());
 }
@@ -77,14 +82,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       debugShowCheckedModeBanner: false,
       title: 'EcoScrap App',
       theme: ThemeData(primarySwatch: Colors.teal),
-
-      // ✅ Keep home (this becomes the "/" route implicitly)
       home: const RoleGate(),
-
-      // ✅ Named routes (DO NOT include "/")
       routes: {
         '/login': (context) => const LoginPage(),
-        '/roleGate': (context) => const RoleGate(), // optional
+        '/roleGate': (context) => const RoleGate(),
       },
     );
   }
