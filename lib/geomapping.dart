@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -263,7 +264,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       if (!mounted) return;
       setState(() => _routePoints = []);
     }
-  }
+  } 
 
   Future<void> _buildRoute() async {
     await _buildRouteTo(_moresLatLng);
@@ -336,6 +337,29 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
     _mapController?.animateCamera(
       CameraUpdate.newLatLngZoom(LatLng(pos.latitude, pos.longitude), 15),
+    );
+  }
+  Widget _glass({
+    required Widget child,
+    double blur = 12,
+    double opacity = 0.55,
+    double radius = 24,
+    EdgeInsets padding = const EdgeInsets.all(14),
+  }) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(opacity),
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: Colors.white.withOpacity(0.10)),
+          ),
+          child: child,
+        ),
+      ),
     );
   }
 
@@ -519,7 +543,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       ),
       builder: (ctx) {
         final hasCollectors = _availableCollectors.isNotEmpty;
-
+        String? windowError;
+        String? driverError;
+        String? bagError; 
         return SafeArea(
           child: Padding(
             padding: EdgeInsets.fromLTRB(
@@ -576,7 +602,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(color: _accent.o(0.35)),
                             ),
-                            child: const Icon(Icons.local_shipping, color: _accent),
+                            child: const Icon(Icons.local_shipping, color: _textPrimary),
                           ),
                           const SizedBox(width: 12),
                           const Expanded(
@@ -660,7 +686,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                   ? "Using your current location. (Details will be shared with the collector.)"
                                   : "Pinned pickup location set. (Details will be shared with the collector.)",
                               style: const TextStyle(
-                                color: _textSecondary,
+                                color: _textMuted,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -679,8 +705,18 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           letterSpacing: 1.0,
                         ),
                       ),
+                      if (driverError != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          driverError!,
+                          style: const TextStyle(
+                            color: Colors.redAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
-
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         decoration: BoxDecoration(
@@ -695,7 +731,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                             dropdownColor: _dropdown,
                             hint: Text(
                               hasCollectors ? "Choose a driver" : "No collectors online",
-                              style: const TextStyle(color: _textSecondary),
+                              style: const TextStyle(color: _textMuted),
                             ),
                             iconEnabledColor: _textSecondary,
                             items: _availableCollectors.map((c) {
@@ -738,6 +774,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                     localSet(() {
                                       _selectedCollectorId = uid;
                                       _selectedCollectorName = found['name'];
+                                      driverError = null;
                                     });
                                   }
                                 : null,
@@ -773,11 +810,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           ChoiceChip(
                             label: const Text("Now (ASAP)"),
                             selected: _pickupType == "now",
-                            onSelected: (_) => localSet(() => _selectNow()),
+                            onSelected: (_) => localSet(() {
+                              windowError = null;
+                              _selectNow(); 
+                            }),
                             selectedColor: _accent.o(0.22),
                             backgroundColor: Colors.white.o(0.06),
                             labelStyle: TextStyle(
-                              color: _pickupType == "now" ? _textPrimary : _textSecondary,
+                              color: _pickupType == "now" ? _textPrimary : _textMuted,
                               fontWeight: FontWeight.w800,
                             ),
                             side: BorderSide(
@@ -787,13 +827,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           ChoiceChip(
                             label: const Text("Schedule (Window)"),
                             selected: _pickupType == "window",
-                            onSelected: (_) {
-                              localSet(() => _pickupType = "window");
-                            },
+                            onSelected: (_) => localSet(() {
+                              windowError = null;
+                              _pickupType = "window";
+                            }),
                             selectedColor: _accent.o(0.22),
                             backgroundColor: Colors.white.o(0.06),
                             labelStyle: TextStyle(
-                              color: _pickupType == "window" ? _textPrimary : _textSecondary,
+                              color: _pickupType == "window" ? _textPrimary : _textMuted,
                               fontWeight: FontWeight.w800,
                             ),
                             side: BorderSide(
@@ -809,7 +850,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                         InkWell(
                           onTap: () async {
                             await _pickScheduleDate();
-                            setLocal(() {});
+                            setLocal(() => windowError = null);
                           },
                           borderRadius: BorderRadius.circular(14),
                           child: Container(
@@ -857,8 +898,32 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                               label: Text(label),
                               selected: selected,
                               onSelected: (_) {
-                                _selectWindow(startHour, endHour);
-                                setLocal(() {});
+                                final d = _scheduleDate;
+                                final start = DateTime(d.year, d.month, d.day, startHour, 0);
+                                final end = DateTime(d.year, d.month, d.day, endHour, 0);
+                                final now = DateTime.now();
+
+                                if (end.isBefore(now)) {
+                                  setLocal(() => windowError =
+                                    "That time window already ended. Choose a later window."
+                                  );
+                                  return;
+                                }
+
+                                if (start.isBefore(now.add(const Duration(minutes: 10))) &&
+                                    _dateOnly(d) == _dateOnly(now)) {
+                                  setLocal(() => windowError =
+                                    "Please choose a window at least 10 minutes from now."
+                                  );
+                                  return;
+                                }
+
+                                localSet(() {
+                                  windowError = null;
+                                  _pickupType = "window";
+                                  _windowStart = start;
+                                  _windowEnd = end;
+                                });
                               },
                               selectedColor: _accent.o(0.22),
                               backgroundColor: Colors.white.o(0.06),
@@ -884,6 +949,17 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                             ),
                           ),
                         ],
+                        if (windowError != null) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            windowError!,
+                            style: const TextStyle(
+                              color: Colors.redAccent,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ],
 
                       const SizedBox(height: 18),
@@ -896,8 +972,18 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           letterSpacing: 1.0,
                         ),
                       ),
+                      if (bagError != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          bagError!,
+                          style: const TextStyle(
+                            color: Colors.redAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
-
                       Wrap(
                         spacing: 10,
                         runSpacing: 10,
@@ -910,11 +996,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           return ChoiceChip(
                             label: Text("$label • ${kg}kg"),
                             selected: selected,
-                            onSelected: (_) => localSet(() => _selectedBagKey = key),
+                            onSelected: (_) => localSet(() {
+                              _selectedBagKey = key;
+                              bagError = null; // ✅ clear
+                            }),
                             selectedColor: _accent.o(0.22),
                             backgroundColor: Colors.white.o(0.06),
                             labelStyle: TextStyle(
-                              color: selected ? _textPrimary : _textSecondary,
+                              color: selected ? _textPrimary : _textMuted,
                               fontWeight: FontWeight.w800,
                             ),
                             side: BorderSide(
@@ -923,6 +1012,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           );
                         }).toList(),
                       ),
+                    
 
                       const SizedBox(height: 18),
 
@@ -979,14 +1069,18 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                         );
                                       }
                                     : () {
+                                      setLocal(() {
                                         if (!collectorPicked) {
-                                          _snack("Please choose a driver.", bg: Colors.red);
-                                        } else if (!windowOk) {
-                                          _snack("Please select a time window.", bg: Colors.red);
-                                        } else if (!bagPicked) {
-                                          _snack("Please select a bag size (required).", bg: Colors.red);
+                                          driverError = "Please choose a driver.";
                                         }
-                                      },
+                                        if (!bagPicked) {
+                                          bagError = "Please select a bag size (required).";
+                                        }
+                                        if (_pickupType == "window" && (_windowStart == null || _windowEnd == null)) {
+                                          windowError = "Please select a time window.";
+                                        }
+                                      });
+                                    },
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _accent,
                                   foregroundColor: _bg,
@@ -1354,37 +1448,30 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Container(
+                  child: SizedBox(
                     height: 50,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: _bg.o(0.94),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.o(0.14)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.o(0.35),
-                          blurRadius: 18,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.store_mall_directory, size: 18, color: _accent),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _moresName,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: _textPrimary,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w900,
+                    child: _glass(
+                      radius: 16,
+                      blur: 12,
+                      opacity: 0.55,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.store_mall_directory, size: 18, color: _accent),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _moresName,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: _textPrimary,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1392,6 +1479,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
             ),
           ),
           Positioned(
+            top: 110,
             right: 16,
             bottom: 220, // adjust if it overlaps your sheet
             child: Column(
@@ -1433,201 +1521,208 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
             minChildSize: 0.22,
             maxChildSize: 0.75,
             builder: (context, scrollController) {
-              return Container(
-                padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-                decoration: BoxDecoration(
-                  color: _sheet,
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
-                  border: Border(top: BorderSide(color: Colors.white.o(0.10))),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.o(0.55),
-                      blurRadius: 44,
-                      offset: const Offset(0, -12),
+              return ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.55),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
+                      border: Border(
+                        top: BorderSide(color: Colors.white.withOpacity(0.10)),
+                      ),
                     ),
-                  ],
-                ),
-                child: ListView(
-                  controller: scrollController,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 44,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white24,
-                          borderRadius: BorderRadius.circular(2),
+                    child: ListView(
+                      controller: scrollController,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 44,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
+                        const SizedBox(height: 18),
 
-                    Text(
-                      _moresName,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        color: _textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _moresSubtitle,
-                      style: TextStyle(
-                        color: _textSecondary.o(0.95),
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                        Text(
+                          _moresName,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            color: _textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _moresSubtitle,
+                          style: TextStyle(
+                            color: _textSecondary.o(0.95),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
 
-                    const SizedBox(height: 14),
+                        const SizedBox(height: 14),
 
-                    // Location summary
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white.o(0.06),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: Colors.white.o(0.10)),
-                      ),
-                      child: Row(
-                        children: [
-                          Column(
+                        // Location summary
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.o(0.06),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: Colors.white.o(0.10)),
+                          ),
+                          child: Row(
                             children: [
-                              const Icon(Icons.radio_button_checked,
-                                  color: Colors.blue, size: 20),
-                              Container(width: 1, height: 30, color: Colors.blue.o(0.35)),
-                              const Icon(Icons.location_on, color: _accent, size: 20),
+                              Column(
+                                children: [
+                                  const Icon(Icons.radio_button_checked,
+                                      color: Colors.blue, size: 20),
+                                  Container(width: 1, height: 30, color: Colors.blue.o(0.35)),
+                                  const Icon(Icons.location_on, color: _accent, size: 20),
+                                ],
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      "YOUR LOCATION",
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: _textMuted,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 1.0,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      !_locationReady
+                                          ? "Locating..."
+                                          : _pinnedPickupLatLng != null
+                                              ? "Pinned Location"
+                                              : "Current Location",
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        color: _textMuted,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 14),
+                                    const Text(
+                                      "DESTINATION",
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: _textMuted,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 1.0,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _moresName,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        color: _accent,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ],
                           ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  "YOUR LOCATION",
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: _textMuted,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 1.0,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _locationReady && _currentPosition != null
-                                      ? "${_currentPosition!.latitude.toStringAsFixed(5)}, ${_currentPosition!.longitude.toStringAsFixed(5)}"
-                                      : "Locating...",
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: _textSecondary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 14),
-                                const Text(
-                                  "DESTINATION",
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: _textMuted,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 1.0,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _moresName,
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    color: _accent,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ],
-                            ),
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        // Stats / fee
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: _sheet,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: _sheet),
                           ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // Stats / fee
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: Colors.black.o(0.20),
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.white.o(0.10)),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          _statItem(Icons.access_time, _dirDurationText.isEmpty ? "$_etaMinutes min" : _dirDurationText),
-                          _statDivider(),
-                          _statItem(Icons.navigation_outlined, _dirDistanceText.isEmpty ? "${_distanceKm.toStringAsFixed(1)} km" : _dirDistanceText),
-                          _statDivider(),
-                          _statItem(Icons.store_mall_directory, "Mores"),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 18),
-
-                    // Buttons
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 56,
-                            child: ElevatedButton.icon(
-                              onPressed: _startDirectionsToMores,
-                              icon: const Icon(Icons.directions),
-                              label: const Text("DROP-OFF"),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.white,
-                                foregroundColor: _bg,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(18)),
-                                elevation: 0,
-                              ),
-                            ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              _statItem(Icons.access_time,
+                                  _dirDurationText.isEmpty ? "$_etaMinutes min" : _dirDurationText),
+                              _statDivider(),
+                              _statItem(Icons.navigation_outlined,
+                                  _dirDistanceText.isEmpty ? "${_distanceKm.toStringAsFixed(1)} km" : _dirDistanceText),
+                              _statDivider(),
+                              _statItem(Icons.store_mall_directory, "Mores"),
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: SizedBox(
-                            height: 56,
-                            child: ElevatedButton.icon(
-                              onPressed: _openPickupFlowSheet,
-                              icon: const Icon(Icons.local_shipping),
-                              label: const Text("PICKUP"),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _accent,
-                                foregroundColor: _bg,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(18)),
-                                elevation: 0,
+
+                        const SizedBox(height: 18),
+
+                        // Buttons
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: 56,
+                                child: ElevatedButton.icon(
+                                  onPressed: _startDirectionsToMores,
+                                  icon: const Icon(Icons.directions),
+                                  label: const Text("DROP-OFF"),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: _bg,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(18),
+                                    ),
+                                    elevation: 0,
+                                  ),
+                                ),
                               ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: SizedBox(
+                                height: 56,
+                                child: ElevatedButton.icon(
+                                  onPressed: _openPickupFlowSheet,
+                                  icon: const Icon(Icons.local_shipping),
+                                  label: const Text("PICKUP"),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _accent,
+                                    foregroundColor: _bg,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(18),
+                                    ),
+                                    elevation: 0,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 10),
+
+                        Center(
+                          child: Container(
+                            width: 120,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.white12,
+                              borderRadius: BorderRadius.circular(2),
                             ),
                           ),
                         ),
                       ],
                     ),
-
-                    const SizedBox(height: 10),
-
-                    Center(
-                      child: Container(
-                        width: 120,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white12,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               );
             },
