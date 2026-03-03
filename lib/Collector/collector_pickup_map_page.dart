@@ -12,6 +12,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../chat/services/chat_services.dart';
 import '../chat/screens/chat_page.dart';
 
+extension OpacityFix on Color {
+  Color o(double opacity) =>
+      withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
+}
+
+
 class CollectorPickupMapPage extends StatefulWidget {
   final String requestId;
 
@@ -29,6 +35,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   String _pickupAddress = "";
   String _householdName = "Household";
   String _status = "";
+  String _bagLabel = "";
+  int? _bagKg;
+  bool _topExpanded = false;
 
   // ✅ IDs from request doc
   String _householdId = "";
@@ -83,6 +92,10 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         _pickupAddress = (data['pickupAddress'] ?? '').toString();
         _status = (data['status'] ?? '').toString();
         _pickupGp = (gp is GeoPoint) ? gp : null;
+        _bagLabel = (data['bagLabel'] ?? '').toString();
+        _bagKg = (data['bagKg'] is int)
+        ? data['bagKg'] as int
+        : int.tryParse((data['bagKg'] ?? '').toString());
 
         _householdId = (data['householdId'] ?? '').toString();
         _collectorId = (data['collectorId'] ?? '').toString();
@@ -444,12 +457,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     return Scaffold(
       backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _bg,
-        title: const Text("Go to Pickup"),
-      ),
       body: Stack(
         children: [
+          // MAP
           Positioned.fill(
             child: GoogleMap(
               initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
@@ -458,145 +468,246 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
               markers: markers,
               polylines: polylines,
               zoomControlsEnabled: false,
+              mapToolbarEnabled: false,
             ),
           ),
+
+          // ✅ TOP BAR (Uniform with GeoMapping)
           Positioned(
-            left: 16,
-            right: 16,
-            bottom: 16,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.55),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: Colors.white.withOpacity(0.10)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: _accent.withOpacity(0.18),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: const Icon(Icons.home_rounded, color: Colors.white),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _householdName.isEmpty ? "Household" : _householdName,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Text(
-                                  _pickupAddress.isEmpty ? "Unknown address" : _pickupAddress,
-                                  style: TextStyle(
-                                    color: Colors.grey.shade300,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                      _circularButton(
+                        Icons.arrow_back,
+                        onTap: () {
+                          if (Navigator.of(context).canPop()) Navigator.pop(context);
+                        },
                       ),
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.06),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.white.withOpacity(0.08)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _topExpanded = !_topExpanded),
+                          child: AnimatedSize(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOut,
+                            alignment: Alignment.topCenter,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxHeight: _topExpanded ? 160 : 56,
+                              ),
+                              child: _glass(
+                                radius: 16,
+                                blur: 12,
+                                opacity: 0.55,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(Icons.local_shipping, size: 18, color: _accent),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            _householdName.isEmpty ? "Pickup Request" : _householdName,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w900,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Icon(
+                                          _topExpanded ? Icons.expand_less : Icons.expand_more,
+                                          color: Colors.white.withOpacity(0.85),
+                                          size: 20,
+                                        ),
+                                      ],
+                                    ),
+
+                                    if (_topExpanded) ...[
+                                      const SizedBox(height: 8),
+                                      Expanded(
+                                        child: SingleChildScrollView(
+                                          physics: const BouncingScrollPhysics(),
+                                          child: Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children: [
+                                              _pillChip(
+                                                icon: Icons.inventory_2_outlined,
+                                                text: _bagLabel.isEmpty
+                                                    ? "Bag: —"
+                                                    : "Bag: $_bagLabel${_bagKg == null ? "" : " (${_bagKg}kg)"}",
+                                              ),
+                                              _pillChip(
+                                                icon: Icons.info_outline,
+                                                text: _status.isEmpty
+                                                    ? "Status: —"
+                                                    : "Status: ${_status.toUpperCase()}",
+                                              ),
+                                              _pillChip(
+                                                icon: Icons.place_outlined,
+                                                text: _pickupAddress.isEmpty
+                                                    ? "Address: —"
+                                                    : _pickupAddress,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            _miniStat(Icons.access_time, _durationText.isEmpty ? "—" : _durationText),
-                            _miniStat(Icons.navigation_outlined, _distanceText.isEmpty ? "—" : _distanceText),
-                            _miniStat(Icons.route, _route.isEmpty ? "No route" : "Route ready"),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: SizedBox(
-                              height: 48,
-                              child: ElevatedButton.icon(
-                                onPressed: _openGoogleMapsNavigation,
-                                icon: const Icon(Icons.directions),
-                                label: const Text("NAVIGATE"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: _bg,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                  elevation: 0,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: SizedBox(
-                              height: 48,
-                              child: ElevatedButton.icon(
-                                onPressed: _openPickupChat,
-                                icon: const Icon(Icons.chat_bubble_outline),
-                                label: const Text("CHAT"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: _bg,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                  elevation: 0,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: SizedBox(
-                              height: 48,
-                              child: ElevatedButton.icon(
-                                onPressed: _markArrivedOrComplete,
-                                icon: Icon(_status.toLowerCase() == 'arrived'
-                                    ? Icons.check_circle
-                                    : Icons.location_on_outlined),
-                                label: Text(_status.toLowerCase() == 'arrived' ? "COMPLETE" : "ARRIVED"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _accent,
-                                  foregroundColor: _bg,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                  elevation: 0,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
                       ),
                     ],
                   ),
                 ),
               ),
             ),
+          ),
+
+          // ✅ BOTTOM DRAGGABLE DRAWER
+          DraggableScrollableSheet(
+            initialChildSize: 0.26,
+            minChildSize: 0.18,
+            maxChildSize: 0.72,
+            builder: (context, scrollController) {
+              return ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.55),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                      border: Border(
+                        top: BorderSide(color: Colors.white.withOpacity(0.10)),
+                      ),
+                    ),
+                    child: ListView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 44,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+
+                        // Route stats (no coordinates shown)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF111928),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.white.withOpacity(0.08)),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _miniStat(Icons.access_time, _durationText.isEmpty ? "—" : _durationText),
+                              _miniStat(Icons.navigation_outlined, _distanceText.isEmpty ? "—" : _distanceText),
+                              _miniStat(Icons.route, _route.isEmpty ? "No route" : "Route ready"),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        // Actions (nice tiles)
+                        Column(
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _actionWide(
+                                    icon: Icons.my_location,
+                                    title: "FOCUS",
+                                    subtitle: "Center map",
+                                    bg: Colors.white,
+                                    fg: _bg,
+                                    onTap: () {
+                                      if (_pos != null) {
+                                        _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 16));
+                                      } else {
+                                        _map?.animateCamera(CameraUpdate.newLatLngZoom(_pickup, 16));
+                                      }
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _actionWide(
+                                    icon: Icons.directions,
+                                    title: "GOOGLE MAPS",
+                                    subtitle: "External nav",
+                                    bg: Colors.white,
+                                    fg: _bg,
+                                    onTap: _openGoogleMapsNavigation,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _actionWide(
+                                    icon: Icons.chat_bubble_outline,
+                                    title: "CHAT",
+                                    subtitle: "Message household",
+                                    bg: Colors.white.withOpacity(0.10),
+                                    fg: Colors.white,
+                                    border: Colors.white.withOpacity(0.14),
+                                    onTap: _openPickupChat,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _actionWide(
+                                    icon: _status.toLowerCase() == 'arrived'
+                                        ? Icons.check_circle
+                                        : Icons.location_on_outlined,
+                                    title: _status.toLowerCase() == 'arrived' ? "COMPLETE" : "ARRIVED",
+                                    subtitle: _status.toLowerCase() == 'arrived'
+                                        ? "Finish pickup"
+                                        : "Mark arrival",
+                                    bg: _accent,
+                                    fg: _bg,
+                                    onTap: _markArrivedOrComplete,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -617,6 +728,158 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _glass({
+    required Widget child,
+    double blur = 12,
+    double opacity = 0.55,
+    double radius = 16,
+    EdgeInsets padding = const EdgeInsets.all(14),
+  }) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(opacity),
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: Colors.white.withOpacity(0.10)),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _circularButton(IconData icon, {VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: _bg.o(0.92),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.o(0.14)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.o(0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Icon(icon, size: 18, color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _pillChip({required IconData icon, required String text}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white.withOpacity(0.90)),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actionWide({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    required Color bg,
+    required Color fg,
+    Color? border,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: border ?? Colors.white.withOpacity(0.10)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.18),
+              blurRadius: 14,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(bg == Colors.white || bg == _accent ? 0.06 : 0.18),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, size: 18, color: fg),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: fg,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: fg.withOpacity(0.80),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
