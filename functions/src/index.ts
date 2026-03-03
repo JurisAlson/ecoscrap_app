@@ -983,46 +983,28 @@ async function cleanupResidentKyc() {
     const uid = doc.id;
 
     const status = String(data.status || "").toLowerCase();
-    const createdAt = data.createdAt;
+    const submittedAt = data.submittedAt; // ✅ align with Flutter
     const approvedAt = data.approvedAt;
     const storagePath = String(data.storagePath || "").trim();
 
     try {
       if (status === "rejected") {
-        if (storagePath) {
-          await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
-        }
+        if (storagePath) await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
         await doc.ref.delete();
         deleted++;
         continue;
       }
 
-      if (
-        status === "pending" &&
-        createdAt &&
-        createdAt.toMillis() <= cutoffPending.toMillis()
-      ) {
-        if (storagePath) {
-          await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
-        }
+      if (status === "pending" && submittedAt && submittedAt.toMillis() <= cutoffPending.toMillis()) {
+        if (storagePath) await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
         await doc.ref.delete();
         deleted++;
         continue;
       }
 
-      if (
-        status === "approved" &&
-        approvedAt &&
-        approvedAt.toMillis() <= cutoffApproved.toMillis() &&
-        !data.kycExpired
-      ) {
-        if (storagePath) {
-          await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
-        }
-        await doc.ref.update({
-          kycExpired: true,
-          kycDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+      if (status === "approved" && approvedAt && approvedAt.toMillis() <= cutoffApproved.toMillis() && !data.kycExpired) {
+        if (storagePath) await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
+        await doc.ref.update({ kycExpired: true }); // ✅ no new timestamps
         deleted++;
       }
     } catch (err: any) {

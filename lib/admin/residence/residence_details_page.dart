@@ -31,52 +31,42 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   // ADMIN: APPROVE
   // =========================
   Future<void> _adminApproveResident(String uid) async {
-    final db = FirebaseFirestore.instance;
+  final db = FirebaseFirestore.instance;
 
-    final reqRef = db.collection("residentRequests").doc(uid);
-    final userRef = db.collection("Users").doc(uid);
+  final reqRef = db.collection("residentRequests").doc(uid);
+  final userRef = db.collection("Users").doc(uid);
+  final kycRef = db.collection("residentKYC").doc(uid); // ✅ add
 
-    await db.runTransaction((tx) async {
-      final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) {
-        // Do not include uid in messages (avoid surfacing in UI)
-        throw Exception("Resident request not found");
-      }
+  await db.runTransaction((tx) async {
+    final reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists) throw Exception("Resident request not found");
 
-      // residentRequests/{uid}
-      tx.set(
-        reqRef,
-        {
-          "status": "adminApproved",
-          "adminReviewedAt": FieldValue.serverTimestamp(),
-          "adminStatus": "approved",
-          "adminVerified": true,
-          "updatedAt": FieldValue.serverTimestamp(),
+    tx.set(reqRef, {
+      "status": "adminApproved",
+      "adminReviewedAt": FieldValue.serverTimestamp(),
+      "adminStatus": "approved",
+      "adminVerified": true,
+      "updatedAt": FieldValue.serverTimestamp(),
+      "residentStatus": "approved",
+    }, SetOptions(merge: true));
 
-          // Optional mirror (nice for UI consistency)
-          "residentStatus": "approved",
-        },
-        SetOptions(merge: true),
-      );
+    tx.set(userRef, {
+      "role": "user",
+      "Roles": "user",
+      "adminReviewedAt": FieldValue.serverTimestamp(),
+      "adminStatus": "approved",
+      "adminVerified": true,
+      "updatedAt": FieldValue.serverTimestamp(),
+      "residentStatus": "approved",
+    }, SetOptions(merge: true));
 
-      // Users/{uid}
-      tx.set(
-        userRef,
-        {
-          "role": "user",
-          "Roles": "user",
-          "adminReviewedAt": FieldValue.serverTimestamp(),
-          "adminStatus": "approved",
-          "adminVerified": true,
-          "updatedAt": FieldValue.serverTimestamp(),
-
-          // ✅ FIX: your screenshot shows this stayed "pending"
-          "residentStatus": "approved",
-        },
-        SetOptions(merge: true),
-      );
-    });
-  }
+    // ✅ NEW: sync KYC for cleanup logic
+    tx.set(kycRef, {
+      "status": "approved",
+      "approvedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  });
+}
 
   Future<void> adminApproveCollector(String uid) async {
     final db = FirebaseFirestore.instance;
