@@ -439,12 +439,39 @@ class _DashboardPageState extends State<DashboardPage> {
           _topSlider(),
           const SizedBox(height: 18),
 
-          _sectionHeader(
-            title: "Accepted by Mores Scrap Trading",
-            subtitle:
-                "Swipe and compare. If your item looks similar, it is likely accepted.",
+_sectionHeader(
+  title: "Accepted Plastics",
+  subtitle:
+      "These are the plastics Mores Scrap Trading collects. Swipe to compare photos — if your item looks similar, it’s accepted.",
+),
+const SizedBox(height: 8),
+Container(
+  width: double.infinity,
+  padding: const EdgeInsets.all(12),
+  decoration: BoxDecoration(
+    color: Colors.white.withOpacity(0.05),
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: Colors.white.withOpacity(0.08)),
+  ),
+  child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Icon(Icons.verified_rounded, color: primaryColor, size: 18),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(
+          "Quick check: match the color + shape. If it’s close, you can schedule pickup or drop-off.",
+          style: TextStyle(
+            color: Colors.grey.shade300,
+            fontSize: 12,
+            height: 1.3,
           ),
-          const SizedBox(height: 10),
+        ),
+      ),
+    ],
+  ),
+),
+          const SizedBox(height: 20),
           _acceptedPlasticsSection(),
           const SizedBox(height: 14),
 
@@ -656,252 +683,256 @@ class _DashboardPageState extends State<DashboardPage> {
 
   // ================= ACCEPTED PLASTICS =================
   // ✅ UPDATED: moved the swipe/hand hint to TOP of this widget
-  Widget _acceptedPlasticsSection() {
-    final plastics = [
-      {
-        "code": "A",
-        "short": "COLOR",
-        "name": "Colored Hard Plastics",
-        "note": "Thick plastic with strong colors.",
-        "examples": const [
-          "Plastic chair",
-          "Durabox",
-          "Colored container",
-          "Machine parts"
-        ],
-      },
-      {
-        "code": "B",
-        "short": "WHITE/CLEAR",
-        "name": "White or Clear Hard Plastics",
-        "note": "Rigid plastic that is white or transparent.",
-        "examples": const [
-          "Clear food container",
-          "White cup",
-          "Transparent bin",
-          "Plastic lid"
-        ],
-      },
-      {
-        "code": "C",
-        "short": "BOTTLES",
-        "name": "Thick Bottles & Gallons",
-        "note": "Heavy-duty bottles for liquids.",
-        "examples": const [
-          "Zonrox bottle",
-          "Detergent bottle",
-          "4-gallon container",
-          "Cleaning bottle"
-        ],
-      },
-      {
-        "code": "D",
-        "short": "BLACK",
-        "name": "Black Plastics",
-        "note": "Any thick black plastic item.",
-        "examples": const [
-          "Black bucket",
-          "Black container",
-          "Black storage box",
-          "Black plastic parts"
-        ],
-      },
-    ];
+Widget _acceptedPlasticsSection() {
+  final plastics = [
+    {
+      "code": "A",
+      "short": "COLORED",
+      "name": "Colored Plastics",
+      "note": "Hard plastic with strong colors like blue, red, or green.",
+      "examples": const [
+        "Example 1",
+        "Example 2",
+        "Example 3",
+        "Example 4",
+      ],
+      "images": const [
+        "assets/plastics/colored/1768218668879.jpg",
+        "assets/plastics/colored/1768218669345.jpg",
+        "assets/plastics/colored/plastic173.jpg",
+        "assets/plastics/colored/plastic468.jpg",
+      ],
+    },
+    {
+      "code": "B",
+      "short": "WHITE",
+      "name": "White Plastics",
+      "note": "Solid white plastic items used around the house.",
+      "examples": const [
+        "Example 1",
+        "Example 2",
+        "Example 3",
+        "Example 4",
+      ],
+      "images": const [
+        "assets/plastics/White/1768218668821.jpg",
+        "assets/plastics/White/1768218669203.jpg",
+        "assets/plastics/White/IMG20260103194105.jpg",
+        "assets/plastics/White/plastic92.jpg",
+      ],
+    },
+    {
+      "code": "C",
+      "short": "CLEAR",
+      "name": "Transparent Plastics",
+      "note": "Clear plastic that you can see through.",
+      "examples": const [
+        "Example 1",
+        "Example 2",
+        "Example 3",
+        "Example 4",
+      ],
+      "images": const [
+        "assets/plastics/Trans/1768218668973.jpg",
+        "assets/plastics/Trans/plastic212.jpg",
+        "assets/plastics/Trans/plastic386.jpg",
+        "assets/plastics/Trans/plastic431.jpg",
+      ],
+    },
+    {
+      "code": "D",
+      "short": "BOTTLES",
+      "name": "Thick Bottles & Containers",
+      "note": "Thick and sturdy bottles for cleaning liquids and household products.",
+      "examples": const [
+        "Example 1",
+        "Example 2",
+        "Example 3",
+        "Example 4",
+      ],
+      "images": const [
+        "assets/plastics/HD/1768217102421.jpg",
+        "assets/plastics/HD/1768218668549.jpg",
+        "assets/plastics/HD/plastic101.jpg",
+        "assets/plastics/HD/plastic305.jpg",
+      ],
+    },
+  ];
 
-    return SizedBox(
-      height: 460,
-      child: Stack(
-        children: [
-          // Give room so the hint doesn't overlap the cards
-          Padding(
-            padding: const EdgeInsets.only(top: 34),
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: plastics.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
-              itemBuilder: (context, i) {
-                final p = plastics[i];
-                return _plasticTypeCard(
-                  code: p["code"] as String,
-                  short: p["short"] as String,
-                  name: p["name"] as String,
-                  note: p["note"] as String,
-                  exampleLabels: (p["examples"] as List).cast<String>(),
-                );
-              },
-            ),
-          ),
+  return SizedBox(
+    height: 460,
+    child: Stack(
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 34),
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: plastics.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, i) {
+              final p = plastics[i];
+              final images =
+                  (p["images"] as List?)?.cast<String>() ?? const <String>[];
 
-          // ✅ hand/swipe icon placed on TOP of this section
-          Positioned(
-            top: 0,
-            right: 10,
-            child: _swipeHint(), // or _swipeHint(label: "SWIPE")
+              return _plasticTypeCard(
+                code: p["code"] as String,
+                short: p["short"] as String,
+                name: p["name"] as String,
+                note: p["note"] as String,
+                exampleLabels: (p["examples"] as List).cast<String>(),
+                exampleImages: images,
+              );
+            },
           ),
-        ],
-      ),
-    );
-  }
+        ),
+
+        Positioned(
+          top: 0,
+          right: 20,
+          child: _swipeHint(),
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _plasticTypeCard({
-    required String code,
-    required String short,
-    required String name,
-    required String note,
-    required List<String> exampleLabels,
-  }) {
-    final labels = List<String>.from(exampleLabels);
-    while (labels.length < 4) {
-      labels.add("Example ${labels.length + 1}");
-    }
-    if (labels.length > 4) {
-      labels.removeRange(4, labels.length);
-    }
+  required String code,
+  required String short,
+  required String name,
+  required String note,
+  required List<String> exampleLabels,
+  required List<String> exampleImages,
+}) {
+  final labels = List<String>.from(exampleLabels);
 
-    return Container(
-      width: 300,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: primaryColor.withOpacity(0.16),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: Colors.white.withOpacity(0.10)),
-                ),
-                child: Text(
-                  "$code • $short",
-                  style: TextStyle(
-                    color: primaryColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                ),
-                child: Text(
-                  "Accepted",
-                  style: TextStyle(
-                    color: Colors.grey.shade300,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 11,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w900,
-              fontSize: 14,
-              height: 1.2,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            note,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.grey.shade400,
-              fontSize: 12,
-              height: 1.25,
-            ),
-          ),
-          const SizedBox(height: 12),
-          GridView.count(
-            crossAxisCount: 2,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            children: [
-              _exampleSlot(label: labels[0]),
-              _exampleSlot(label: labels[1]),
-              _exampleSlot(label: labels[2]),
-              _exampleSlot(label: labels[3]),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Icon(Icons.info_outline, size: 16, color: Colors.grey.shade400),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  "Compare your item with these examples first.",
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _exampleSlot({required String label}) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Stack(
-        children: [
-          const Center(
-            child: Icon(Icons.photo_outlined, color: Colors.white38, size: 22),
-          ),
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+  return Container(
+    width: 300,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(0.06),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Colors.white.withOpacity(0.08)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: const Color(0xFF0F172A).withOpacity(0.72),
-                borderRadius: BorderRadius.circular(10),
+                color: primaryColor.withOpacity(0.16),
+                borderRadius: BorderRadius.circular(999),
                 border: Border.all(color: Colors.white.withOpacity(0.10)),
               ),
               child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
+                "$code • $short",
+                style: TextStyle(
+                  color: primaryColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
                 ),
               ),
             ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Text(
+                "Accepted",
+                style: TextStyle(
+                  color: Colors.grey.shade300,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(
+          name,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            fontSize: 14,
+            height: 1.2,
           ),
-        ],
-      ),
-    );
-  }
+        ),
+        const SizedBox(height: 6),
+        Text(
+          note,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.grey.shade400,
+            fontSize: 12,
+            height: 1.25,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+      GridView.count(
+  crossAxisCount: 2,
+  mainAxisSpacing: 10,
+  crossAxisSpacing: 10,
+  shrinkWrap: true,
+  physics: const NeverScrollableScrollPhysics(),
+  children: [
+    _exampleSlot(imagePath: exampleImages.isNotEmpty ? exampleImages[0] : null),
+    _exampleSlot(imagePath: exampleImages.length > 1 ? exampleImages[1] : null),
+    _exampleSlot(imagePath: exampleImages.length > 2 ? exampleImages[2] : null),
+    _exampleSlot(imagePath: exampleImages.length > 3 ? exampleImages[3] : null),
+  ],
+),
+
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Icon(Icons.info_outline, size: 16, color: Colors.grey.shade400),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                "Match your item with these photos.",
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+
+ Widget _exampleSlot({String? imagePath}) {
+  return Container(
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(0.04),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Colors.white.withOpacity(0.08)),
+    ),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: imagePath != null
+          ? Image.asset(
+              imagePath,
+              width: double.infinity,
+              height: double.infinity,
+              fit: BoxFit.cover,
+            )
+          : const Center(
+              child: Icon(Icons.photo_outlined, color: Colors.white38, size: 22),
+            ),
+    ),
+  );
+}
 
   // ================= TOP SLIDER =================
   Widget _topSlider() {
@@ -926,7 +957,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return Column(
       children: [
         SizedBox(
-          height: 120,
+          height: 100,
           child: Stack(
             children: [
               PageView.builder(
