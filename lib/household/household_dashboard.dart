@@ -439,12 +439,39 @@ class _DashboardPageState extends State<DashboardPage> {
           _topSlider(),
           const SizedBox(height: 18),
 
-          _sectionHeader(
-            title: "Accepted by Mores Scrap Trading",
-            subtitle:
-                "Swipe and compare. If your item looks similar, it is likely accepted.",
+_sectionHeader(
+  title: "Accepted Plastics",
+  subtitle:
+      "These are the plastics Mores Scrap Trading collects. Swipe to compare photos — if your item looks similar, it’s accepted.",
+),
+const SizedBox(height: 8),
+Container(
+  width: double.infinity,
+  padding: const EdgeInsets.all(12),
+  decoration: BoxDecoration(
+    color: Colors.white.withOpacity(0.05),
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: Colors.white.withOpacity(0.08)),
+  ),
+  child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Icon(Icons.verified_rounded, color: primaryColor, size: 18),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(
+          "Quick check: match the color + shape. If it’s close, you can schedule pickup or drop-off.",
+          style: TextStyle(
+            color: Colors.grey.shade300,
+            fontSize: 12,
+            height: 1.3,
           ),
-          const SizedBox(height: 10),
+        ),
+      ),
+    ],
+  ),
+),
+          const SizedBox(height: 20),
           _acceptedPlasticsSection(),
           const SizedBox(height: 14),
 
@@ -761,7 +788,7 @@ Widget _acceptedPlasticsSection() {
 
         Positioned(
           top: 0,
-          right: 10,
+          right: 20,
           child: _swipeHint(),
         ),
       ],
@@ -930,7 +957,7 @@ Widget _acceptedPlasticsSection() {
     return Column(
       children: [
         SizedBox(
-          height: 120,
+          height: 100,
           child: Stack(
             children: [
               PageView.builder(

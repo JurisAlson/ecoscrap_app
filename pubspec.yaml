@@ -59,3 +59,11 @@ flutter:
     - assets/plastics/HD/
     - assets/plastics/Trans/
     - assets/plastics/White/
+    - assets/plastic_validation/invalid_1/
+    - assets/plastic_validation/invalid_2/
+    - assets/plastic_validation/invalid_3/
+    - assets/plastic_validation/invalid_4/
+    - assets/plastic_validation/valid_1/
+    - assets/plastic_validation/valid_2/
+    - assets/plastic_validation/valid_3/
+    - assets/plastic_validation/valid_4/
