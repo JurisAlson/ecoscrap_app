@@ -88,6 +88,43 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         _collectorId = (data['collectorId'] ?? '').toString();
       });
 
+      // ✅ OPTION 1: auto-create collector ↔ junkshop chat ONLY when pickup is ongoing
+      // This will only succeed if request status is accepted/arrived/scheduled and active=true
+      try {
+        const junkshopUid = "IPD8J0giCThOmSUU40vEmRhfyeD3"; // ✅ your single junkshop UID
+
+        final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+        final collectorUid =
+            _collectorId.trim().isNotEmpty ? _collectorId.trim() : me;
+
+        if (collectorUid.isNotEmpty) {
+          // ✅ Direct create using current requestId (no query needed)
+          try {
+            const junkshopUid = "IPD8J0giCThOmSUU40vEmRhfyeD3";
+
+            final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+            final collectorUid =
+                _collectorId.trim().isNotEmpty ? _collectorId.trim() : me;
+
+            if (collectorUid.isNotEmpty &&
+                (_status == "accepted" ||
+                _status == "arrived" ||
+                _status == "scheduled")) {
+
+              await _chat.ensureJunkshopChatForRequest(
+                requestId: widget.requestId,
+                junkshopUid: junkshopUid,
+                collectorUid: collectorUid,
+              );
+            }
+          } catch (e) {
+            debugPrint("❌ ensureJunkshopChatForRequest failed: $e");
+          }
+        }
+      } catch (e) {
+        debugPrint("❌ ensureJunkshopChatForActivePickup failed: $e");
+      }
+
       if (_pickupGp != null && _pos != null) {
         await _buildRoute();
         _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));

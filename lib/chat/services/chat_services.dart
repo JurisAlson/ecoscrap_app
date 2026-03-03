@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import '../../constants/app_constants.dart';
 
 class ChatService {
   final _db = FirebaseFirestore.instance;
@@ -224,7 +225,7 @@ Future<void> cleanupPickupChats(String requestId) async {
       .where('type', isEqualTo: 'pickup')
       .where('collectorId', isEqualTo: collectorUid)
       .where('active', isEqualTo: true)
-      .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
+      .where('status', whereIn: ['pending', 'accepted', 'arrived', 'scheduled'])
       .orderBy('updatedAt', descending: true)
       .limit(1)
       .get();
@@ -262,6 +263,70 @@ Future<void> cleanupPickupChats(String requestId) async {
   await ref.set({
     'type': "junkshop",
     'requestId': requestId, // ✅ THIS is required for Storage rules
+    'participants': [junkshopUid, collectorUid],
+    'junkshopUid': junkshopUid,
+    'collectorUid': collectorUid,
+    'junkshopName': junkshopName,
+    'collectorName': collectorName,
+    'createdAt': FieldValue.serverTimestamp(),
+    'lastMessage': '',
+    'lastMessageAt': FieldValue.serverTimestamp(),
+  });
+
+  return chatId;
+}
+
+Future<void> ensureJunkshopChatForRequest({
+  required String requestId,
+  required String junkshopUid,
+  required String collectorUid,
+}) async {
+
+  final chatId = "junkshop_pickup_$requestId";
+  final ref = _db.collection('chats').doc(chatId);
+
+  final existing = await ref.get();
+  if (existing.exists) return;
+
+  await ref.set({
+    'type': "junkshop",
+    'requestId': requestId,
+    'participants': [junkshopUid, collectorUid],
+    'junkshopUid': junkshopUid,
+    'collectorUid': collectorUid,
+    'createdAt': FieldValue.serverTimestamp(),
+    'lastMessage': "",
+    'lastMessageAt': FieldValue.serverTimestamp(),
+  });
+}
+
+Future<String?> ensureJunkshopSupportChatForCollector({
+  required String collectorUid,
+}) async {
+  // read the single junkshop uid from config/app
+  final junkshopUid = AppConstants.primaryJunkshopUid;
+  if (junkshopUid.isEmpty) return null;
+
+  final chatId = "junkshop_support_$collectorUid";
+  final ref = _db.collection('chats').doc(chatId);
+  final snap = await ref.get();
+
+  if (snap.exists) return chatId;
+
+  // optional names
+  String collectorName = "Collector";
+  String junkshopName = "Junkshop";
+  try {
+    final cDoc = await _db.collection("Users").doc(collectorUid).get();
+    final jDoc = await _db.collection("Users").doc(junkshopUid).get();
+    final c = cDoc.data() ?? {};
+    final j = jDoc.data() ?? {};
+    collectorName = (c["name"] ?? c["publicName"] ?? "Collector").toString();
+    junkshopName = (j["shopName"] ?? j["name"] ?? "Junkshop").toString();
+  } catch (_) {}
+
+  await ref.set({
+    'type': 'junkshop_support',
     'participants': [junkshopUid, collectorUid],
     'junkshopUid': junkshopUid,
     'collectorUid': collectorUid,
