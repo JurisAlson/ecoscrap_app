@@ -98,6 +98,26 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     return base.clamp(3, 999);
   }
 
+  // Dark map style JSON
+static const String _darkMapStyle = r'''
+[
+  {"elementType":"geometry","stylers":[{"color":"#0b1220"}]},
+  {"elementType":"labels.text.fill","stylers":[{"color":"#8aa0b8"}]},
+  {"elementType":"labels.text.stroke","stylers":[{"color":"#0b1220"}]},
+  {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#2b3445"}]},
+  {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#7d93aa"}]},
+  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#0f1a2a"}]},
+  {"featureType":"road","elementType":"geometry","stylers":[{"color":"#162235"}]},
+  {"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
+  {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#93a8bf"}]},
+  {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#1f2f48"}]},
+  {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
+  {"featureType":"transit","elementType":"geometry","stylers":[{"color":"#142033"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#06101c"}]},
+  {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#6f879f"}]}
+]
+''';
+
 
   // ----- Available collectors dropdown -----
   String? _selectedCollectorId;
@@ -296,8 +316,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
   }
 
-  void _onMapCreated(GoogleMapController controller) {
+  void _onMapCreated(GoogleMapController controller) async {
     _mapController = controller;
+    await _mapController!.setMapStyle(_darkMapStyle);
   }
 
   Future<void> _initLocation() async {
