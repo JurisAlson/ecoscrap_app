@@ -38,7 +38,9 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     if (s == "users" ||
         s == "user" ||
         s == "household" ||
-        s == "households") return "user";
+        s == "households") {
+      return "user";
+    }
     return "unknown";
   }
 

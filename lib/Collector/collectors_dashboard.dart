@@ -194,7 +194,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     return base.map((snap) {
       // hide ones declined by this collector
       final docs = snap.docs.where((d) {
-        final data = d.data() as Map<String, dynamic>;
+        final data = d.data();
         final declinedBy = (data['declinedBy'] as List?) ?? [];
         return !declinedBy.contains(collectorUid);
       }).toList();

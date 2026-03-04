@@ -13,6 +13,9 @@ import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
 import 'package:ecoscrap_app/security/kyc_shared_key.dart';
 import 'package:ecoscrap_app/security/admin_public_key.dart';
 
+// ✅ Encrypt resident address (USER APP)
+import 'package:ecoscrap_app/security/resident_address_crypto.dart';
+
 class UserAccountCreationPage extends StatefulWidget {
   const UserAccountCreationPage({super.key});
 
@@ -27,6 +30,9 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+
+  // ✅ Address controller (required)
+  final _addressController = TextEditingController();
 
   PlatformFile? _pickedFile; // REQUIRED government ID
   bool _isLoading = false;
@@ -52,6 +58,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _addressController.dispose();
     super.dispose();
   }
 
@@ -187,8 +194,9 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       aad: utf8.encode(uid),
     );
 
-    final encryptedName = "$originalFileName.enc";
-    final storagePath = "resident_kyc/$uid/$encryptedName";
+    // ✅ Hidden storage path (no uid, no original name)
+    final randomId = _randId();
+    final storagePath = "kyc_secure/$randomId.enc";
 
     final ref = FirebaseStorage.instance.ref(storagePath);
     await ref.putData(
@@ -202,11 +210,16 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       "status": "pending",
       "hasKycFile": true,
       "storagePath": storagePath,
+
+      // optional for admin UI label only (NOT used for storage)
       "originalFileName": originalFileName,
+
+      // crypto metadata
       "ephPubKeyB64": base64Encode(ephPubBytes),
       "saltB64": base64Encode(Uint8List.fromList(salt)),
       "nonceB64": base64Encode(enc.nonce),
       "macB64": base64Encode(enc.macBytes),
+
       "submittedAt": FieldValue.serverTimestamp(),
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -221,16 +234,20 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
     final password = _passwordController.text.trim();
     final confirmPassword = _confirmPasswordController.text.trim();
 
-    // Form validation
+    final address = _addressController.text.trim();
+
     if (!_formKey.currentState!.validate()) return;
 
-    // ✅ REQUIRED ID
+    if (address.isEmpty) {
+      _toast("Home address is required.", error: true);
+      return;
+    }
+
     if (_pickedFile == null) {
       _toast("Government ID is required for Palo Alto verification.", error: true);
       return;
     }
 
-    // Extra guard (in case validators change)
     if (password != confirmPassword) {
       _toast("Passwords do not match.", error: true);
       return;
@@ -238,7 +255,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
 
     setState(() => _isLoading = true);
 
-    Reference? uploadedEncryptedRef;
+    String? storagePathForPossibleCleanup;
 
     try {
       // 1) Create user in Auth
@@ -248,52 +265,58 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       final user = userCredential.user!;
       final uid = user.uid;
 
-      // 2) Upload encrypted ID
+      // 2) Encrypt address for admin + store in residentKYC/{uid}
+      final addressEnc = await ResidentAddressCrypto.encryptForAdmin(
+        uid: uid,
+        address: address,
+      );
+
+      // 3) Prepare ID file name (display only)
       final ext = (_pickedFile!.extension ?? "").toLowerCase();
       final normalizedExt = (ext == "jpeg") ? "jpg" : ext;
-
       final rid = _randId();
       final kycFileName = "resident_id_$rid.$normalizedExt";
       final bytes = await File(_pickedFile!.path!).readAsBytes();
 
+      // 4) Upload encrypted KYC
+      // (capture storagePath from Firestore later for cleanup if needed)
       await _uploadEncryptedResidentKyc(
         uid: uid,
         fileBytes: Uint8List.fromList(bytes),
         originalFileName: kycFileName,
       );
 
-      final storagePath = "resident_kyc/$uid/$kycFileName.enc";
-      uploadedEncryptedRef = FirebaseStorage.instance.ref(storagePath);
+      // ✅ optional: read storagePath back for cleanup if a later step fails
+      final kycDoc =
+          await FirebaseFirestore.instance.collection("residentKYC").doc(uid).get();
+      storagePathForPossibleCleanup =
+          (kycDoc.data()?["storagePath"] ?? "").toString().trim();
 
-      // 3) Save user + request docs
+      // 5) Save user + request docs (NO plaintext address saved)
       final db = FirebaseFirestore.instance;
       final userRef = db.collection("Users").doc(uid);
       final reqRef = db.collection("residentRequests").doc(uid);
+      final kycRef = db.collection("residentKYC").doc(uid);
 
       await db.runTransaction((tx) async {
-        // Users/{uid}
         tx.set(userRef, {
           "UserID": uid,
           "Name": name,
           "Email": email,
 
-          // normalized role
           "role": "user",
           "Roles": "user",
 
-          // ✅ REQUIRED for access gating
           "adminVerified": false,
           "adminStatus": "pending",
           "adminReviewedAt": FieldValue.delete(),
 
-          // optional mirror field
           "residentStatus": "pending",
 
           "CreatedAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 
-        // residentRequests/{uid}
         tx.set(reqRef, {
           "uid": uid,
           "publicName": name,
@@ -307,24 +330,31 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
           "submittedAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
+
+        // ✅ store encrypted address inside residentKYC/{uid}
+        tx.set(kycRef, {
+          "uid": uid,
+          "addressEnc": addressEnc,
+          "updatedAt": FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
       });
 
-      // 4) Update display name + send verification
+      // 6) Update display name + send verification
       await user.updateDisplayName(name);
       await user.sendEmailVerification();
 
       _toast("Verification email sent! Please check your inbox.");
 
-      // 5) Logout (prevents access until they verify + admin approves)
+      // 7) Logout (prevents access until they verify + admin approves)
       await FirebaseAuth.instance.signOut();
       if (mounted) Navigator.pop(context);
     } on FirebaseAuthException catch (e) {
       _toast(e.message ?? "Authentication failed", error: true);
     } catch (e) {
-      // cleanup encrypted blob if something failed after upload
-      if (uploadedEncryptedRef != null) {
+      // ✅ best-effort cleanup for partially created account (optional)
+      if (storagePathForPossibleCleanup != null && storagePathForPossibleCleanup!.isNotEmpty) {
         try {
-          await uploadedEncryptedRef.delete();
+          await FirebaseStorage.instance.ref(storagePathForPossibleCleanup!).delete();
         } catch (_) {}
       }
       _toast("An unexpected error occurred: $e", error: true);
@@ -351,7 +381,6 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
             child: Column(
               children: [
                 _HeroHeaderUser(),
-
                 const SizedBox(height: 14),
 
                 _InfoCard(
@@ -396,15 +425,14 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
                   icon: Icons.lock_outline,
                   children: const [
                     Text(
-                      "Your ID is encrypted and used ONLY for Palo Alto residency verification. "
-                      "It will not be shared publicly or used for any other purpose.",
+                      "Your ID and address are encrypted and used ONLY for Palo Alto residency verification. "
+                      "They will not be shared publicly or used for any other purpose.",
                       style: TextStyle(color: Colors.white70, height: 1.35),
                     ),
                   ],
                 ),
 
                 const SizedBox(height: 16),
-
                 const _SectionTitle("Account Details"),
                 const SizedBox(height: 10),
 
@@ -415,6 +443,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
                   type: _FieldType.name,
                 ),
                 const SizedBox(height: 15),
+
                 _buildTextField(
                   _emailController,
                   "Email",
@@ -422,6 +451,17 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
                   type: _FieldType.email,
                 ),
                 const SizedBox(height: 15),
+
+                // ✅ Address field (blended UI)
+                _buildTextField(
+                  _addressController,
+                  "Home Address (Palo Alto)",
+                  Icons.location_on_outlined,
+                  type: _FieldType.address,
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 15),
+
                 _buildTextField(
                   _passwordController,
                   "Password",
@@ -430,6 +470,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
                   type: _FieldType.password,
                 ),
                 const SizedBox(height: 15),
+
                 _buildTextField(
                   _confirmPasswordController,
                   "Confirm Password",
@@ -490,10 +531,12 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
     IconData icon, {
     bool isObscure = false,
     required _FieldType type,
+    int maxLines = 1,
   }) {
     return TextFormField(
       controller: controller,
       obscureText: isObscure,
+      maxLines: isObscure ? 1 : maxLines,
       style: const TextStyle(color: Colors.white),
       autovalidateMode: AutovalidateMode.onUserInteraction,
       decoration: InputDecoration(
@@ -529,6 +572,10 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
             if (value != _passwordController.text.trim()) return "Passwords do not match";
             break;
 
+          case _FieldType.address:
+            if (value.length < 6) return "Enter a valid address";
+            break;
+
           case _FieldType.name:
             break;
         }
@@ -542,7 +589,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
 // UI Components
 // =========================
 
-enum _FieldType { name, email, password, confirmPassword }
+enum _FieldType { name, email, address, password, confirmPassword }
 
 class _HeroHeaderUser extends StatelessWidget {
   @override
