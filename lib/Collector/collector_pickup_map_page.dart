@@ -1,5 +1,4 @@
 import 'dart:ui';
-
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -7,6 +6,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'collector_transaction_page.dart';
+import 'dart:async';
 
 // ✅ chat imports
 import '../chat/services/chat_services.dart';
@@ -38,6 +39,10 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   String _bagLabel = "";
   int? _bagKg;
   bool _topExpanded = false;
+  bool _hasCollectorReceipt = false;  
+  StreamSubscription<DocumentSnapshot>? _reqSub;
+  bool _junkshopChatEnsured = false; // (optional) prevent repeated ensure calls
+  
 
   // ✅ IDs from request doc
   String _householdId = "";
@@ -74,79 +79,74 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     _loadRequestInfo();
     _initLocation();
   }
+  @override
+  void dispose() {
+    _reqSub?.cancel();
+    super.dispose();
+  }
 
   Future<void> _loadRequestInfo() async {
     try {
-      final doc = await FirebaseFirestore.instance
+      await _reqSub?.cancel(); // safety if called again
+
+      _reqSub = FirebaseFirestore.instance
           .collection('requests')
           .doc(widget.requestId)
-          .get();
+          .snapshots()
+          .listen((doc) async {
+        final data = doc.data() as Map<String, dynamic>? ?? {};
+        final gp = data['pickupLocation'];
 
-      final data = doc.data() ?? {};
-      final gp = data['pickupLocation'];
+        if (!mounted) return;
 
-      if (!mounted) return;
+        setState(() {
+          _householdName = (data['householdName'] ?? 'Household').toString();
+          _pickupAddress = (data['pickupAddress'] ?? '').toString();
+          _status = (data['status'] ?? '').toString();
+          _pickupGp = (gp is GeoPoint) ? gp : null;
 
-      setState(() {
-        _householdName = (data['householdName'] ?? 'Household').toString();
-        _pickupAddress = (data['pickupAddress'] ?? '').toString();
-        _status = (data['status'] ?? '').toString();
-        _pickupGp = (gp is GeoPoint) ? gp : null;
-        _bagLabel = (data['bagLabel'] ?? '').toString();
-        _bagKg = (data['bagKg'] is int)
-        ? data['bagKg'] as int
-        : int.tryParse((data['bagKg'] ?? '').toString());
+          _bagLabel = (data['bagLabel'] ?? '').toString();
+          _bagKg = (data['bagKg'] is int)
+              ? data['bagKg'] as int
+              : int.tryParse((data['bagKg'] ?? '').toString());
 
-        _householdId = (data['householdId'] ?? '').toString();
-        _collectorId = (data['collectorId'] ?? '').toString();
-      });
+          _householdId = (data['householdId'] ?? '').toString();
+          _collectorId = (data['collectorId'] ?? '').toString();
+          _hasCollectorReceipt = (data['hasCollectorReceipt'] == true);
+        });
 
-      // ✅ OPTION 1: auto-create collector ↔ junkshop chat ONLY when pickup is ongoing
-      // This will only succeed if request status is accepted/arrived/scheduled and active=true
-      try {
-        const junkshopUid = "IPD8J0giCThOmSUU40vEmRhfyeD3"; // ✅ your single junkshop UID
+        // ✅ Build route once we have both pickup + my location
+        if (_pickupGp != null && _pos != null) {
+          await _buildRoute();
+          _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));
+        }
 
-        final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-        final collectorUid =
-            _collectorId.trim().isNotEmpty ? _collectorId.trim() : me;
+        // ✅ Ensure collector↔junkshop chat only once and only when allowed
+        final s = _status.toLowerCase();
+        if (!_junkshopChatEnsured &&
+            (s == "accepted" || s == "arrived" || s == "scheduled")) {
+          final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+          final collectorUid = _collectorId.trim().isNotEmpty ? _collectorId.trim() : me;
 
-        if (collectorUid.isNotEmpty) {
-          // ✅ Direct create using current requestId (no query needed)
-          try {
-            const junkshopUid = "IPD8J0giCThOmSUU40vEmRhfyeD3";
-
-            final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-            final collectorUid =
-                _collectorId.trim().isNotEmpty ? _collectorId.trim() : me;
-
-            if (collectorUid.isNotEmpty &&
-                (_status == "accepted" ||
-                _status == "arrived" ||
-                _status == "scheduled")) {
-
+          if (collectorUid.isNotEmpty) {
+            _junkshopChatEnsured = true;
+            try {
+              const junkshopUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
               await _chat.ensureJunkshopChatForRequest(
                 requestId: widget.requestId,
                 junkshopUid: junkshopUid,
                 collectorUid: collectorUid,
               );
+            } catch (e) {
+              debugPrint("❌ ensureJunkshopChatForRequest failed: $e");
             }
-          } catch (e) {
-            debugPrint("❌ ensureJunkshopChatForRequest failed: $e");
           }
         }
-      } catch (e) {
-        debugPrint("❌ ensureJunkshopChatForActivePickup failed: $e");
-      }
-
-      if (_pickupGp != null && _pos != null) {
-        await _buildRoute();
-        _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 15));
-      }
+      });
     } catch (e) {
       debugPrint("❌ _loadRequestInfo error: $e");
     }
   }
-
   Future<void> _initLocation() async {
     final ok = await _ensureLocationPermission();
     if (!ok) return;
@@ -349,6 +349,49 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
           // ✅ Important: other user is the household
           otherUserId: householdUid,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openCollectorReceipt() async {
+    final s = _status.toLowerCase();
+    if (s != "arrived") {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Create receipt is available once you are ARRIVED.")),
+      );
+      return;
+    }
+
+    // Optional: block if already has receipt
+    try {
+      final reqDoc = await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(widget.requestId)
+          .get();
+
+      final data = reqDoc.data() ?? {};
+      final hasReceipt = data['hasCollectorReceipt'] == true;
+
+      if (hasReceipt) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Receipt already created for this pickup.")),
+        );
+        return;
+      }
+    } catch (_) {
+      // ignore and still allow
+    }
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CollectorTransactionPage(
+        requestId: widget.requestId, // ✅ pass arrived requestId
+        embedded: false,             // ✅ full page with AppBar
         ),
       ),
     );
@@ -642,38 +685,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                               children: [
                                 Expanded(
                                   child: _actionWide(
-                                    icon: Icons.my_location,
-                                    title: "FOCUS",
-                                    subtitle: "Center map",
-                                    bg: Colors.white,
-                                    fg: _bg,
-                                    onTap: () {
-                                      if (_pos != null) {
-                                        _map?.animateCamera(CameraUpdate.newLatLngZoom(_origin, 16));
-                                      } else {
-                                        _map?.animateCamera(CameraUpdate.newLatLngZoom(_pickup, 16));
-                                      }
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _actionWide(
-                                    icon: Icons.directions,
-                                    title: "GOOGLE MAPS",
-                                    subtitle: "External nav",
-                                    bg: Colors.white,
-                                    fg: _bg,
-                                    onTap: _openGoogleMapsNavigation,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _actionWide(
                                     icon: Icons.chat_bubble_outline,
                                     title: "CHAT",
                                     subtitle: "Message household",
@@ -699,6 +710,20 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                                   ),
                                 ),
                               ],
+                            ),
+
+                            const SizedBox(height: 10),
+
+                            // ✅ Receipt button goes UNDER the row
+                            if (_status.toLowerCase() == "arrived")
+                            _actionWide(
+                              icon: (_hasCollectorReceipt == true) ? Icons.receipt : Icons.receipt_long,
+                              title: (_hasCollectorReceipt == true) ? "RECEIPT SAVED" : "RECEIPT",
+                              subtitle: (_hasCollectorReceipt == true) ? "Already created" : "Create buying receipt",
+                              bg: Colors.white.withOpacity(0.10),
+                              fg: Colors.white,
+                              border: Colors.white.withOpacity(0.14),
+                              onTap: (_hasCollectorReceipt == true) ? null : _openCollectorReceipt,
                             ),
                           ],
                         ),
@@ -812,72 +837,82 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     required IconData icon,
     required String title,
     required String subtitle,
-    required VoidCallback onTap,
     required Color bg,
     required Color fg,
     Color? border,
+    VoidCallback? onTap, // ✅ nullable
   }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        height: 56,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: border ?? Colors.white.withOpacity(0.10)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.18),
-              blurRadius: 14,
-              offset: const Offset(0, 10),
+    final disabled = onTap == null;
+
+    return Opacity(
+      opacity: disabled ? 0.55 : 1.0, // ✅ dim when disabled
+      child: InkWell(
+        onTap: onTap, // ✅ null disables tap + ripple
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: (border ?? Colors.white.withOpacity(0.10))
+                  .withOpacity(disabled ? 0.55 : 1.0),
             ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(bg == Colors.white || bg == _accent ? 0.06 : 0.18),
-                borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(disabled ? 0.10 : 0.18),
+                blurRadius: 14,
+                offset: const Offset(0, 10),
               ),
-              child: Icon(icon, size: 18, color: fg),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: fg,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 12,
-                      letterSpacing: 0.4,
-                    ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(
+                    disabled ? 0.10 : (bg == Colors.white || bg == _accent ? 0.06 : 0.18),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: fg.withOpacity(0.80),
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 18, color: fg),
               ),
-            ),
-          ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: fg,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: fg.withOpacity(0.80),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -147,7 +147,6 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                   _navItem(0, Icons.storefront_outlined, "Home"),
                   _navItem(1, Icons.inventory_2_outlined, "Inventory"),
                   _navItem(2, Icons.receipt_long_outlined, "Transactions"),
-                  _navItem(3, Icons.map_outlined, "Map"),
                 ],
               ),
             ],

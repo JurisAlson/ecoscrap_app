@@ -62,6 +62,10 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   String _dirDistanceText = "";
   String _dirDurationText = "";
   int? _dirDurationValueSec;
+
+  String? _activeDropoffRequestId;
+  bool get _hasActiveDropoff => _activeDropoffRequestId != null && _isDelivering;
+
   // Trip stage
   TripStage _tripStage = TripStage.planning;
 
@@ -520,13 +524,89 @@ static const String _darkMapStyle = r'''
   Future<void> _startDirectionsToMores() async {
     setState(() => _tripStage = TripStage.delivering);
 
+    if (_activeDropoffRequestId == null) {
+      final id = await _createDropoffRequest();
+      if (id != null && mounted) setState(() => _activeDropoffRequestId = id);
+    }
+
     await _buildRouteTo(_moresLatLng);
-
-    _mapController?.animateCamera(
-      CameraUpdate.newLatLngZoom(_moresLatLng, 16),
-    );
-
+    _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_moresLatLng, 16));
     _snack("Showing directions to $_moresName.", bg: _sheet);
+  }
+  // =========================
+  // DROP-OFF
+  // =========================
+
+  Future<String?> _createDropoffRequest() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+
+    final actorName = await _getUserName(user.uid, fallback: user.email ?? "User");
+
+    final doc = await FirebaseFirestore.instance.collection('requests').add({
+      'type': 'dropoff',
+      'active': true,
+      'status': 'en_route',
+
+      'actorId': user.uid,
+      'actorName': actorName,
+
+      'junkshopId': 'mores',
+      'junkshopName': _moresName,
+      'destinationLocation': GeoPoint(_moresLatLng.latitude, _moresLatLng.longitude),
+
+      'originLocation': GeoPoint(_originLatLng.latitude, _originLatLng.longitude),
+
+      'distanceKm': double.parse(_distanceKm.toStringAsFixed(2)),
+      'etaMinutes': _etaMinutes,
+
+      'arrived': false,
+      'arrivedAt': null,
+      'cancelledAt': null,
+
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    return doc.id;
+  }
+  // =========================
+  // CANCEL DROP OFF
+  // =========================
+  Future<void> _cancelDropoff() async {
+    final id = _activeDropoffRequestId;
+    if (id == null) return;
+
+    await FirebaseFirestore.instance.collection('requests').doc(id).update({
+      'status': 'cancelled',
+      'active': false,
+      'cancelledAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (!mounted) return;
+    setState(() {
+      _activeDropoffRequestId = null;
+      _tripStage = TripStage.planning;
+      _routePoints = [];
+    });
+
+    _snack("Drop-off cancelled. Junkshop notified.", bg: Colors.redAccent);
+  }
+
+  Future<void> _arrivedDropoff() async {
+    final id = _activeDropoffRequestId;
+    if (id == null) return;
+
+    await FirebaseFirestore.instance.collection('requests').doc(id).update({
+      'status': 'arrived',
+      'arrived': true,
+      'arrivedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (!mounted) return;
+    _snack("Arrived! Junkshop notified.", bg: _accent);
   }
 
   // =========================
