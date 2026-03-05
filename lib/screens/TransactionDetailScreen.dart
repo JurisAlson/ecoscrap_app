@@ -272,54 +272,6 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
                       ],
                     ),
                   ),
-
-                  const SizedBox(height: 14),
-
-                  const Text(
-                    "Transaction ID",
-                    style: TextStyle(
-                      color: Color(0xFF94A3B8),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.25),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.white.withOpacity(0.08)),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            txId,
-                            style: const TextStyle(color: Colors.white),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.copy, color: Colors.white70),
-                          onPressed: () async {
-                            await Clipboard.setData(ClipboardData(text: txId));
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Transaction ID copied")),
-                            );
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 8),
-                  const Text(
-                    "Tap to copy.",
-                    style: TextStyle(color: Colors.grey, fontSize: 11),
-                  ),
                 ],
               ),
             );
