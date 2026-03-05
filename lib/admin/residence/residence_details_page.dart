@@ -14,6 +14,9 @@ import 'package:ecoscrap_app/security/admin_keys.dart';
 import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
 import 'package:ecoscrap_app/security/kyc_shared_key.dart';
 
+// ✅ Address decrypt (ADMIN APP)
+import  'package:ecoscrap_app/security/resident_address_decrypt.dart';
+
 class ResidentDetailsPage extends StatefulWidget {
   final DocumentReference<Map<String, dynamic>> requestRef;
   const ResidentDetailsPage({super.key, required this.requestRef});
@@ -31,42 +34,42 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   // ADMIN: APPROVE
   // =========================
   Future<void> _adminApproveResident(String uid) async {
-  final db = FirebaseFirestore.instance;
+    final db = FirebaseFirestore.instance;
 
-  final reqRef = db.collection("residentRequests").doc(uid);
-  final userRef = db.collection("Users").doc(uid);
-  final kycRef = db.collection("residentKYC").doc(uid); // ✅ add
+    final reqRef = db.collection("residentRequests").doc(uid);
+    final userRef = db.collection("Users").doc(uid);
+    final kycRef = db.collection("residentKYC").doc(uid); // ✅ add
 
-  await db.runTransaction((tx) async {
-    final reqSnap = await tx.get(reqRef);
-    if (!reqSnap.exists) throw Exception("Resident request not found");
+    await db.runTransaction((tx) async {
+      final reqSnap = await tx.get(reqRef);
+      if (!reqSnap.exists) throw Exception("Resident request not found");
 
-    tx.set(reqRef, {
-      "status": "adminApproved",
-      "adminReviewedAt": FieldValue.serverTimestamp(),
-      "adminStatus": "approved",
-      "adminVerified": true,
-      "updatedAt": FieldValue.serverTimestamp(),
-      "residentStatus": "approved",
-    }, SetOptions(merge: true));
+      tx.set(reqRef, {
+        "status": "adminApproved",
+        "adminReviewedAt": FieldValue.serverTimestamp(),
+        "adminStatus": "approved",
+        "adminVerified": true,
+        "updatedAt": FieldValue.serverTimestamp(),
+        "residentStatus": "approved",
+      }, SetOptions(merge: true));
 
-    tx.set(userRef, {
-      "role": "user",
-      "Roles": "user",
-      "adminReviewedAt": FieldValue.serverTimestamp(),
-      "adminStatus": "approved",
-      "adminVerified": true,
-      "updatedAt": FieldValue.serverTimestamp(),
-      "residentStatus": "approved",
-    }, SetOptions(merge: true));
+      tx.set(userRef, {
+        "role": "user",
+        "Roles": "user",
+        "adminReviewedAt": FieldValue.serverTimestamp(),
+        "adminStatus": "approved",
+        "adminVerified": true,
+        "updatedAt": FieldValue.serverTimestamp(),
+        "residentStatus": "approved",
+      }, SetOptions(merge: true));
 
-    // ✅ NEW: sync KYC for cleanup logic
-    tx.set(kycRef, {
-      "status": "approved",
-      "approvedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  });
-}
+      // ✅ NEW: sync KYC for cleanup logic
+      tx.set(kycRef, {
+        "status": "approved",
+        "approvedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
+  }
 
   Future<void> adminApproveCollector(String uid) async {
     final db = FirebaseFirestore.instance;
@@ -77,11 +80,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     await db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
       if (!reqSnap.exists) {
-        // Do not include uid in messages
         throw Exception("Collector request not found");
       }
 
-      // collectorRequests/{uid}
       tx.set(
         reqRef,
         {
@@ -92,18 +93,14 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
         SetOptions(merge: true),
       );
 
-      // Users/{uid}
       tx.set(
         userRef,
         {
           "collectorStatus": "adminApproved", // ✅ RoleGate expects this
           "collectorVerified": true,
-          "collectorActive": true, // optional (if you use it)
+          "collectorActive": true,
           "adminReviewedAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
-
-          // Optional: keep Roles as "collector" or leave as "user"
-          // If your collector dashboard should open, you can set:
           "Roles": "collector",
           "role": "collector",
         },
@@ -114,7 +111,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
 
   // =========================
   // ADMIN: REJECT + DELETE ACCOUNT
-  // (this is what allows email reuse)
   // =========================
   Future<void> _rejectAndDeleteResidentAccount(
     String uid, {
@@ -127,6 +123,30 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
       "uid": uid,
       "reason": reason,
     });
+  }
+
+  // =========================
+  // ✅ ADDRESS: DOWNLOAD + DECRYPT (ADMIN)
+  // Reads residentKYC/{uid}.addressEnc
+  // =========================
+  Future<String?> _downloadAndDecryptResidentAddress(String uid) async {
+    final db = FirebaseFirestore.instance;
+    final kycSnap = await db.collection("residentKYC").doc(uid).get();
+    if (!kycSnap.exists) return null;
+
+    final kyc = kycSnap.data() ?? {};
+    final enc = kyc["addressEnc"];
+
+    if (enc == null || enc is! Map) return null;
+
+    final address = await ResidentAddressDecrypt.decrypt(
+      uid: uid,
+      data: Map<String, dynamic>.from(enc as Map),
+    );
+
+    final v = address.trim();
+    if (v.isEmpty) return null;
+    return v;
   }
 
   // =========================
@@ -149,8 +169,10 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     final nonceB64 = (kyc["nonceB64"] ?? "").toString();
     final macB64 = (kyc["macB64"] ?? "").toString();
 
-    if (ephPubKeyB64.isEmpty || saltB64.isEmpty || nonceB64.isEmpty || macB64.isEmpty) {
-      // Avoid including uid/path in any surfaced errors
+    if (ephPubKeyB64.isEmpty ||
+        saltB64.isEmpty ||
+        nonceB64.isEmpty ||
+        macB64.isEmpty) {
       throw Exception("Missing required encryption metadata");
     }
 
@@ -177,7 +199,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
       macBytes: macBytes,
       nonce: nonce,
       key: aesKey,
-      aad: utf8.encode(uid), // keep uid internally for AAD, not shown in UI
+      aad: utf8.encode(uid),
     );
 
     return _DecryptedKyc(
@@ -371,6 +393,97 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
             final isPending = status.trim().toLowerCase() == "pending";
             final accent = _statusAccent(status);
 
+            // ✅ Address block (admin-only decrypt)
+            final addressBlock = FutureBuilder<String?>(
+              future: _downloadAndDecryptResidentAddress(uid),
+              builder: (context, addrSnap) {
+                if (addrSnap.connectionState == ConnectionState.waiting) {
+                  return _panel(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: const Row(
+                      children: [
+                        SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                        SizedBox(width: 10),
+                        Text("Decrypting address...",
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                  );
+                }
+
+                if (addrSnap.hasError) {
+                  return _panel(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.location_on_outlined, color: Colors.redAccent.withOpacity(0.95), size: 18),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            "Address could not be opened.",
+                            style: TextStyle(color: Colors.redAccent, height: 1.3, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                final address = (addrSnap.data ?? "").trim();
+                if (address.isEmpty) {
+                  return _panel(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.location_on_outlined, color: Colors.white.withOpacity(0.65), size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            "No address submitted.",
+                            style: TextStyle(color: Colors.white.withOpacity(0.70), fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return _panel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.location_on_outlined, color: Colors.white.withOpacity(0.75), size: 18),
+                          const SizedBox(width: 10),
+                          const Text(
+                            "Home Address",
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                          ),
+                          const Spacer(),
+                          _pill(
+                            "Decrypted",
+                            bg: Colors.greenAccent.withOpacity(0.12),
+                            fg: Colors.greenAccent,
+                            icon: Icons.verified_outlined,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        address,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.82),
+                          height: 1.35,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+
             final kycBlock = FutureBuilder<_DecryptedKyc?>(
               future: _downloadAndDecryptResidentKyc(uid),
               builder: (context, kycSnap) {
@@ -384,7 +497,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                   );
                 }
                 if (kycSnap.hasError) {
-                  // Do not show raw error (it can include identifiers/paths)
                   return _panel(
                     child: const Text(
                       "ID file could not be opened.",
@@ -536,6 +648,8 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                   ),
 
                   const SizedBox(height: 14),
+                  addressBlock, // ✅ added
+                  const SizedBox(height: 12),
                   kycBlock,
                   const SizedBox(height: 12),
 
@@ -605,7 +719,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                     if (mounted) AdminHelpers.toast(context, "Approved $name");
                                     if (mounted) Navigator.pop(context);
                                   } catch (_) {
-                                    // Do not surface raw error
                                     if (mounted) AdminHelpers.toast(context, "Approve failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
@@ -644,7 +757,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                       Navigator.pop(context);
                                     }
                                   } catch (_) {
-                                    // Do not surface raw error
                                     if (mounted) AdminHelpers.toast(context, "Reject/Delete failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
