@@ -163,7 +163,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                           title: Text(label, style: const TextStyle(color: Colors.white)),
                           onChanged: (v) => setD(() => selectedCode = v ?? selectedCode),
                         );
-                      }).toList(),
+                      }),
 
                       if (isOther) ...[
                         const SizedBox(height: 8),

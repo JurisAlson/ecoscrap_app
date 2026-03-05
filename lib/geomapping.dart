@@ -59,8 +59,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   // Route polyline
   List<LatLng> _routePoints = [];
-  String _dirDistanceText = "";
-  String _dirDurationText = "";
+  final String _dirDistanceText = "";
+  final String _dirDurationText = "";
   int? _dirDurationValueSec;
 
   String? _activeDropoffRequestId;
