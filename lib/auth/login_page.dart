@@ -464,13 +464,17 @@ class _LoginPageState extends State<LoginPage> {
                       onPressed: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                            builder: (_) => const ForgotPasswordPage()),
+                          builder: (_) => ForgotPasswordPage(
+                            initialEmail: _emailController.text.trim(),
+                          ),
+                        ),
                       ),
                       child: const Text(
                         "Forgot Password?",
                         style: TextStyle(
-                            color: Color(0xFF1FA9A7),
-                            fontWeight: FontWeight.w600),
+                          color: Color(0xFF1FA9A7),
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
