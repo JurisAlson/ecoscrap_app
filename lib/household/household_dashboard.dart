@@ -111,14 +111,12 @@ class _DashboardPageState extends State<DashboardPage> {
   void _closeCameraBar() {
     if (_cameraBarOpen) setState(() => _cameraBarOpen = false);
   }
+
   Future<void> _markNotifsSeen() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    await FirebaseFirestore.instance
-        .collection('Users')
-        .doc(user.uid)
-        .set({
+    await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
       'lastNotifSeenAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
@@ -143,7 +141,7 @@ class _DashboardPageState extends State<DashboardPage> {
       openAppSettings();
     }
   }
-  
+
   Stream<int> _householdNotifCountStream(String householdUid) {
     // Count "important updates" for the household:
     // - accepted / arrived / completed / cancelled (and scheduled if you want)
@@ -152,7 +150,8 @@ class _DashboardPageState extends State<DashboardPage> {
         .where('type', isEqualTo: 'pickup')
         .where('householdId', isEqualTo: householdUid)
         .where('active', isEqualTo: true) // focus on current order notifications
-        .where('status', whereIn: ['accepted', 'arrived', 'completed', 'cancelled', 'canceled'])
+        .where('status',
+            whereIn: ['accepted', 'arrived', 'completed', 'cancelled', 'canceled'])
         .snapshots()
         .map((snap) => snap.docs.length);
   }
@@ -227,17 +226,14 @@ class _DashboardPageState extends State<DashboardPage> {
         key: _scaffoldKey,
         backgroundColor: bgColor,
         extendBody: true,
-
         drawer: Drawer(
           backgroundColor: bgColor,
           child: SafeArea(child: _profileDrawer()),
         ),
-
         endDrawer: Drawer(
           backgroundColor: bgColor,
           child: SafeArea(child: _notificationsDrawer()),
         ),
-
         body: Stack(
           children: [
             _blurCircle(primaryColor.withOpacity(0.14), 320,
@@ -298,6 +294,7 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
   }
+
   Widget _buildNotifBell() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
@@ -318,8 +315,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return StreamBuilder<DocumentSnapshot>(
       stream: userDocStream,
       builder: (context, userSnap) {
-        final userData =
-            userSnap.data?.data() as Map<String, dynamic>? ?? {};
+        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
         final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
 
         final requestQuery = FirebaseFirestore.instance
@@ -343,8 +339,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 if (lastSeen == null) {
                   hasUnread = true;
                 } else {
-                  hasUnread =
-                      updatedAt.toDate().isAfter(lastSeen.toDate());
+                  hasUnread = updatedAt.toDate().isAfter(lastSeen.toDate());
                 }
               }
             }
@@ -363,7 +358,6 @@ class _DashboardPageState extends State<DashboardPage> {
       },
     );
   }
-  
 
   // ================= HEADER =================
   Widget _header(User? user) {
@@ -438,54 +432,86 @@ class _DashboardPageState extends State<DashboardPage> {
         children: [
           _topSlider(),
           const SizedBox(height: 18),
-
-_sectionHeader(
-  title: "Accepted Plastics",
-  subtitle:
-      "These are the plastics Mores Scrap Trading collects. Swipe to compare photos — if your item looks similar, it’s accepted.",
-),
-const SizedBox(height: 8),
-Container(
-  width: double.infinity,
-  padding: const EdgeInsets.all(12),
-  decoration: BoxDecoration(
-    color: Colors.white.withOpacity(0.05),
-    borderRadius: BorderRadius.circular(14),
-    border: Border.all(color: Colors.white.withOpacity(0.08)),
-  ),
-  child: Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Icon(Icons.verified_rounded, color: primaryColor, size: 18),
-      const SizedBox(width: 10),
-      Expanded(
-        child: Text(
-          "Quick check: match the color + shape. If it’s close, you can schedule pickup or drop-off.",
-          style: TextStyle(
-            color: Colors.grey.shade300,
-            fontSize: 12,
-            height: 1.3,
+          _sectionHeader(
+            title: "Accepted Plastics",
+            subtitle:
+                "These are the plastics Mores Scrap Trading accepts. Compare your item with the photos first. Use Scan only if you are still unsure and need validation.",
           ),
-        ),
-      ),
-    ],
-  ),
-),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.verified_rounded, color: primaryColor, size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "Quick check: match the color, shape, and appearance first. If you're still unsure, use Scan for validation only.",
+                    style: TextStyle(
+                      color: Colors.grey.shade300,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 20),
           _acceptedPlasticsSection(),
           const SizedBox(height: 14),
-
           _hintText(
-            "Tip: Compare your item with the examples above. If you’re not sure, use Scan below.",
+            "Tip: The photo examples are your main guide. Use Scan only to validate an item when you are not sure.",
           ),
+          const SizedBox(height: 12),
+
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.amber.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.amber.withOpacity(0.22)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.verified_user_outlined,
+                  color: Colors.amber,
+                  size: 18,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "Scan is for validation only. Use it when you are unsure if your plastic matches the accepted examples.",
+                    style: TextStyle(
+                      color: Colors.grey.shade200,
+                      fontSize: 12,
+                      height: 1.35,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
           const SizedBox(height: 12),
 
           // ✅ UNIFORM action cards (Scan + Drop-off/Pickup)
           _actionCard(
             icon: Icons.camera_alt,
-            title: "Scan an item",
-            subtitle: "Check if it’s recyclable",
-            gradientColors: [primaryColor, Colors.green],
+            title: "Validate with Scan",
+            subtitle: "Use only if you're unsure about the plastic",
+            gradientColors: [const Color(0xFF1FA9A7), const Color(0xFF3DDAD7)],
             onTap: () async {
               _closeCameraBar();
               await _openLens(context);
@@ -498,7 +524,7 @@ Container(
             icon: Icons.location_on_outlined,
             title: "Drop-off & Pickup",
             subtitle: "Set a schedule for recyclables",
-            gradientColors: [Colors.green, primaryColor],
+            gradientColors: [Colors.green, const Color(0xFF1FA9A7)],
             onTap: () {
               _closeCameraBar();
               Navigator.push(
@@ -511,7 +537,7 @@ Container(
           const SizedBox(height: 14),
 
           _hintText(
-            "If your item matches the examples above, you can schedule a pickup or drop-off. Not sure? Use Scan instead.",
+            "If your item already matches the examples above, you can proceed with pickup or drop-off. Only use Scan if you want to validate an uncertain item.",
           ),
 
           const SizedBox(height: 22),
@@ -683,256 +709,256 @@ Container(
 
   // ================= ACCEPTED PLASTICS =================
   // ✅ UPDATED: moved the swipe/hand hint to TOP of this widget
-Widget _acceptedPlasticsSection() {
-  final plastics = [
-    {
-      "code": "A",
-      "short": "COLORED",
-      "name": "Colored Plastics",
-      "note": "Hard plastic with strong colors like blue, red, or green.",
-      "examples": const [
-        "Example 1",
-        "Example 2",
-        "Example 3",
-        "Example 4",
-      ],
-      "images": const [
-        "assets/plastics/colored/1768218668879.jpg",
-        "assets/plastics/colored/1768218669345.jpg",
-        "assets/plastics/colored/plastic173.jpg",
-        "assets/plastics/colored/plastic468.jpg",
-      ],
-    },
-    {
-      "code": "B",
-      "short": "WHITE",
-      "name": "White Plastics",
-      "note": "Solid white plastic items used around the house.",
-      "examples": const [
-        "Example 1",
-        "Example 2",
-        "Example 3",
-        "Example 4",
-      ],
-      "images": const [
-        "assets/plastics/White/1768218668821.jpg",
-        "assets/plastics/White/1768218669203.jpg",
-        "assets/plastics/White/IMG20260103194105.jpg",
-        "assets/plastics/White/plastic92.jpg",
-      ],
-    },
-    {
-      "code": "C",
-      "short": "CLEAR",
-      "name": "Transparent Plastics",
-      "note": "Clear plastic that you can see through.",
-      "examples": const [
-        "Example 1",
-        "Example 2",
-        "Example 3",
-        "Example 4",
-      ],
-      "images": const [
-        "assets/plastics/Trans/1768218668973.jpg",
-        "assets/plastics/Trans/plastic212.jpg",
-        "assets/plastics/Trans/plastic386.jpg",
-        "assets/plastics/Trans/plastic431.jpg",
-      ],
-    },
-    {
-      "code": "D",
-      "short": "BOTTLES",
-      "name": "Thick Bottles & Containers",
-      "note": "Thick and sturdy bottles for cleaning liquids and household products.",
-      "examples": const [
-        "Example 1",
-        "Example 2",
-        "Example 3",
-        "Example 4",
-      ],
-      "images": const [
-        "assets/plastics/HD/1768217102421.jpg",
-        "assets/plastics/HD/1768218668549.jpg",
-        "assets/plastics/HD/plastic101.jpg",
-        "assets/plastics/HD/plastic305.jpg",
-      ],
-    },
-  ];
+  Widget _acceptedPlasticsSection() {
+    final plastics = [
+      {
+        "code": "A",
+        "short": "Polypropylene (PP) Colored",
+        "name": "Colored Plastics",
+        "note": "Hard plastic with strong colors like blue, red, or green.",
+        "examples": const [
+          "Example 1",
+          "Example 2",
+          "Example 3",
+          "Example 4",
+        ],
+        "images": const [
+          "assets/plastics/colored/1768218668879.jpg",
+          "assets/plastics/colored/1768218669345.jpg",
+          "assets/plastics/colored/plastic173.jpg",
+          "assets/plastics/colored/plastic468.jpg",
+        ],
+      },
+      {
+        "code": "B",
+        "short": "Polypropylene (PP) White",
+        "name": "White Plastics",
+        "note": "Solid white plastic items used around the house.",
+        "examples": const [
+          "Example 1",
+          "Example 2",
+          "Example 3",
+          "Example 4",
+        ],
+        "images": const [
+          "assets/plastics/White/1768218668821.jpg",
+          "assets/plastics/White/1768218669203.jpg",
+          "assets/plastics/White/IMG20260103194105.jpg",
+          "assets/plastics/White/plastic92.jpg",
+        ],
+      },
+      {
+        "code": "C",
+        "short": "Polyethylene Transparen (PET)",
+        "name": "Transparent Plastics",
+        "note": "Clear plastic that you can see through.",
+        "examples": const [
+          "Example 1",
+          "Example 2",
+          "Example 3",
+          "Example 4",
+        ],
+        "images": const [
+          "assets/plastics/Trans/1768218668973.jpg",
+          "assets/plastics/Trans/plastic212.jpg",
+          "assets/plastics/Trans/plastic386.jpg",
+          "assets/plastics/Trans/plastic431.jpg",
+        ],
+      },
+      {
+        "code": "D",
+        "short": "High-Density Polyethylene (HDPE)",
+        "name": "Thick Bottles & Containers",
+        "note": "Thick plastic bottles for cleaners and household liquids.",
+        "examples": const [
+          "Example 1",
+          "Example 2",
+          "Example 3",
+          "Example 4",
+        ],
+        "images": const [
+          "assets/plastics/HD/1768217102421.jpg",
+          "assets/plastics/HD/1768218668549.jpg",
+          "assets/plastics/HD/plastic101.jpg",
+          "assets/plastics/HD/plastic305.jpg",
+        ],
+      },
+    ];
 
-  return SizedBox(
-    height: 460,
-    child: Stack(
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 34),
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: plastics.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (context, i) {
-              final p = plastics[i];
-              final images =
-                  (p["images"] as List?)?.cast<String>() ?? const <String>[];
+    return SizedBox(
+      height: 453,
+      child: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 34),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: plastics.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemBuilder: (context, i) {
+                final p = plastics[i];
+                final images =
+                    (p["images"] as List?)?.cast<String>() ?? const <String>[];
 
-              return _plasticTypeCard(
-                code: p["code"] as String,
-                short: p["short"] as String,
-                name: p["name"] as String,
-                note: p["note"] as String,
-                exampleLabels: (p["examples"] as List).cast<String>(),
-                exampleImages: images,
-              );
-            },
+                return _plasticTypeCard(
+                  code: p["code"] as String,
+                  short: p["short"] as String,
+                  name: p["name"] as String,
+                  note: p["note"] as String,
+                  exampleLabels: (p["examples"] as List).cast<String>(),
+                  exampleImages: images,
+                );
+              },
+            ),
           ),
-        ),
-
-        Positioned(
-          top: 0,
-          right: 20,
-          child: _swipeHint(),
-        ),
-      ],
-    ),
-  );
-}
+          Positioned(
+            top: 0,
+            right: 20,
+            child: _swipeHint(),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _plasticTypeCard({
-  required String code,
-  required String short,
-  required String name,
-  required String note,
-  required List<String> exampleLabels,
-  required List<String> exampleImages,
-}) {
-  final labels = List<String>.from(exampleLabels);
+    required String code,
+    required String short,
+    required String name,
+    required String note,
+    required List<String> exampleLabels,
+    required List<String> exampleImages,
+  }) {
+    final labels = List<String>.from(exampleLabels);
 
-  return Container(
-    width: 300,
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: Colors.white.withOpacity(0.06),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: Colors.white.withOpacity(0.08)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: primaryColor.withOpacity(0.16),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: Colors.white.withOpacity(0.10)),
-              ),
-              child: Text(
-                "$code • $short",
-                style: TextStyle(
-                  color: primaryColor,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
+    return Container(
+      width: 300,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: primaryColor.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white.withOpacity(0.10)),
+                ),
+                child: Text(
+                  "$code • $short",
+                  style: TextStyle(
+                    color: primaryColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
                 ),
               ),
-            ),
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: Colors.white.withOpacity(0.08)),
-              ),
-              child: Text(
-                "Accepted",
-                style: TextStyle(
-                  color: Colors.grey.shade300,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 11,
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: Text(
+                  "Accepted",
+                  style: TextStyle(
+                    color: Colors.grey.shade300,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                  ),
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              fontSize: 14,
+              height: 1.2,
             ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Text(
-          name,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w900,
-            fontSize: 14,
-            height: 1.2,
           ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          note,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: Colors.grey.shade400,
-            fontSize: 12,
-            height: 1.25,
+          const SizedBox(height: 6),
+          Text(
+            note,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.grey.shade400,
+              fontSize: 12,
+              height: 1.25,
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
-
-      GridView.count(
-  crossAxisCount: 2,
-  mainAxisSpacing: 10,
-  crossAxisSpacing: 10,
-  shrinkWrap: true,
-  physics: const NeverScrollableScrollPhysics(),
-  children: [
-    _exampleSlot(imagePath: exampleImages.isNotEmpty ? exampleImages[0] : null),
-    _exampleSlot(imagePath: exampleImages.length > 1 ? exampleImages[1] : null),
-    _exampleSlot(imagePath: exampleImages.length > 2 ? exampleImages[2] : null),
-    _exampleSlot(imagePath: exampleImages.length > 3 ? exampleImages[3] : null),
-  ],
-),
-
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Icon(Icons.info_outline, size: 16, color: Colors.grey.shade400),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                "Match your item with these photos.",
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+          const SizedBox(height: 12),
+          GridView.count(
+            crossAxisCount: 2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              _exampleSlot(imagePath: exampleImages.isNotEmpty ? exampleImages[0] : null),
+              _exampleSlot(imagePath: exampleImages.length > 1 ? exampleImages[1] : null),
+              _exampleSlot(imagePath: exampleImages.length > 2 ? exampleImages[2] : null),
+              _exampleSlot(imagePath: exampleImages.length > 3 ? exampleImages[3] : null),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Icon(Icons.info_outline, size: 16, color: Colors.grey.shade400),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  "If your item looks like these examples, it is accepted. Use Scan only if you are unsure.",
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                ),
               ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
- Widget _exampleSlot({String? imagePath}) {
-  return Container(
-    decoration: BoxDecoration(
-      color: Colors.white.withOpacity(0.04),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Colors.white.withOpacity(0.08)),
-    ),
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: imagePath != null
-          ? Image.asset(
-              imagePath,
-              width: double.infinity,
-              height: double.infinity,
-              fit: BoxFit.cover,
-            )
-          : const Center(
-              child: Icon(Icons.photo_outlined, color: Colors.white38, size: 22),
-            ),
-    ),
-  );
-}
+  Widget _exampleSlot({String? imagePath}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: imagePath != null
+            ? Image.asset(
+                imagePath,
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.cover,
+              )
+            : const Center(
+                child: Icon(Icons.photo_outlined,
+                    color: Colors.white38, size: 22),
+              ),
+      ),
+    );
+  }
 
   // ================= TOP SLIDER =================
   Widget _topSlider() {
@@ -940,17 +966,17 @@ Widget _acceptedPlasticsSection() {
       _promoSlide(
         icon: Icons.lightbulb_outline,
         title: "Quick Tip",
-        body: "Rinse bottles before recycling for better acceptance.",
+        body: "Check the accepted plastic photos first. Use Scan only if you need validation.",
       ),
       _promoSlide(
-        icon: Icons.eco_outlined,
-        title: "Daily Goal",
-        body: "Scan 3 items today and improve your waste sorting.",
+        icon: Icons.verified_outlined,
+        title: "Validation Only",
+        body: "Scan helps validate unclear items. You do not need to scan plastics that already match the examples.",
       ),
       _promoSlide(
         icon: Icons.recycling_outlined,
         title: "Know Your Plastics",
-        body: "PET (1) and HDPE (2) are commonly recyclable.",
+        body: "If the item looks like the accepted examples, you can proceed without scanning.",
       ),
     ];
 
@@ -968,7 +994,6 @@ Widget _acceptedPlasticsSection() {
               ),
 
               // ✅ swipe cue (no reading required)
-              
             ],
           ),
         ),
@@ -1369,12 +1394,12 @@ Widget _acceptedPlasticsSection() {
             ],
           ),
           const SizedBox(height: 12),
-
           Expanded(
             child: StreamBuilder<DocumentSnapshot>(
               stream: userDocStream,
               builder: (context, userSnap) {
-                final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+                final userData =
+                    userSnap.data?.data() as Map<String, dynamic>? ?? {};
                 final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
 
                 return StreamBuilder<QuerySnapshot>(
@@ -1407,11 +1432,14 @@ Widget _acceptedPlasticsSection() {
                         final d = docs[i];
                         final data = d.data() as Map<String, dynamic>;
 
-                        final status = (data['status'] ?? '').toString().toLowerCase();
+                        final status =
+                            (data['status'] ?? '').toString().toLowerCase();
                         final driver = (data['collectorName'] ?? '—').toString();
 
                         final updatedAt = data['updatedAt'] as Timestamp?;
-                        final isUnread = (lastSeen == null || (updatedAt != null && updatedAt.toDate().isAfter(lastSeen.toDate())));
+                        final isUnread = (lastSeen == null ||
+                            (updatedAt != null &&
+                                updatedAt.toDate().isAfter(lastSeen.toDate())));
 
                         return _notificationLogTile(
                           title: _pickupStatusToTitle(status),
@@ -1458,8 +1486,11 @@ Widget _acceptedPlasticsSection() {
     final dt = ts.toDate();
     final now = DateTime.now();
 
-    final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
-    final yesterday = dt.year == now.year && dt.month == now.month && dt.day == (now.day - 1);
+    final sameDay =
+        dt.year == now.year && dt.month == now.month && dt.day == now.day;
+    final yesterday = dt.year == now.year &&
+        dt.month == now.month &&
+        dt.day == (now.day - 1);
 
     String two(int n) => n.toString().padLeft(2, '0');
 
@@ -1471,7 +1502,20 @@ Widget _acceptedPlasticsSection() {
     if (sameDay) return "Today • $time";
     if (yesterday) return "Yesterday • $time";
 
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
     final m = months[dt.month - 1];
     return "$m ${dt.day} • $time";
   }
@@ -1486,9 +1530,12 @@ Widget _acceptedPlasticsSection() {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: unread ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.05),
+        color: unread
+            ? Colors.white.withOpacity(0.08)
+            : Colors.white.withOpacity(0.05),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(unread ? 0.10 : 0.06)),
+        border: Border.all(
+            color: Colors.white.withOpacity(unread ? 0.10 : 0.06)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1500,7 +1547,8 @@ Widget _acceptedPlasticsSection() {
               color: primaryColor.withOpacity(0.14),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.notifications_outlined, color: Colors.white70),
+            child: const Icon(Icons.notifications_outlined,
+                color: Colors.white70),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1514,12 +1562,14 @@ Widget _acceptedPlasticsSection() {
                     )),
                 const SizedBox(height: 6),
                 Text(subtitle,
-                    style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 12)),
               ],
             ),
           ),
           const SizedBox(width: 10),
-          Text(time, style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
+          Text(time,
+              style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
         ],
       ),
     );
@@ -1702,9 +1752,13 @@ Widget _acceptedPlasticsSection() {
           SizedBox(height: 12),
           _HowToRow(
               icon: Icons.camera_alt,
-              text: "Tap Scan to check if an item is recyclable."),
+              text:
+                  "Use Scan only to validate an item when you are unsure about the plastic."),
           SizedBox(height: 10),
-          _HowToRow(icon: Icons.history, text: "See your past scans in History."),
+          _HowToRow(
+              icon: Icons.history,
+              text:
+                  "Compare plastics on the Home page before deciding to scan."),
           SizedBox(height: 10),
           _HowToRow(
               icon: Icons.group_outlined,
@@ -1951,7 +2005,7 @@ class _ScanHowToSheet extends StatelessWidget {
                 const SizedBox(width: 12),
                 const Expanded(
                   child: Text(
-                    "How to use Scan",
+                    "Use Scan for Validation",
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 16,
@@ -1967,35 +2021,39 @@ class _ScanHowToSheet extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              "Use Scan only if you’re unsure. For best results:",
+              "Scan is only for validation when you're unsure about a plastic item. For best results:",
               style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
             ),
             const SizedBox(height: 14),
             _step(
               icon: Icons.wb_sunny_outlined,
-              title: "Good lighting",
-              body: "Scan in a well-lit area to avoid blurry results.",
+              title: "Use good lighting",
+              body:
+                  "Clear lighting helps the scan validate the item more accurately.",
               primaryColor: primaryColor,
             ),
             const SizedBox(height: 10),
             _step(
               icon: Icons.crop_free,
-              title: "Center the item",
-              body: "Keep the item inside the frame. Avoid blocking labels.",
+              title: "Focus on one item",
+              body:
+                  "Show one plastic item clearly inside the frame for validation.",
               primaryColor: primaryColor,
             ),
             const SizedBox(height: 10),
             _step(
               icon: Icons.front_hand_outlined,
               title: "Hold steady",
-              body: "Keep your phone steady for 1–2 seconds before capturing.",
+              body:
+                  "Keep your phone steady for 1–2 seconds before capturing the item.",
               primaryColor: primaryColor,
             ),
             const SizedBox(height: 10),
             _step(
               icon: Icons.warning_amber_outlined,
-              title: "Try another angle",
-              body: "If the result looks wrong, try a different angle or distance.",
+              title: "Use only when unsure",
+              body:
+                  "If the item already matches the accepted examples, you do not need to scan it.",
               primaryColor: primaryColor,
             ),
             const SizedBox(height: 14),
@@ -2028,7 +2086,7 @@ class _ScanHowToSheet extends StatelessWidget {
                     ),
                     onPressed: () => Navigator.pop(context, true),
                     child: const Text(
-                      "Continue",
+                      "Validate Item",
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),

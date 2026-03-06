@@ -17,7 +17,8 @@ class CollectorAccountCreation extends StatefulWidget {
   const CollectorAccountCreation({super.key});
 
   @override
-  State<CollectorAccountCreation> createState() => _CollectorAccountCreationState();
+  State<CollectorAccountCreation> createState() =>
+      _CollectorAccountCreationState();
 }
 
 class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
@@ -76,7 +77,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
 
   Future<void> _pickIdFile() async {
     await _showInfoDialog(
-      title: "Upload Government ID (Optional)",
+      title: "Upload Government ID (Required)",
       icon: Icons.verified_user_outlined,
       message:
           "Accepted IDs:\n"
@@ -186,6 +187,11 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     if (user == null) return;
     if (!_formKey.currentState!.validate()) return;
 
+    if (_pickedFile == null) {
+      _toast("Government ID is required before submitting.", error: true);
+      return;
+    }
+
     setState(() => _loading = true);
 
     Reference? uploadedEncryptedRef;
@@ -199,61 +205,57 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
       final reqRef = db.collection("collectorRequests").doc(uid);
       final kycRef = db.collection("collectorKYC").doc(uid);
 
-      // block if already pending (active request)
       final snap0 = await userRef.get();
       final existing0 = snap0.data() ?? {};
-      final status0 = (existing0["collectorStatus"] ?? "").toString().toLowerCase();
+      final status0 =
+          (existing0["collectorStatus"] ?? "").toString().toLowerCase();
+
       if (status0 == "pending") {
         _toast("You already have a pending collector request.", error: true);
         return;
       }
 
-      String? kycFileName;
+      final ext = (_pickedFile!.extension ?? "").toLowerCase();
+      final normalizedExt = (ext == "jpeg") ? "jpg" : ext;
 
-      if (_pickedFile != null) {
-        final ext = (_pickedFile!.extension ?? "").toLowerCase();
-        final normalizedExt = (ext == "jpeg") ? "jpg" : ext;
+      final rid = _randId();
+      final kycFileName = "kyc_$rid.$normalizedExt";
 
-        final rid = _randId();
-        kycFileName = "kyc_$rid.$normalizedExt";
+      final bytes = await File(_pickedFile!.path!).readAsBytes();
 
-        final bytes = await File(_pickedFile!.path!).readAsBytes();
+      await _uploadEncryptedKyc(
+        uid: uid,
+        fileBytes: Uint8List.fromList(bytes),
+        originalFileName: kycFileName,
+      );
 
-        await _uploadEncryptedKyc(
-          uid: uid,
-          fileBytes: Uint8List.fromList(bytes),
-          originalFileName: kycFileName,
-        );
-
-        final storagePath = "kyc/$uid/$kycFileName.enc";
-        uploadedEncryptedRef = FirebaseStorage.instance.ref(storagePath);
-      }
+      final storagePath = "kyc/$uid/$kycFileName.enc";
+      uploadedEncryptedRef = FirebaseStorage.instance.ref(storagePath);
 
       await db.runTransaction((tx) async {
         final userSnap = await tx.get(userRef);
         final existing = userSnap.data() ?? {};
 
-        final status = (existing["collectorStatus"] ?? "").toString().toLowerCase();
+        final status =
+            (existing["collectorStatus"] ?? "").toString().toLowerCase();
+
         if (status == "pending") {
           throw Exception("Already has pending request");
         }
 
-        // ✅ IMPORTANT: Role stays USER while waiting
         tx.set(
           userRef,
           {
             "uid": uid,
             "emailDisplay": email,
             "name": _name.text.trim(),
-
-            // collector-only fields
             "collectorVerified": false,
             "collectorStatus": "pending",
             "collectorSubmittedAt": FieldValue.serverTimestamp(),
             "collectorUpdatedAt": FieldValue.serverTimestamp(),
             "collectorActive": false,
-
-            if (!existing.containsKey("createdAt")) "createdAt": FieldValue.serverTimestamp(),
+            if (!existing.containsKey("createdAt"))
+              "createdAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),
@@ -264,7 +266,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
           {
             "collectorUid": uid,
             "publicName": _name.text.trim(),
-            "hasKycFile": kycFileName != null,
+            "hasKycFile": true,
             "status": "pending",
             "submittedAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp(),
@@ -272,15 +274,14 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
           SetOptions(merge: true),
         );
 
-        if (kycFileName == null) {
-          tx.delete(kycRef);
-        } else {
-          tx.set(
-            kycRef,
-            {"status": "pending", "updatedAt": FieldValue.serverTimestamp()},
-            SetOptions(merge: true),
-          );
-        }
+        tx.set(
+          kycRef,
+          {
+            "status": "pending",
+            "updatedAt": FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
       });
 
       _toast("Submitted! Pending admin review.");
@@ -335,7 +336,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                 const SizedBox(height: 10),
                 _buildTextField(_name, "Full Name", Icons.person),
                 const SizedBox(height: 14),
-                const _SectionTitle("Verification (Optional)"),
+                const _SectionTitle("Verification"),
                 const SizedBox(height: 10),
                 const _InfoCard(
                   title: "Accepted Government IDs",
@@ -378,7 +379,9 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1FA9A7),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                       elevation: 0,
                     ),
                     onPressed: _loading ? null : _submitCollector,
@@ -386,11 +389,18 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                         ? const SizedBox(
                             width: 22,
                             height: 22,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.4),
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2.4,
+                            ),
                           )
                         : const Text(
                             "Submit Application",
-                            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                   ),
                 ),
@@ -398,7 +408,11 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                 const Text(
                   "By submitting, you confirm that the information provided is true and correct.",
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.3),
+                  style: TextStyle(
+                    color: Colors.white38,
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
                 ),
               ],
             ),
@@ -408,7 +422,11 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     );
   }
 
-  Widget _buildTextField(TextEditingController controller, String label, IconData icon) {
+  Widget _buildTextField(
+    TextEditingController controller,
+    String label,
+    IconData icon,
+  ) {
     return TextFormField(
       controller: controller,
       style: const TextStyle(color: Colors.white),
@@ -418,7 +436,8 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
         labelText: label,
         labelStyle: const TextStyle(color: Colors.white70),
         prefixIcon: Icon(icon, color: const Color(0xFF1FA9A7)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide(color: Colors.white.withOpacity(0.10)),
@@ -470,7 +489,11 @@ class _HeroHeader extends StatelessWidget {
               children: [
                 Text(
                   "Join as a Plastic Collector",
-                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 SizedBox(height: 6),
                 Text(
@@ -534,7 +557,10 @@ class _InfoCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -611,7 +637,9 @@ class _UploadTile extends StatelessWidget {
               ),
               child: Icon(
                 hasFile ? Icons.check_circle_outline : Icons.upload_file,
-                color: hasFile ? const Color(0xFF7CF5F2) : const Color(0xFF1FA9A7),
+                color: hasFile
+                    ? const Color(0xFF7CF5F2)
+                    : const Color(0xFF1FA9A7),
               ),
             ),
             const SizedBox(width: 12),
@@ -620,8 +648,13 @@ class _UploadTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    hasFile ? "Government ID selected" : "Upload Government ID (optional)",
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                    hasFile
+                        ? "Government ID selected"
+                        : "Upload Government ID (Required)",
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Text(
