@@ -24,16 +24,22 @@ class GeoMappingPage extends StatefulWidget {
 
 class _GeoMappingPageState extends State<GeoMappingPage> {
   // ===== Theme / Colors =====
-  static const Color _bg = Color(0xFF0F172A);
-  static const Color _sheet = Color(0xFF111928);
+  static const Color _bg = Color(0xFF0B1220);
+  static const Color _sheet = Color(0xFF121C2E);
+  static const Color _surface = Color(0xFF162235);
+  static const Color _surfaceAlt = Color(0xFF1B2A40);
+  static const Color _border = Color(0xFF26364F);
   static const Color _accent = Color(0xFF10B981);
+  static const Color _accentSoft = Color(0xFF34D399);
   static const Color _teal = Color(0xFF1FA9A7);
-  static const Color _dropdown = Color(0xFF1F2937); // slightly lighter than _sheet
+  static const Color _dropdown = Color(0xFF162235);
+  static const Color _danger = Color(0xFFEF4444);
+  static const Color _blue = Color(0xFF60A5FA);
 
   // Text colors
-  static const Color _textPrimary = Color(0xFFF8FAFC);
-  static const Color _textSecondary = Color(0xFFCBD5E1);
-  static const Color _textMuted = Color(0xFF94A3B8);
+  static const Color _textPrimary = Color(0xFFE2E8F0);
+  static const Color _textSecondary = Color(0xFF94A3B8);
+  static const Color _textMuted = Color(0xFF64748B);
 
   // Time
   late String _timeString;
@@ -50,7 +56,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   // ✅ Fixed destination: MORES only
   final LatLng _moresLatLng = const LatLng(14.198630, 121.117270);
   final String _moresName = "Mores Scrap Trading";
-  final String _moresSubtitle = "Official Drop-off";
+  final String _moresSubtitle = "brgy palo alto, Calamba";
 
   // Location
   bool _locationReady = false;
@@ -71,7 +77,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   bool get _isPickup => _tripStage == TripStage.pickup;
   bool get _isDelivering => _tripStage == TripStage.delivering;
-
 
   LatLng get _originLatLng {
     final p = _currentPosition;
@@ -103,7 +108,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
   // Dark map style JSON
-static const String _darkMapStyle = r'''
+  static const String _darkMapStyle = r'''
 [
   {"elementType":"geometry","stylers":[{"color":"#0b1220"}]},
   {"elementType":"labels.text.fill","stylers":[{"color":"#8aa0b8"}]},
@@ -122,7 +127,6 @@ static const String _darkMapStyle = r'''
 ]
 ''';
 
-
   // ----- Available collectors dropdown -----
   String? _selectedCollectorId;
   String? _selectedCollectorName;
@@ -135,8 +139,8 @@ static const String _darkMapStyle = r'''
   DateTime? _windowEnd;
 
   // ===== Pickup location selection (Option B simplified) =====
-  LatLng? _pinnedPickupLatLng;       // null => use GPS
-  String _pickupSource = "gps";      // "gps" | "pin"
+  LatLng? _pinnedPickupLatLng; // null => use GPS
+  String _pickupSource = "gps"; // "gps" | "pin"
 
   LatLng get _effectivePickupLatLng => _pinnedPickupLatLng ?? _originLatLng;
 
@@ -165,7 +169,9 @@ static const String _darkMapStyle = r'''
 
   String get _scheduleSummary {
     if (_pickupType == "now") return "Pickup: Now (ASAP)";
-    if (_windowStart == null || _windowEnd == null) return "Pickup: Choose a time window";
+    if (_windowStart == null || _windowEnd == null) {
+      return "Pickup: Choose a time window";
+    }
     final d = _scheduleDate;
     final dateStr =
         "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
@@ -191,6 +197,22 @@ static const String _darkMapStyle = r'''
       initialDate: _scheduleDate.isBefore(now) ? now : _scheduleDate,
       firstDate: _dateOnly(now),
       lastDate: _dateOnly(now.add(const Duration(days: 30))),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: _accent,
+              surface: _sheet,
+              onPrimary: _bg,
+              onSurface: _textPrimary,
+            ),
+            dialogTheme: const DialogThemeData(
+              backgroundColor: _sheet,
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
     if (picked == null) return;
 
@@ -201,7 +223,8 @@ static const String _darkMapStyle = r'''
       if (_windowStart != null && _windowEnd != null) {
         final startHour = _windowStart!.hour;
         final endHour = _windowEnd!.hour;
-        _windowStart = DateTime(picked.year, picked.month, picked.day, startHour, 0);
+        _windowStart =
+            DateTime(picked.year, picked.month, picked.day, startHour, 0);
         _windowEnd = DateTime(picked.year, picked.month, picked.day, endHour, 0);
       }
     });
@@ -225,13 +248,20 @@ static const String _darkMapStyle = r'''
 
     // Don’t allow windows that already ended
     if (end.isBefore(now)) {
-      _snack("That time window already ended. Choose a later window.", bg: Colors.red);
+      _snack(
+        "That time window already ended. Choose a later window.",
+        bg: _danger,
+      );
       return;
     }
 
     // If window starts too soon, block it
-    if (start.isBefore(now.add(const Duration(minutes: 10))) && _dateOnly(d) == _dateOnly(now)) {
-      _snack("Please choose a window at least 10 minutes from now.", bg: Colors.red);
+    if (start.isBefore(now.add(const Duration(minutes: 10))) &&
+        _dateOnly(d) == _dateOnly(now)) {
+      _snack(
+        "Please choose a window at least 10 minutes from now.",
+        bg: _danger,
+      );
       return;
     }
 
@@ -278,7 +308,14 @@ static const String _darkMapStyle = r'''
       final decoded = _decodePolyline(points);
 
       if (!mounted) return;
-      setState(() => _routePoints = decoded);
+      setState(() {
+        _routePoints = decoded;
+        _dirDurationValueSec = durVal is int
+            ? durVal
+            : (durVal is num ? durVal.toInt() : _dirDurationValueSec);
+      });
+
+      debugPrint("Route loaded: $distText • $durText");
     } on FirebaseFunctionsException catch (e) {
       debugPrint("❌ getDirections failed: ${e.code} ${e.message}");
       if (!mounted) return;
@@ -288,7 +325,7 @@ static const String _darkMapStyle = r'''
       if (!mounted) return;
       setState(() => _routePoints = []);
     }
-  } 
+  }
 
   Future<void> _buildRoute() async {
     await _buildRouteTo(_moresLatLng);
@@ -364,10 +401,11 @@ static const String _darkMapStyle = r'''
       CameraUpdate.newLatLngZoom(LatLng(pos.latitude, pos.longitude), 15),
     );
   }
+
   Widget _glass({
     required Widget child,
     double blur = 12,
-    double opacity = 0.55,
+    double opacity = 0.88,
     double radius = 24,
     EdgeInsets padding = const EdgeInsets.all(14),
   }) {
@@ -378,9 +416,9 @@ static const String _darkMapStyle = r'''
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(opacity),
+            color: _sheet.o(opacity),
             borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withOpacity(0.10)),
+            border: Border.all(color: _border),
           ),
           child: child,
         ),
@@ -400,7 +438,8 @@ static const String _darkMapStyle = r'''
       perm = await Geolocator.requestPermission();
     }
 
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
       if (mounted) _snack("Location permission is required.");
       return false;
     }
@@ -411,9 +450,19 @@ static const String _darkMapStyle = r'''
   void _snack(String msg, {Color? bg}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg, style: const TextStyle(color: _textPrimary)),
-        backgroundColor: bg ?? Colors.black87,
+        content: Text(
+          msg,
+          style: const TextStyle(
+            color: _textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        backgroundColor: bg ?? _surface,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: _border),
+        ),
       ),
     );
   }
@@ -431,7 +480,8 @@ static const String _darkMapStyle = r'''
       for (final d in snap.docs) {
         final data = d.data();
         final uid = d.id;
-        final name = (data['Name'] ?? data['displayName'] ?? "Collector").toString();
+        final name = (data['Name'] ?? data['displayName'] ?? "Collector")
+            .toString();
 
         list.add({'uid': uid, 'name': name});
       }
@@ -459,7 +509,7 @@ static const String _darkMapStyle = r'''
       _pickupSource = "pin";
     });
 
-    _snack("Pickup location pinned.", bg: _sheet);
+    _snack("Pickup location pinned.", bg: _surface);
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(tapped, 16));
   }
 
@@ -491,6 +541,7 @@ static const String _darkMapStyle = r'''
         ),
       );
     }
+
     // ✅ Pickup pin marker (if user pinned a different pickup point)
     if (_pinnedPickupLatLng != null) {
       markers.add(
@@ -501,7 +552,8 @@ static const String _darkMapStyle = r'''
             title: "Pickup Location",
             snippet: "Pinned by household",
           ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
         ),
       );
     }
@@ -531,8 +583,9 @@ static const String _darkMapStyle = r'''
 
     await _buildRouteTo(_moresLatLng);
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_moresLatLng, 16));
-    _snack("Showing directions to $_moresName.", bg: _sheet);
+    _snack("Showing directions to $_moresName.", bg: _surface);
   }
+
   // =========================
   // DROP-OFF
   // =========================
@@ -547,29 +600,26 @@ static const String _darkMapStyle = r'''
       'type': 'dropoff',
       'active': true,
       'status': 'en_route',
-
       'actorId': user.uid,
       'actorName': actorName,
-
       'junkshopId': 'mores',
       'junkshopName': _moresName,
-      'destinationLocation': GeoPoint(_moresLatLng.latitude, _moresLatLng.longitude),
-
-      'originLocation': GeoPoint(_originLatLng.latitude, _originLatLng.longitude),
-
+      'destinationLocation':
+          GeoPoint(_moresLatLng.latitude, _moresLatLng.longitude),
+      'originLocation':
+          GeoPoint(_originLatLng.latitude, _originLatLng.longitude),
       'distanceKm': double.parse(_distanceKm.toStringAsFixed(2)),
       'etaMinutes': _etaMinutes,
-
       'arrived': false,
       'arrivedAt': null,
       'cancelledAt': null,
-
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
     return doc.id;
   }
+
   // =========================
   // CANCEL DROP OFF
   // =========================
@@ -591,7 +641,7 @@ static const String _darkMapStyle = r'''
       _routePoints = [];
     });
 
-    _snack("Drop-off cancelled. Junkshop notified.", bg: Colors.redAccent);
+    _snack("Drop-off cancelled. Junkshop notified.", bg: _danger);
   }
 
   Future<void> _arrivedDropoff() async {
@@ -615,24 +665,20 @@ static const String _darkMapStyle = r'''
 
   Future<void> _openPickupFlowSheet() async {
     if (_availableCollectors.isEmpty) {
-      _snack("No available collectors right now.", bg: Colors.black87);
+      _snack("No available collectors right now.", bg: _surface);
       return;
     }
     if (!_locationReady || _currentPosition == null) {
-      _snack("Still getting your location. Please wait...", bg: Colors.black87);
+      _snack("Still getting your location. Please wait...", bg: _surface);
       return;
     }
 
-    // Reset required selections each time (optional; remove if you want to keep previous selections)
     setState(() {
       _pickupType = "now";
       _windowStart = null;
       _windowEnd = null;
       _scheduleDate = DateTime.now();
       _selectedBagKey = null;
-      // keep collector selection if you want, or reset:
-      // _selectedCollectorId = null;
-      // _selectedCollectorName = null;
     });
 
     await showModalBottomSheet<void>(
@@ -646,7 +692,8 @@ static const String _darkMapStyle = r'''
         final hasCollectors = _availableCollectors.isNotEmpty;
         String? windowError;
         String? driverError;
-        String? bagError; 
+        String? bagError;
+
         return SafeArea(
           child: Padding(
             padding: EdgeInsets.fromLTRB(
@@ -665,7 +712,8 @@ static const String _darkMapStyle = r'''
                 final bagPicked = _selectedBagKey != null;
                 final collectorPicked = _selectedCollectorId != null;
                 final isWindow = _pickupType == "window";
-                final windowOk = !isWindow || (_windowStart != null && _windowEnd != null);
+                final windowOk =
+                    !isWindow || (_windowStart != null && _windowEnd != null);
 
                 final canSubmit = bagPicked && collectorPicked && windowOk;
 
@@ -686,7 +734,7 @@ static const String _darkMapStyle = r'''
                           width: 44,
                           height: 4,
                           decoration: BoxDecoration(
-                            color: Colors.white24,
+                            color: _textMuted.o(0.45),
                             borderRadius: BorderRadius.circular(2),
                           ),
                         ),
@@ -699,11 +747,14 @@ static const String _darkMapStyle = r'''
                             width: 42,
                             height: 42,
                             decoration: BoxDecoration(
-                              color: _accent.o(0.16),
+                              color: _accent.o(0.14),
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: _accent.o(0.35)),
+                              border: Border.all(color: _accent.o(0.28)),
                             ),
-                            child: const Icon(Icons.local_shipping, color: _textPrimary),
+                            child: const Icon(
+                              Icons.local_shipping,
+                              color: _textPrimary,
+                            ),
                           ),
                           const SizedBox(width: 12),
                           const Expanded(
@@ -719,19 +770,22 @@ static const String _darkMapStyle = r'''
                         ],
                       ),
                       const SizedBox(height: 10),
+
                       _miniInfoCard(
                         title: "Estimated Trip",
-                        value: "${_distanceKm.toStringAsFixed(1)} km • $_etaMinutes min",
+                        value:
+                            "${_distanceKm.toStringAsFixed(1)} km • $_etaMinutes min",
                         icon: Icons.route_outlined,
                         valueColor: _accent,
                       ),
                       const SizedBox(height: 10),
+
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: Colors.white.o(0.06),
+                          color: _surface,
                           borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: Colors.white.o(0.10)),
+                          border: Border.all(color: _border),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -740,17 +794,18 @@ static const String _darkMapStyle = r'''
                               "PICKUP LOCATION",
                               style: TextStyle(
                                 fontSize: 10,
-                                color: _textMuted, 
+                                color: _textMuted,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: 1.0,
                               ),
                             ),
                             const SizedBox(height: 8),
-
                             Row(
                               children: [
                                 Icon(
-                                  _pinnedPickupLatLng == null ? Icons.my_location : Icons.push_pin,
+                                  _pinnedPickupLatLng == null
+                                      ? Icons.my_location
+                                      : Icons.push_pin,
                                   size: 16,
                                   color: _accent,
                                 ),
@@ -759,35 +814,31 @@ static const String _darkMapStyle = r'''
                                   child: Text(
                                     _pickupLocationLabel,
                                     style: const TextStyle(
-                                      color: _textMuted,
-                                      fontWeight: FontWeight.w900,
+                                      color: _textPrimary,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
                                 ),
                                 if (_pinnedPickupLatLng != null)
-                                TextButton(
-                                  onPressed: () {
-                                    localSet(() {
-                                      _pinnedPickupLatLng = null;
-                                      _pickupSource = "gps";
-                                    });
-                                  },
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: _accent, // ✅ matches theme
+                                  TextButton(
+                                    onPressed: () {
+                                      localSet(() {
+                                        _pinnedPickupLatLng = null;
+                                        _pickupSource = "gps";
+                                      });
+                                    },
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: _accent,
+                                    ),
+                                    child: const Text("Use GPS"),
                                   ),
-                                  child: const Text("Use GPS"),
-                                ),
                               ],
                             ),
-
                             const SizedBox(height: 6),
-
-                            Text(
-                              _pinnedPickupLatLng == null
-                                  ? "Using your current location. (Details will be shared with the collector.)"
-                                  : "Pinned pickup location set. (Details will be shared with the collector.)",
-                              style: const TextStyle(
-                                color: _textMuted,
+                            const Text(
+                              "Using your selected pickup point. Details will be shared with the collector.",
+                              style: TextStyle(
+                                color: _textSecondary,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -811,27 +862,33 @@ static const String _darkMapStyle = r'''
                         Text(
                           driverError!,
                           style: const TextStyle(
-                            color: Colors.redAccent,
+                            color: _danger,
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ],
                       const SizedBox(height: 8),
+
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         decoration: BoxDecoration(
-                          color: Colors.white.o(0.06),
+                          color: _surface,
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.white.o(0.10)),
+                          border: Border.all(color: _border),
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
-                            style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w800),
+                            style: const TextStyle(
+                              color: _textPrimary,
+                              fontWeight: FontWeight.w800,
+                            ),
                             value: _selectedCollectorId,
                             dropdownColor: _dropdown,
                             hint: Text(
-                              hasCollectors ? "Choose a driver" : "No collectors online",
+                              hasCollectors
+                                  ? "Choose a driver"
+                                  : "No collectors online",
                               style: const TextStyle(color: _textMuted),
                             ),
                             iconEnabledColor: _textSecondary,
@@ -839,39 +896,39 @@ static const String _darkMapStyle = r'''
                               final uid = c['uid']!;
                               final name = c['name']!;
                               return DropdownMenuItem<String>(
-                              value: uid,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min, // ✅ important
-                                children: [
-                                  Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.green,
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Flexible(
-                                    fit: FlexFit.loose,
-                                    child: Text(
-                                      name,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: _textMuted,
-                                        fontWeight: FontWeight.w800,
+                                value: uid,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 10,
+                                      height: 10,
+                                      decoration: const BoxDecoration(
+                                        color: _accent,
+                                        shape: BoxShape.circle,
                                       ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            );
+                                    const SizedBox(width: 10),
+                                    Flexible(
+                                      fit: FlexFit.loose,
+                                      child: Text(
+                                        name,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: _textPrimary,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
                             }).toList(),
                             onChanged: hasCollectors
                                 ? (uid) {
                                     if (uid == null) return;
-                                    final found =
-                                        _availableCollectors.firstWhere((c) => c['uid'] == uid);
+                                    final found = _availableCollectors
+                                        .firstWhere((c) => c['uid'] == uid);
                                     localSet(() {
                                       _selectedCollectorId = uid;
                                       _selectedCollectorName = found['name'];
@@ -894,6 +951,7 @@ static const String _darkMapStyle = r'''
                         ),
                       ),
                       const SizedBox(height: 8),
+
                       Text(
                         _scheduleSummary,
                         style: const TextStyle(
@@ -913,16 +971,20 @@ static const String _darkMapStyle = r'''
                             selected: _pickupType == "now",
                             onSelected: (_) => localSet(() {
                               windowError = null;
-                              _selectNow(); 
+                              _selectNow();
                             }),
-                            selectedColor: _accent.o(0.22),
-                            backgroundColor: Colors.white.o(0.06),
+                            selectedColor: _accent.o(0.20),
+                            backgroundColor: _surface,
                             labelStyle: TextStyle(
-                              color: _pickupType == "now" ? _textPrimary : _textMuted,
+                              color: _pickupType == "now"
+                                  ? _textPrimary
+                                  : _textSecondary,
                               fontWeight: FontWeight.w800,
                             ),
                             side: BorderSide(
-                              color: _pickupType == "now" ? _accent.o(0.55) : Colors.white.o(0.10),
+                              color: _pickupType == "now"
+                                  ? _accent.o(0.45)
+                                  : _border,
                             ),
                           ),
                           ChoiceChip(
@@ -932,14 +994,18 @@ static const String _darkMapStyle = r'''
                               windowError = null;
                               _pickupType = "window";
                             }),
-                            selectedColor: _accent.o(0.22),
-                            backgroundColor: Colors.white.o(0.06),
+                            selectedColor: _accent.o(0.20),
+                            backgroundColor: _surface,
                             labelStyle: TextStyle(
-                              color: _pickupType == "window" ? _textPrimary : _textMuted,
+                              color: _pickupType == "window"
+                                  ? _textPrimary
+                                  : _textSecondary,
                               fontWeight: FontWeight.w800,
                             ),
                             side: BorderSide(
-                              color: _pickupType == "window" ? _accent.o(0.55) : Colors.white.o(0.10),
+                              color: _pickupType == "window"
+                                  ? _accent.o(0.45)
+                                  : _border,
                             ),
                           ),
                         ],
@@ -955,15 +1021,22 @@ static const String _darkMapStyle = r'''
                           },
                           borderRadius: BorderRadius.circular(14),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
                             decoration: BoxDecoration(
-                              color: Colors.black.o(0.20),
+                              color: _surfaceAlt,
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Colors.white.o(0.10)),
+                              border: Border.all(color: _border),
                             ),
                             child: Row(
                               children: [
-                                const Icon(Icons.calendar_today, size: 16, color: _textSecondary),
+                                const Icon(
+                                  Icons.calendar_today,
+                                  size: 16,
+                                  color: _textSecondary,
+                                ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: Text(
@@ -974,7 +1047,10 @@ static const String _darkMapStyle = r'''
                                     ),
                                   ),
                                 ),
-                                const Icon(Icons.chevron_right, color: _textMuted),
+                                const Icon(
+                                  Icons.chevron_right,
+                                  color: _textMuted,
+                                ),
                               ],
                             ),
                           ),
@@ -1000,22 +1076,34 @@ static const String _darkMapStyle = r'''
                               selected: selected,
                               onSelected: (_) {
                                 final d = _scheduleDate;
-                                final start = DateTime(d.year, d.month, d.day, startHour, 0);
-                                final end = DateTime(d.year, d.month, d.day, endHour, 0);
+                                final start = DateTime(
+                                  d.year,
+                                  d.month,
+                                  d.day,
+                                  startHour,
+                                  0,
+                                );
+                                final end = DateTime(
+                                  d.year,
+                                  d.month,
+                                  d.day,
+                                  endHour,
+                                  0,
+                                );
                                 final now = DateTime.now();
 
                                 if (end.isBefore(now)) {
                                   setLocal(() => windowError =
-                                    "That time window already ended. Choose a later window."
-                                  );
+                                      "That time window already ended. Choose a later window.");
                                   return;
                                 }
 
-                                if (start.isBefore(now.add(const Duration(minutes: 10))) &&
+                                if (start.isBefore(
+                                          now.add(const Duration(minutes: 10)),
+                                        ) &&
                                     _dateOnly(d) == _dateOnly(now)) {
                                   setLocal(() => windowError =
-                                    "Please choose a window at least 10 minutes from now."
-                                  );
+                                      "Please choose a window at least 10 minutes from now.");
                                   return;
                                 }
 
@@ -1026,14 +1114,16 @@ static const String _darkMapStyle = r'''
                                   _windowEnd = end;
                                 });
                               },
-                              selectedColor: _accent.o(0.22),
-                              backgroundColor: Colors.white.o(0.06),
+                              selectedColor: _accent.o(0.20),
+                              backgroundColor: _surface,
                               labelStyle: TextStyle(
-                                color: selected ? _textPrimary : _textSecondary,
+                                color:
+                                    selected ? _textPrimary : _textSecondary,
                                 fontWeight: FontWeight.w800,
                               ),
                               side: BorderSide(
-                                color: selected ? _accent.o(0.55) : Colors.white.o(0.10),
+                                color:
+                                    selected ? _accent.o(0.45) : _border,
                               ),
                             );
                           }).toList(),
@@ -1055,7 +1145,7 @@ static const String _darkMapStyle = r'''
                           Text(
                             windowError!,
                             style: const TextStyle(
-                              color: Colors.redAccent,
+                              color: _danger,
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
                             ),
@@ -1078,13 +1168,14 @@ static const String _darkMapStyle = r'''
                         Text(
                           bagError!,
                           style: const TextStyle(
-                            color: Colors.redAccent,
+                            color: _danger,
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ],
                       const SizedBox(height: 8),
+
                       Wrap(
                         spacing: 10,
                         runSpacing: 10,
@@ -1099,25 +1190,25 @@ static const String _darkMapStyle = r'''
                             selected: selected,
                             onSelected: (_) => localSet(() {
                               _selectedBagKey = key;
-                              bagError = null; // ✅ clear
+                              bagError = null;
                             }),
-                            selectedColor: _accent.o(0.22),
-                            backgroundColor: Colors.white.o(0.06),
+                            selectedColor: _accent.o(0.20),
+                            backgroundColor: _surface,
                             labelStyle: TextStyle(
-                              color: selected ? _textPrimary : _textMuted,
+                              color:
+                                  selected ? _textPrimary : _textSecondary,
                               fontWeight: FontWeight.w800,
                             ),
                             side: BorderSide(
-                              color: selected ? _accent.o(0.55) : Colors.white.o(0.10),
+                              color:
+                                  selected ? _accent.o(0.45) : _border,
                             ),
                           );
                         }).toList(),
                       ),
-                    
 
                       const SizedBox(height: 18),
 
-                      // Submit buttons
                       Row(
                         children: [
                           Expanded(
@@ -1127,8 +1218,11 @@ static const String _darkMapStyle = r'''
                                 onPressed: () => Navigator.pop(ctx),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: _textPrimary,
-                                  side: BorderSide(color: Colors.white.o(0.14)),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  side: const BorderSide(color: _border),
+                                  backgroundColor: _surface,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
                                 ),
                                 child: const Text(
                                   "CANCEL",
@@ -1146,17 +1240,22 @@ static const String _darkMapStyle = r'''
                                     ? () async {
                                         Navigator.pop(ctx);
 
-                                        // ✅ verify collector still online
                                         final selectedId = _selectedCollectorId;
                                         final stillOnline = selectedId != null &&
-                                            _availableCollectors.any((c) => c['uid'] == selectedId);
+                                            _availableCollectors.any(
+                                              (c) => c['uid'] == selectedId,
+                                            );
 
                                         if (!stillOnline) {
-                                          _snack("Selected driver is no longer available. Please choose another.", bg: Colors.red);
+                                          _snack(
+                                            "Selected driver is no longer available. Please choose another.",
+                                            bg: _danger,
+                                          );
                                           return;
                                         }
 
-                                        final pickupLatLng = _effectivePickupLatLng;
+                                        final pickupLatLng =
+                                            _effectivePickupLatLng;
 
                                         await requestPickupWithConfirm(
                                           pickupLatLng: pickupLatLng,
@@ -1170,22 +1269,29 @@ static const String _darkMapStyle = r'''
                                         );
                                       }
                                     : () {
-                                      setLocal(() {
-                                        if (!collectorPicked) {
-                                          driverError = "Please choose a driver.";
-                                        }
-                                        if (!bagPicked) {
-                                          bagError = "Please select a bag size (required).";
-                                        }
-                                        if (_pickupType == "window" && (_windowStart == null || _windowEnd == null)) {
-                                          windowError = "Please select a time window.";
-                                        }
-                                      });
-                                    },
+                                        setLocal(() {
+                                          if (!collectorPicked) {
+                                            driverError =
+                                                "Please choose a driver.";
+                                          }
+                                          if (!bagPicked) {
+                                            bagError =
+                                                "Please select a bag size (required).";
+                                          }
+                                          if (_pickupType == "window" &&
+                                              (_windowStart == null ||
+                                                  _windowEnd == null)) {
+                                            windowError =
+                                                "Please select a time window.";
+                                          }
+                                        });
+                                      },
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _accent,
                                   foregroundColor: _bg,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
                                   elevation: 0,
                                 ),
                                 child: const Text(
@@ -1199,10 +1305,10 @@ static const String _darkMapStyle = r'''
                       ),
 
                       const SizedBox(height: 8),
-                      Text(
+                      const Text(
                         "Note: Your request will be sent to the selected collector.",
                         style: TextStyle(
-                          color: _textSecondary.o(0.90),
+                          color: _textSecondary,
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1227,9 +1333,9 @@ static const String _darkMapStyle = r'''
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.o(0.06),
+        color: _surface,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.o(0.10)),
+        border: Border.all(color: _border),
       ),
       child: Row(
         children: [
@@ -1237,9 +1343,9 @@ static const String _darkMapStyle = r'''
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: Colors.black.o(0.20),
+              color: _surfaceAlt,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.o(0.10)),
+              border: Border.all(color: _border),
             ),
             child: Icon(icon, color: _textSecondary, size: 18),
           ),
@@ -1288,7 +1394,7 @@ static const String _darkMapStyle = r'''
   }) async {
     final bool isWindow = _pickupType == "window";
     if (isWindow && (_windowStart == null || _windowEnd == null)) {
-      _snack("Please select a time window.", bg: Colors.red);
+      _snack("Please select a time window.", bg: _danger);
       return;
     }
 
@@ -1296,12 +1402,12 @@ static const String _darkMapStyle = r'''
     if (user == null) return;
 
     if (_selectedCollectorId == null) {
-      _snack("Please choose an available collector first.", bg: Colors.red);
+      _snack("Please choose an available collector first.", bg: _danger);
       return;
     }
 
     if (_selectedBagKey == null) {
-      _snack("Please select a bag size (required).", bg: Colors.red);
+      _snack("Please select a bag size (required).", bg: _danger);
       return;
     }
 
@@ -1317,7 +1423,7 @@ static const String _darkMapStyle = r'''
       if (active.docs.isNotEmpty) {
         _snack(
           "You already have an active pickup order. Cancel it first from the Order tab.",
-          bg: Colors.red,
+          bg: _danger,
         );
         return;
       }
@@ -1332,22 +1438,49 @@ static const String _darkMapStyle = r'''
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Confirm Pickup Request"),
+        backgroundColor: _sheet,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: _border),
+        ),
+        title: const Text(
+          "Confirm Pickup Request",
+          style: TextStyle(
+            color: _textPrimary,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
         content: Text(
           "Send pickup request to $collectorName?\n\n"
           "Driver: $collectorName\n"
           "Pickup Location: ${_pickupSource == "pin" ? "Pinned location" : "Current GPS"}\n"
           "$_scheduleSummary\n"
           "Bag: $bagLabel (${bagKg}kg)\n"
-          "Distance/ETA: ${distanceKm.toStringAsFixed(1)} km • $etaMinutes min\n"
+          "Distance/ETA: ${distanceKm.toStringAsFixed(1)} km • $etaMinutes min\n",
+          style: const TextStyle(
+            color: _textSecondary,
+            height: 1.45,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text("Cancel"),
+            child: const Text(
+              "Cancel",
+              style: TextStyle(color: _textSecondary),
+            ),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: _bg,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
             child: const Text("Confirm"),
           ),
         ],
@@ -1369,20 +1502,25 @@ static const String _darkMapStyle = r'''
 
         // schedule
         'pickupType': _pickupType, // "now" | "window"
-        'windowStart': _windowStart == null ? null : Timestamp.fromDate(_windowStart!),
-        'windowEnd': _windowEnd == null ? null : Timestamp.fromDate(_windowEnd!),
-        'scheduledAt': _windowStart == null ? null : Timestamp.fromDate(_windowStart!),
+        'windowStart':
+            _windowStart == null ? null : Timestamp.fromDate(_windowStart!),
+        'windowEnd':
+            _windowEnd == null ? null : Timestamp.fromDate(_windowEnd!),
+        'scheduledAt':
+            _windowStart == null ? null : Timestamp.fromDate(_windowStart!),
         'status': (_pickupType == "now") ? 'pending' : 'scheduled',
 
         // pickup location
-        'pickupLocation': GeoPoint(pickupLatLng.latitude, pickupLatLng.longitude),
+        'pickupLocation':
+            GeoPoint(pickupLatLng.latitude, pickupLatLng.longitude),
         'pickupAddress': pickupAddress ?? '',
-        'pickupSource': _pickupSource, // add this
+        'pickupSource': _pickupSource,
 
         // ✅ fixed destination (Mores only)
         'destinationId': 'mores',
         'destinationName': _moresName,
-        'destinationLocation': GeoPoint(_moresLatLng.latitude, _moresLatLng.longitude),
+        'destinationLocation':
+            GeoPoint(_moresLatLng.latitude, _moresLatLng.longitude),
 
         // ✅ new: bag requirement
         'bagKey': bagKey,
@@ -1404,7 +1542,7 @@ static const String _darkMapStyle = r'''
     } catch (e, st) {
       debugPrint("❌ requests.add failed: $e");
       debugPrint("$st");
-      if (mounted) _snack("Pickup failed: $e", bg: Colors.red);
+      if (mounted) _snack("Pickup failed: $e", bg: _danger);
       return;
     }
 
@@ -1414,7 +1552,8 @@ static const String _darkMapStyle = r'''
 
   Future<String> _getUserName(String uid, {String fallback = "Unknown"}) async {
     try {
-      final doc = await FirebaseFirestore.instance.collection('Users').doc(uid).get();
+      final doc =
+          await FirebaseFirestore.instance.collection('Users').doc(uid).get();
       final data = doc.data() ?? {};
       final name = (data['Name'] ?? data['displayName'] ?? data['name'] ?? '')
           .toString()
@@ -1465,16 +1604,15 @@ static const String _darkMapStyle = r'''
       backgroundColor: _bg,
       body: Stack(
         children: [
-          // Map
           Positioned.fill(
             child: GoogleMap(
               onMapCreated: _onMapCreated,
-              initialCameraPosition: CameraPosition(target: _paloAltoCenter, zoom: 14),
+              initialCameraPosition:
+                  CameraPosition(target: _paloAltoCenter, zoom: 14),
               myLocationEnabled: _locationReady,
               myLocationButtonEnabled: _locationReady,
               markers: _buildMarkers(),
               polylines: _buildPolylines(),
-              // ✅ disabled pinning; Mores only
               onTap: _onMapTap,
               zoomControlsEnabled: false,
               mapToolbarEnabled: false,
@@ -1500,8 +1638,8 @@ static const String _darkMapStyle = r'''
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Colors.black.o(0.55),
-                    Colors.black.o(0.05),
+                    _bg.o(0.92),
+                    _bg.o(0.18),
                   ],
                 ),
               ),
@@ -1518,11 +1656,19 @@ static const String _darkMapStyle = r'''
                   ),
                   const Row(
                     children: [
-                      Icon(Icons.signal_cellular_alt, size: 14, color: _textPrimary),
+                      Icon(
+                        Icons.signal_cellular_alt,
+                        size: 14,
+                        color: _textPrimary,
+                      ),
                       SizedBox(width: 6),
                       Icon(Icons.wifi, size: 14, color: _textPrimary),
                       SizedBox(width: 6),
-                      Icon(Icons.battery_full, size: 14, color: _textPrimary),
+                      Icon(
+                        Icons.battery_full,
+                        size: 14,
+                        color: _textPrimary,
+                      ),
                     ],
                   ),
                 ],
@@ -1530,7 +1676,7 @@ static const String _darkMapStyle = r'''
             ),
           ),
 
-          // Top bar (fixed destination pill) 
+          // Top bar
           Positioned(
             top: 62,
             left: 20,
@@ -1543,7 +1689,7 @@ static const String _darkMapStyle = r'''
                     if (Navigator.of(context).canPop()) {
                       Navigator.pop(context);
                     } else {
-                      _snack("No screen to go back to.", bg: Colors.black87);
+                      _snack("No screen to go back to.", bg: _surface);
                     }
                   },
                 ),
@@ -1554,11 +1700,15 @@ static const String _darkMapStyle = r'''
                     child: _glass(
                       radius: 16,
                       blur: 12,
-                      opacity: 0.55,
+                      opacity: 0.92,
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
                         children: [
-                          const Icon(Icons.store_mall_directory, size: 18, color: _accent),
+                          const Icon(
+                            Icons.store_mall_directory,
+                            size: 18,
+                            color: _accent,
+                          ),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
@@ -1579,35 +1729,43 @@ static const String _darkMapStyle = r'''
               ],
             ),
           ),
+
           Positioned(
             top: 110,
             right: 16,
-            bottom: 220, // adjust if it overlaps your sheet
+            bottom: 220,
             child: Column(
               children: [
                 FloatingActionButton(
                   heroTag: "pinMode",
                   mini: true,
-                  backgroundColor: _pinMode ? _accent : _bg.o(0.92),
+                  backgroundColor: _pinMode ? _accent : _surface,
+                  elevation: 0,
                   onPressed: () {
                     setState(() => _pinMode = !_pinMode);
                     _snack(
-                      _pinMode ? "Pin mode ON: tap map to pin pickup." : "Pin mode OFF.",
-                      bg: _sheet,
+                      _pinMode
+                          ? "Pin mode ON: tap map to pin pickup."
+                          : "Pin mode OFF.",
+                      bg: _surface,
                     );
                   },
-                  child: Icon(_pinMode ? Icons.push_pin : Icons.push_pin_outlined, color: _textPrimary),
+                  child: const Icon(Icons.push_pin_outlined, color: _textPrimary),
                 ),
                 const SizedBox(height: 10),
                 FloatingActionButton(
                   heroTag: "goMe",
                   mini: true,
-                  backgroundColor: _bg.o(0.92),
+                  backgroundColor: _surface,
+                  elevation: 0,
                   onPressed: () {
                     if (_currentPosition == null) return;
                     final p = _currentPosition!;
                     _mapController?.animateCamera(
-                      CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), 16),
+                      CameraUpdate.newLatLngZoom(
+                        LatLng(p.latitude, p.longitude),
+                        16,
+                      ),
                     );
                   },
                   child: const Icon(Icons.my_location, color: _textPrimary),
@@ -1616,23 +1774,25 @@ static const String _darkMapStyle = r'''
             ),
           ),
 
-          // Bottom sheet (overview + actions)
+          // Bottom sheet
           DraggableScrollableSheet(
             initialChildSize: 0.40,
             minChildSize: 0.22,
             maxChildSize: 0.75,
             builder: (context, scrollController) {
               return ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(40)),
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                   child: Container(
                     padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.55),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
-                      border: Border(
-                        top: BorderSide(color: Colors.white.withOpacity(0.10)),
+                      color: _sheet.o(0.96),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(40)),
+                      border: const Border(
+                        top: BorderSide(color: _border),
                       ),
                     ),
                     child: ListView(
@@ -1643,7 +1803,7 @@ static const String _darkMapStyle = r'''
                             width: 44,
                             height: 4,
                             decoration: BoxDecoration(
-                              color: Colors.white24,
+                              color: _textMuted.o(0.45),
                               borderRadius: BorderRadius.circular(2),
                             ),
                           ),
@@ -1661,8 +1821,8 @@ static const String _darkMapStyle = r'''
                         const SizedBox(height: 6),
                         Text(
                           _moresSubtitle,
-                          style: TextStyle(
-                            color: _textSecondary.o(0.95),
+                          style: const TextStyle(
+                            color: _textSecondary,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -1673,18 +1833,29 @@ static const String _darkMapStyle = r'''
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: Colors.white.o(0.06),
+                            color: _surface,
                             borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: Colors.white.o(0.10)),
+                            border: Border.all(color: _border),
                           ),
                           child: Row(
                             children: [
                               Column(
                                 children: [
-                                  const Icon(Icons.radio_button_checked,
-                                      color: Colors.blue, size: 20),
-                                  Container(width: 1, height: 30, color: Colors.blue.o(0.35)),
-                                  const Icon(Icons.location_on, color: _accent, size: 20),
+                                  const Icon(
+                                    Icons.radio_button_checked,
+                                    color: _blue,
+                                    size: 20,
+                                  ),
+                                  Container(
+                                    width: 1,
+                                    height: 30,
+                                    color: _blue.o(0.35),
+                                  ),
+                                  const Icon(
+                                    Icons.location_on,
+                                    color: _accent,
+                                    size: 20,
+                                  ),
                                 ],
                               ),
                               const SizedBox(width: 16),
@@ -1710,8 +1881,8 @@ static const String _darkMapStyle = r'''
                                               : "Current Location",
                                       style: const TextStyle(
                                         fontSize: 14,
-                                        color: _textMuted,
-                                        fontWeight: FontWeight.w600,
+                                        color: _textPrimary,
+                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
                                     const SizedBox(height: 14),
@@ -1744,20 +1915,31 @@ static const String _darkMapStyle = r'''
 
                         // Stats / fee
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
                           decoration: BoxDecoration(
-                            color: _sheet,
+                            color: _surface,
                             borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: _sheet),
+                            border: Border.all(color: _border),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
-                              _statItem(Icons.access_time,
-                                  _dirDurationText.isEmpty ? "$_etaMinutes min" : _dirDurationText),
+                              _statItem(
+                                Icons.access_time,
+                                _dirDurationText.isEmpty
+                                    ? "$_etaMinutes min"
+                                    : _dirDurationText,
+                              ),
                               _statDivider(),
-                              _statItem(Icons.navigation_outlined,
-                                  _dirDistanceText.isEmpty ? "${_distanceKm.toStringAsFixed(1)} km" : _dirDistanceText),
+                              _statItem(
+                                Icons.navigation_outlined,
+                                _dirDistanceText.isEmpty
+                                    ? "${_distanceKm.toStringAsFixed(1)} km"
+                                    : _dirDistanceText,
+                              ),
                               _statDivider(),
                               _statItem(Icons.store_mall_directory, "Mores"),
                             ],
@@ -1766,7 +1948,6 @@ static const String _darkMapStyle = r'''
 
                         const SizedBox(height: 18),
 
-                        // Buttons
                         Row(
                           children: [
                             Expanded(
@@ -1777,10 +1958,12 @@ static const String _darkMapStyle = r'''
                                   icon: const Icon(Icons.directions),
                                   label: const Text("DROP-OFF"),
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.white,
-                                    foregroundColor: _bg,
+                                    backgroundColor: _surfaceAlt,
+                                    foregroundColor: _textPrimary,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(18),
+                                      side:
+                                          const BorderSide(color: _border),
                                     ),
                                     elevation: 0,
                                   ),
@@ -1797,7 +1980,7 @@ static const String _darkMapStyle = r'''
                                   label: const Text("PICKUP"),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: _accent,
-                                    foregroundColor: _bg,
+                                    foregroundColor: _textPrimary,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(18),
                                     ),
@@ -1816,7 +1999,7 @@ static const String _darkMapStyle = r'''
                             width: 120,
                             height: 4,
                             decoration: BoxDecoration(
-                              color: Colors.white12,
+                              color: _textMuted.o(0.22),
                               borderRadius: BorderRadius.circular(2),
                             ),
                           ),
@@ -1844,12 +2027,12 @@ static const String _darkMapStyle = r'''
         width: 40,
         height: 40,
         decoration: BoxDecoration(
-          color: _bg.o(0.92),
+          color: _surface.o(0.96),
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white.o(0.14)),
+          border: Border.all(color: _border),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.o(0.35),
+              color: _bg.o(0.40),
               blurRadius: 16,
               offset: const Offset(0, 10),
             ),
@@ -1880,7 +2063,10 @@ static const String _darkMapStyle = r'''
     return Container(
       width: 4,
       height: 4,
-      decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
+      decoration: BoxDecoration(
+        color: _textMuted.o(0.45),
+        shape: BoxShape.circle,
+      ),
     );
   }
 }

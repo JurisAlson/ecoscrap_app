@@ -141,7 +141,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
 
     final address = await ResidentAddressDecrypt.decrypt(
       uid: uid,
-      data: Map<String, dynamic>.from(enc as Map),
+      data: Map<String, dynamic>.from(enc),
     );
 
     final v = address.trim();
@@ -461,12 +461,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                             style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
                           ),
                           const Spacer(),
-                          _pill(
-                            "Decrypted",
-                            bg: Colors.greenAccent.withOpacity(0.12),
-                            fg: Colors.greenAccent,
-                            icon: Icons.verified_outlined,
-                          ),
                         ],
                       ),
                       const SizedBox(height: 10),
@@ -543,7 +537,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          "PDF decrypted successfully.\n\n"
                           "To preview it here, add a PDF viewer widget/package.",
                           style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
                         ),
@@ -730,22 +723,17 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                       Expanded(
                         child: _outlineActionButton(
                           icon: Icons.delete_forever,
-                          label: "Reject & Delete",
+                          label: "Reject",
                           onTap: (_busy || !isPending)
                               ? null
                               : () async {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
-                                    title: "Reject & delete account?",
+                                    title: "Reject account?",
                                     body:
-                                        "Reject $name and delete their account so they can re-apply using the same email.\n\n"
-                                        "This will remove:\n"
-                                        "• Auth account\n"
-                                        "• User profile\n"
-                                        "• Request record\n"
-                                        "• ID record + encrypted file",
+                                        " Are you sure to Reject $name",
                                     yesValue: true,
-                                    yesLabel: "Reject & Delete",
+                                    yesLabel: "Reject",
                                   );
                                   if (ok != true) return;
 
@@ -753,11 +741,11 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                   try {
                                     await _rejectAndDeleteResidentAccount(uid);
                                     if (mounted) {
-                                      AdminHelpers.toast(context, "Rejected & deleted $name.");
+                                      AdminHelpers.toast(context, "Rejected $name.");
                                       Navigator.pop(context);
                                     }
                                   } catch (_) {
-                                    if (mounted) AdminHelpers.toast(context, "Reject/Delete failed. Please try again.");
+                                    if (mounted) AdminHelpers.toast(context, "Reject failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }

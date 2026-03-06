@@ -426,8 +426,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          "PDF decrypted successfully.\n\n"
-                          "To preview it here, add a PDF viewer widget/package "
                           "(e.g. syncfusion_flutter_pdfviewer or flutter_pdfview).",
                           style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
                         ),
