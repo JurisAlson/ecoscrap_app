@@ -348,6 +348,13 @@
               );
             }
 
+            final newKg = currentKg - weightKg;
+
+            trx.update(invRef, {
+              'unitsKg': newKg,
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+
             final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
             final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
 
