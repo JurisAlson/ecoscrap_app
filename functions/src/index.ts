@@ -134,31 +134,80 @@ async function sendPushToUser(
 /* ====================================================
   ADMIN-ONLY: Reject resident
 ==================================================== */
-export const adminRejectResident = onCall(
+export const rejectResidentAndDeleteAccount = onCall(
   { region: "asia-southeast1" },
   async (request) => {
-    if (!request.auth)
+    if (!request.auth) {
       throw new HttpsError("unauthenticated", "Login required.");
-    if (request.auth.token?.admin !== true)
+    }
+    if (request.auth.token?.admin !== true) {
       throw new HttpsError("permission-denied", "Admin only.");
+    }
 
     const uid = String(request.data?.uid || "").trim();
     const reason = String(request.data?.reason || "").trim();
-    if (!uid) throw new HttpsError("invalid-argument", "uid required");
 
-    await admin.firestore().collection("residentRequests").doc(uid).set(
-      {
-        status: "rejected",
-        adminStatus: "rejected",
-        adminVerified: false,
-        adminReviewedAt: admin.firestore.FieldValue.serverTimestamp(),
-        rejectReason: reason,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+    if (!uid) {
+      throw new HttpsError("invalid-argument", "uid required");
+    }
 
-    return { ok: true, uid };
+    const db = admin.firestore();
+    const bucket = admin.storage().bucket();
+
+    try {
+      // notify first while account/docs still exist
+      await sendPushToUser(
+        uid,
+        "Resident verification rejected ❌",
+        reason
+          ? `Your residency request was rejected. Reason: ${reason}`
+          : "Your residency request was rejected by the admin.",
+        { type: "resident_admin_rejected" }
+      ).catch((e) => {
+        logger.warn("Failed to notify resident before delete", {
+          uid,
+          err: String(e),
+        });
+      });
+
+      // read KYC file path before deleting docs
+      const kycSnap = await db.collection("residentKYC").doc(uid).get();
+      const kyc = (kycSnap.data() || {}) as any;
+      const storagePath = String(kyc.storagePath || "").trim();
+
+      // delete storage file
+      if (storagePath) {
+        await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
+      }
+
+      // optional audit log
+      await db.collection("adminAuditLogs").add({
+        action: "reject_resident_and_delete_account",
+        targetUid: uid,
+        reason,
+        performedBy: request.auth.uid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      }).catch(() => null);
+
+      // delete firestore docs
+      await db.collection("residentKYC").doc(uid).delete().catch(() => null);
+      await db.collection("residentRequests").doc(uid).delete().catch(() => null);
+      const userRef = db.collection("Users").doc(uid);
+      await db.recursiveDelete(userRef).catch(() => null);
+
+      // delete auth account last
+      await admin.auth().deleteUser(uid);
+
+      logger.info("rejectResidentAndDeleteAccount success", { uid });
+      return { ok: true, uid };
+    } catch (err: any) {
+      logger.error("rejectResidentAndDeleteAccount failed", {
+        uid,
+        error: String(err),
+        stack: err?.stack,
+      });
+      throw new HttpsError("internal", err?.message || String(err));
+    }
   }
 );
 
@@ -390,92 +439,6 @@ export const revertCollectorOnRejected = onDocumentUpdated(
 /* ====================================================
   Revert resident on rejection
 ==================================================== */
-export const revertResidentOnRejected = onDocumentUpdated(
-  { document: "residentRequests/{uid}", region: "asia-southeast1" },
-  async (event) => {
-    const before = event.data?.before?.data() as any;
-    const after = event.data?.after?.data() as any;
-    if (!before || !after) return;
-
-    const uid = String(event.params.uid);
-
-    const b = String(before.status || before.adminStatus || "").toLowerCase();
-    const a = String(after.status || after.adminStatus || "").toLowerCase();
-    if (a === b) return;
-    if (a !== "rejected") return;
-    
-        // ✅ Send notification BEFORE deleting the request doc (prevents race condition)
-    const targetUid = String(after?.uid || event.params.uid || "").trim();
-    const reason = String(after.rejectReason || after.adminRejectReason || "").trim();
-
-    if (targetUid) {
-      await sendPushToUser(
-        targetUid,
-        "Resident verification rejected ❌",
-        reason.length > 0
-          ? `Your residency request was rejected. Reason: ${reason}`
-          : "Your residency request was rejected by the admin.",
-        { type: "resident_admin_rejected" }
-      );
-
-      logger.info("Resident rejected notification sent (from revertResidentOnRejected)", {
-        uid: targetUid,
-      });
-    } else {
-      logger.warn("Rejected request missing target uid (cannot notify)", {
-        docId: event.params.uid,
-      });
-    }
-
-    const db = admin.firestore();
-    const bucket = admin.storage().bucket();
-
-    // delete residentKYC file + doc
-    try {
-      const kycSnap = await db.collection("residentKYC").doc(uid).get();
-      const kyc = (kycSnap.data() || {}) as any;
-      const storagePath = String(kyc.storagePath || "").trim();
-      if (storagePath) {
-        await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
-      }
-    } catch (e) {
-      logger.warn("residentKYC cleanup failed", { uid, err: String(e) });
-    }
-
-    await db.collection("residentKYC").doc(uid).delete().catch(() => null);
-
-    const userRef = db.collection("Users").doc(uid);
-    const userSnap = await userRef.get();
-    const u = (userSnap.data() || {}) as any;
-
-    const currentRole = String(u.Roles || u.role || "").toLowerCase();
-
-    if (currentRole === "resident") {
-      await userRef.set(
-        {
-          Roles: "user",
-          role: "user",
-          residentStatus: "rejected",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-    } else {
-      await userRef.set(
-        {
-          residentStatus: "rejected",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-    }
-
-    // allow resubmit
-    await event.data!.after.ref.delete().catch(() => null);
-
-    logger.info("Resident rejected: reverted + cleared for resubmit", { uid });
-  }
-);
 
 /* ====================================================
   ADMIN-ONLY: Grant/Revoke admin claim
@@ -1345,41 +1308,6 @@ export const notifyJunkshopOnPickupConfirmed = onDocumentUpdated(
     });
   }
 );
-
-/* ====================================================
-  RESIDENT: notify on admin reject
-  (supports status OR adminStatus)
-==================================================== */
-/*export const notifyResidentAdminRejected = onDocumentUpdated(
-  { document: "residentRequests/{uid}", region: "asia-southeast1" },
-  async (event) => {
-    const before = event.data?.before?.data() as any;
-    const after = event.data?.after?.data() as any;
-    if (!before || !after) return;
-
-    const uid = String(after?.uid || event.params.uid || "").trim();
-    if (!uid) return;
-
-    const b = String(before.status || before.adminStatus || "").trim().toLowerCase();
-    const a = String(after.status || after.adminStatus || "").trim().toLowerCase();
-    if (a === b) return;
-
-    if (a !== "rejected") return;
-
-    const reason = String(after.rejectReason || after.adminRejectReason || "").trim();
-
-    await sendPushToUser(
-      uid,
-      "Resident verification rejected ❌",
-      reason.length > 0
-        ? `Your residency request was rejected. Reason: ${reason}`
-        : "Your residency request was rejected by the admin.",
-      { type: "resident_admin_rejected" }
-    );
-
-    logger.info("Resident rejected notification sent", { uid });
-  }
-); 
 
 /* ====================================================
   COLLECTOR: notify on admin approve/reject
