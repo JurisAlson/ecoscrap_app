@@ -14,8 +14,6 @@ class HouseholdOrderPage extends StatelessWidget {
       );
     }
 
-    // Active order = anything not finished/cancelled
-    // (You can add/remove statuses if needed)
     final query = FirebaseFirestore.instance
         .collection('requests')
         .where('type', isEqualTo: 'pickup')
@@ -23,7 +21,6 @@ class HouseholdOrderPage extends StatelessWidget {
         .where('active', isEqualTo: true)
         .orderBy('updatedAt', descending: true)
         .limit(1);
-
 
     return StreamBuilder<QuerySnapshot>(
       stream: query.snapshots(),
@@ -85,6 +82,15 @@ class _OrderCard extends StatelessWidget {
     required this.data,
   });
 
+  static const List<String> rejectionReasons = [
+    "No longer needed",
+    "Wrong schedule selected",
+    "Wrong pickup details",
+    "Collector taking too long",
+    "Changed my mind",
+    "Other",
+  ];
+
   @override
   Widget build(BuildContext context) {
     final bgColor = const Color(0xFF0F172A);
@@ -94,13 +100,18 @@ class _OrderCard extends StatelessWidget {
     final pickupType = (data['pickupType'] ?? '—').toString().toLowerCase();
 
     final arrived = (data['arrived'] == true);
-    final arrivedAt = data['arrivedAt'] is Timestamp ? data['arrivedAt'] as Timestamp : null;
+    final arrivedAt =
+        data['arrivedAt'] is Timestamp ? data['arrivedAt'] as Timestamp : null;
 
-    final scheduledAt = data['scheduledAt'] is Timestamp ? data['scheduledAt'] as Timestamp : null;
-    final windowStart = data['windowStart'] is Timestamp ? data['windowStart'] as Timestamp : null;
-    final windowEnd = data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
+    final scheduledAt =
+        data['scheduledAt'] is Timestamp ? data['scheduledAt'] as Timestamp : null;
+    final windowStart =
+        data['windowStart'] is Timestamp ? data['windowStart'] as Timestamp : null;
+    final windowEnd =
+        data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
 
-    final canCancel = !arrived && !['completed', 'cancelled', 'declined'].contains(status);
+    final canReject =
+        !arrived && !['completed', 'cancelled', 'declined', 'rejected'].contains(status);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -116,7 +127,11 @@ class _OrderCard extends StatelessWidget {
           children: [
             const Text(
               "Current Order",
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 12),
 
@@ -124,7 +139,13 @@ class _OrderCard extends StatelessWidget {
             _kv("Pickup Type", pickupType),
             _kv("Status", status),
             _kv("Arrived", arrived ? "Yes" : "No"),
-            if (arrived && arrivedAt != null) _kv("Arrived At", _formatDateTime(arrivedAt)),
+            if (arrived && arrivedAt != null)
+              _kv("Arrived At", _formatDateTime(arrivedAt)),
+
+            if ((data['reason'] ?? '').toString().trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              _kv("Reason", (data['reason'] ?? '').toString()),
+            ],
 
             const SizedBox(height: 10),
 
@@ -135,14 +156,14 @@ class _OrderCard extends StatelessWidget {
 
             const SizedBox(height: 16),
 
-            if (canCancel) ...[
+            if (canReject) ...[
               Row(
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _cancelOrder(context, bgColor),
+                      onPressed: () => _rejectOrder(context, bgColor),
                       icon: const Icon(Icons.cancel_outlined),
-                      label: const Text("Cancel Order"),
+                      label: const Text("Reject Order"),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.redAccent,
                         foregroundColor: Colors.white,
@@ -165,8 +186,8 @@ class _OrderCard extends StatelessWidget {
                 ),
                 child: Text(
                   arrived
-                      ? "Collector has arrived. Cancellation is no longer available."
-                      : "This order can no longer be cancelled.",
+                      ? "Collector has arrived. Rejection is no longer available."
+                      : "This order can no longer be rejected.",
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               ),
@@ -174,7 +195,7 @@ class _OrderCard extends StatelessWidget {
 
             const SizedBox(height: 10),
             Text(
-              "Note: Cancelling updates your request in Firestore (requests).",
+              "Note: Rejecting updates your request in Firestore (requests) and saves the reason field.",
               style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
             ),
           ],
@@ -191,12 +212,19 @@ class _OrderCard extends StatelessWidget {
         children: [
           SizedBox(
             width: 90,
-            child: Text(k, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            child: Text(
+              k,
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
           ),
           Expanded(
             child: Text(
               v,
-              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -204,14 +232,87 @@ class _OrderCard extends StatelessWidget {
     );
   }
 
-  Future<void> _cancelOrder(BuildContext context, Color bgColor) async {
+  Future<String?> _pickRejectionReason(BuildContext context, Color bgColor) async {
+    String selectedReason = rejectionReasons.first;
+
+    return showDialog<String>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setD) {
+            return AlertDialog(
+              backgroundColor: bgColor,
+              title: const Text(
+                "Select reason",
+                style: TextStyle(color: Colors.white),
+              ),
+              content: DropdownButtonFormField<String>(
+                value: selectedReason,
+                dropdownColor: bgColor,
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.06),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.10)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withOpacity(0.25)),
+                  ),
+                ),
+                style: const TextStyle(color: Colors.white),
+                items: rejectionReasons
+                    .map(
+                      (reason) => DropdownMenuItem<String>(
+                        value: reason,
+                        child: Text(
+                          reason,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setD(() => selectedReason = value);
+                  }
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text(
+                    "Cancel",
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, selectedReason),
+                  child: const Text(
+                    "Submit",
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _rejectOrder(BuildContext context, Color bgColor) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: bgColor,
-        title: const Text("Cancel pickup?", style: TextStyle(color: Colors.white)),
+        title: const Text(
+          "Reject pickup?",
+          style: TextStyle(color: Colors.white),
+        ),
         content: const Text(
-          "This will cancel your current pickup request.",
+          "Are you sure you want to reject your current pickup request?",
           style: TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -221,7 +322,7 @@ class _OrderCard extends StatelessWidget {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Yes, cancel", style: TextStyle(color: Colors.redAccent)),
+            child: const Text("Yes", style: TextStyle(color: Colors.redAccent)),
           ),
         ],
       ),
@@ -229,46 +330,64 @@ class _OrderCard extends StatelessWidget {
 
     if (confirmed != true) return;
 
+    final reason = await _pickRejectionReason(context, bgColor);
+    if (reason == null || reason.trim().isEmpty) return;
+
     try {
-      debugPrint("🟡 Cancelling requests/$requestId");
+      debugPrint("🟡 Rejecting requests/$requestId");
 
       await FirebaseFirestore.instance
           .collection('requests')
           .doc(requestId)
           .update({
-        'status': 'cancelled',
+        'status': 'rejected',
         'active': false,
-        'cancelledAt': FieldValue.serverTimestamp(),
+        'reason': reason.trim(),
+        'rejectedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Pickup order cancelled.")),
+        const SnackBar(content: Text("Pickup order rejected.")),
       );
     } on FirebaseException catch (e, st) {
-      debugPrint("🔴 Cancel failed (FirebaseException)");
+      debugPrint("🔴 Reject failed (FirebaseException)");
       debugPrint("code=${e.code}");
       debugPrint("message=${e.message}");
       debugPrint(st.toString());
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Cancel failed: ${e.code} • ${e.message ?? ''}")),
+        SnackBar(content: Text("Reject failed: ${e.code} • ${e.message ?? ''}")),
       );
     } catch (e, st) {
-      debugPrint("🔴 Cancel failed (unknown): $e");
+      debugPrint("🔴 Reject failed (unknown): $e");
       debugPrint(st.toString());
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Cancel failed: $e")),
+        SnackBar(content: Text("Reject failed: $e")),
       );
     }
   }
+
   String _formatDateTime(Timestamp ts) {
     final dt = ts.toDate();
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
     final m = months[dt.month - 1];
     int hour = dt.hour % 12;
     if (hour == 0) hour = 12;
