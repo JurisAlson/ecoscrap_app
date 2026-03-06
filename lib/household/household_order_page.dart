@@ -90,6 +90,110 @@ class _OrderCard extends StatelessWidget {
     "Changed my mind",
     "Other",
   ];
+  Widget _buildOrderTimeline(String status) {
+  final steps = <Map<String, dynamic>>[
+    {
+      "label": "Order placed",
+      "done": ["pending", "scheduled", "accepted", "arrived", "completed"].contains(status),
+      "current": status == "pending" || status == "scheduled",
+    },
+    {
+      "label": "Accepted by collector",
+      "done": ["accepted", "arrived", "completed"].contains(status),
+      "current": status == "accepted",
+    },
+    {
+      "label": "Collector arrived",
+      "done": ["arrived", "completed"].contains(status),
+      "current": status == "arrived",
+    },
+    {
+      "label": "Completed",
+      "done": status == "completed",
+      "current": status == "completed",
+    },
+  ];
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text(
+        "Order Progress",
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      const SizedBox(height: 12),
+      ...List.generate(steps.length, (i) {
+        final step = steps[i];
+        final isLast = i == steps.length - 1;
+        final done = step["done"] == true;
+        final current = step["current"] == true;
+
+        final dotColor = done || current
+            ? const Color(0xFF22C55E)
+            : Colors.white24;
+
+        final lineColor = done
+            ? const Color(0xFF22C55E)
+            : Colors.white24;
+
+        final textColor = current
+            ? Colors.white
+            : done
+                ? Colors.white70
+                : Colors.white38;
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 24,
+              child: Column(
+                children: [
+                  Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: current ? Colors.white : dotColor,
+                        width: current ? 2 : 1,
+                      ),
+                    ),
+                  ),
+                  if (!isLast)
+                    Container(
+                      width: 2,
+                      height: 42,
+                      color: lineColor,
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 0),
+                child: Text(
+                  step["label"],
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 13,
+                    fontWeight: current ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      }),
+    ],
+  );
+}
 
   @override
   Widget build(BuildContext context) {
@@ -149,12 +253,14 @@ class _OrderCard extends StatelessWidget {
 
             const SizedBox(height: 10),
 
-            if (pickupType == 'window' && windowStart != null && windowEnd != null)
-              _kv("Window", "${_formatTime(windowStart)} - ${_formatTime(windowEnd)}")
-            else if (scheduledAt != null)
-              _kv("Scheduled", _formatDateTime(scheduledAt)),
+          if (pickupType == 'window' && windowStart != null && windowEnd != null)
+            _kv("Window", "${_formatTime(windowStart)} - ${_formatTime(windowEnd)}")
+          else if (scheduledAt != null)
+            _kv("Scheduled", _formatDateTime(scheduledAt)),
 
-            const SizedBox(height: 16),
+          const SizedBox(height: 14),
+          _buildOrderTimeline(status),
+          const SizedBox(height: 16),
 
             if (canReject) ...[
               Row(
