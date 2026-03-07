@@ -173,102 +173,62 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       );
     }
 
-    final userDocStream =
-        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
+    final unreadQuery = FirebaseFirestore.instance
+        .collection('Users')
+        .doc(uid)
+        .collection('sell_requests')
+        .where('status', isEqualTo: 'pending')
+        .where('seen', isEqualTo: false);
 
-    // latest completed pickup for this junkshop
-    final latestNotifQuery = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'pickup')
-        .where('status', isEqualTo: 'completed')
-        .where('active', isEqualTo: false)
-        .where('junkshopId', isEqualTo: uid)
-        .orderBy('updatedAt', descending: true)
-        .limit(1);
+    return StreamBuilder<QuerySnapshot>(
+      stream: unreadQuery.snapshots(),
+      builder: (context, snap) {
+        final unreadCount = snap.data?.docs.length ?? 0;
+        final hasUnread = unreadCount > 0;
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: userDocStream,
-      builder: (context, userSnap) {
-        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
-
-        // ✅ you can reuse lastNotifSeenAt, OR use a separate one:
-        final lastSeen = userData['lastJunkshopNotifSeenAt'] as Timestamp?;
-
-        return StreamBuilder<QuerySnapshot>(
-          stream: latestNotifQuery.snapshots(),
-          builder: (context, snap) {
-            bool hasUnread = false;
-
-            final docs = snap.data?.docs ?? [];
-            if (docs.isNotEmpty) {
-              final data = docs.first.data() as Map<String, dynamic>;
-
-              // prefer completedAt, else updatedAt
-              final updatedAt = (data['completedAt'] is Timestamp)
-                  ? data['completedAt'] as Timestamp
-                  : (data['updatedAt'] is Timestamp)
-                      ? data['updatedAt'] as Timestamp
-                      : null;
-
-              if (updatedAt != null) {
-                if (lastSeen == null) {
-                  hasUnread = true;
-                } else {
-                  hasUnread = updatedAt.toDate().isAfter(lastSeen.toDate());
-                }
-              }
-            }
-
-            return Stack(
-              children: [
-                InkWell(
-                  onTap: () async {
-                    _scaffoldKey.currentState?.openEndDrawer();
-                    await _markJunkshopNotifsSeen();
-                  },
-                  borderRadius: BorderRadius.circular(50),
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.05),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(Icons.notifications_outlined,
-                        color: Colors.grey.shade300),
-                  ),
+        return Stack(
+          children: [
+            InkWell(
+              onTap: () => _scaffoldKey.currentState?.openEndDrawer(),
+              borderRadius: BorderRadius.circular(50),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  shape: BoxShape.circle,
                 ),
-
-                // ✅ red dot (same style as household)
-                if (hasUnread)
-                  Positioned(
-                    right: 8,
-                    top: 8,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
+                child: Icon(
+                  Icons.notifications_outlined,
+                  color: Colors.grey.shade300,
+                ),
+              ),
+            ),
+            if (hasUnread)
+              Positioned(
+                right: 6,
+                top: 6,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text(
+                      unreadCount > 9 ? '9+' : '$unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
-              ],
-            );
-          },
+                ),
+              ),
+          ],
         );
       },
-    );
-  }
-
-  Future<void> _markJunkshopNotifsSeen() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-
-    await FirebaseFirestore.instance.collection('Users').doc(uid).set(
-      {
-        'lastJunkshopNotifSeenAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
     );
   }
   // ================= DRAWERS =================
@@ -281,12 +241,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     }
 
     final query = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'pickup')
-        .where('status', isEqualTo: 'completed')
-        .where('active', isEqualTo: false)
-        .where('junkshopId', isEqualTo: user.uid) // ✅ requires junkshopId saved
-        .orderBy('updatedAt', descending: true)
+        .collection('Users')
+        .doc(user.uid)
+        .collection('sell_requests')
+        .where('status', isEqualTo: 'pending')
+        .orderBy('createdAt', descending: true)
         .limit(50);
 
     String hhmm(DateTime dt) =>
@@ -315,7 +274,6 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             ],
           ),
           const SizedBox(height: 10),
-
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: query.snapshots(),
@@ -323,6 +281,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
+
                 if (snap.hasError) {
                   return Center(
                     child: Text(
@@ -337,7 +296,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                 if (docs.isEmpty) {
                   return const Center(
                     child: Text(
-                      "No completed transactions yet.",
+                      "No sell notifications yet.",
                       style: TextStyle(color: Colors.white70),
                     ),
                   );
@@ -349,15 +308,16 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                     final d = docs[i];
                     final data = d.data() as Map<String, dynamic>;
 
-                    final name = (data['collectorName'] ?? '').toString().trim();
-                    final collectorId = (data['collectorId'] ?? '').toString().trim();
+                    final collectorName =
+                        (data['collectorName'] ?? '').toString().trim();
+                    final collectorId =
+                        (data['collectorId'] ?? '').toString().trim();
+                    final kg = ((data['kg'] as num?) ?? 0).toDouble();
+                    final seen = data['seen'] == true;
 
-                    // ✅ use completedAt if available, else updatedAt
-                    final Timestamp? ts = (data['completedAt'] is Timestamp)
-                        ? data['completedAt'] as Timestamp
-                        : (data['updatedAt'] is Timestamp)
-                            ? data['updatedAt'] as Timestamp
-                            : null;
+                    final Timestamp? ts = (data['createdAt'] is Timestamp)
+                        ? data['createdAt'] as Timestamp
+                        : null;
 
                     final dt = ts?.toDate();
 
@@ -369,19 +329,34 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                         border: Border.all(color: Colors.white.withOpacity(0.08)),
                       ),
                       child: ListTile(
-                        onTap: () {
-                          Navigator.pop(context);
+                        onTap: () async {
+                          // mark this specific notification as seen
+                          await FirebaseFirestore.instance
+                              .collection('Users')
+                              .doc(user.uid)
+                              .collection('sell_requests')
+                              .doc(d.id)
+                              .set({
+                            'seen': true,
+                            'updatedAt': FieldValue.serverTimestamp(),
+                          }, SetOptions(merge: true));
 
-                          final collectorName = (data['collectorName'] ?? '').toString().trim();
-                          final collectorId = (data['collectorId'] ?? '').toString().trim();
+                          if (!context.mounted) return;
+                          Navigator.pop(context);
 
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => ReceiptScreen(
-                                shopID: FirebaseAuth.instance.currentUser!.uid,
-                                prefillCollectorName: collectorName.isEmpty ? null : collectorName,
-                                prefillCollectorId: collectorId.isEmpty ? null : collectorId,
+                                shopID: user.uid,
+                                prefillCollectorName:
+                                    collectorName.isEmpty ? null : collectorName,
+                                prefillCollectorId:
+                                    collectorId.isEmpty ? null : collectorId,
+
+                                // add these to ReceiptScreen if not yet present
+                                prefillKg: kg,
+                                sellRequestId: d.id,
                               ),
                             ),
                           );
@@ -390,28 +365,38 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                           width: 44,
                           height: 44,
                           decoration: BoxDecoration(
-                            color: Colors.green.withOpacity(0.15),
+                            color: seen
+                                ? Colors.white.withOpacity(0.08)
+                                : Colors.orange.withOpacity(0.15),
                             borderRadius: BorderRadius.circular(14),
                           ),
-                          child: const Icon(
-                            Icons.check_circle_outline,
-                            color: Colors.green,
+                          child: Icon(
+                            Icons.local_shipping_outlined,
+                            color: seen ? Colors.white70 : Colors.orangeAccent,
                           ),
                         ),
-                        title: const Text(
-                          "Pickup completed",
-                          style: TextStyle(
+                        title: Text(
+                          collectorName.isEmpty
+                              ? "Collector sell request"
+                              : "$collectorName wants to sell",
+                          style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         subtitle: Text(
-                          name.isEmpty ? "Unnamed household" : "Name: $name",
-                          style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                          "${kg.toStringAsFixed(2)} kg for receipt entry",
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                            fontSize: 12,
+                          ),
                         ),
                         trailing: Text(
                           dt == null ? "" : hhmm(dt),
-                          style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                          style: TextStyle(
+                            color: Colors.grey.shade500,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                     );

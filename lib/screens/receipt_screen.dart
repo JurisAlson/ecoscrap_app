@@ -8,12 +8,16 @@
 
   final String? prefillCollectorName; // ✅
   final String? prefillCollectorId;   // ✅
+  final double? prefillKg;
+  final String? sellRequestId;
 
     const ReceiptScreen({
       super.key,
       required this.shopID,
       this.prefillCollectorName,
       this.prefillCollectorId,
+      this.prefillKg,
+      this.sellRequestId,
     });
 
     @override
@@ -58,6 +62,11 @@
     final List<_ReceiptItem> _items = [];
 
     double get _totalAmount => _items.fold(0.0, (sum, it) => sum + it.subtotal);
+
+    bool get _openedFromCollectorSellRequest =>
+    (widget.sellRequestId?.trim().isNotEmpty ?? false);
+    bool _isLockedSellRequestItem(int index) =>
+    _openedFromCollectorSellRequest && index == 0 && widget.prefillKg != null;
 
     // ✅ robust walk-in check (handles "walk in", "walk-in", "walkin", etc.)
     bool get _isWalkInBuy {
@@ -109,12 +118,13 @@
           _items.removeAt(index);
         });
 
-        @override
+    @override
     void initState() {
       super.initState();
 
       final name = widget.prefillCollectorName?.trim() ?? "";
       final id = widget.prefillCollectorId?.trim();
+      final kg = widget.prefillKg;
 
       if (name.isNotEmpty) {
         _txType = "buy";
@@ -122,6 +132,17 @@
 
         _sourceNameCtrl.text = name;
         _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
+
+        final it = _ReceiptItem();
+        it.categoryValue = kMajorCategories.first;
+        it.subCategoryValue = kBuySubCategories.first;
+
+        if (kg != null && kg > 0) {
+          it.weightCtrl.text = kg.toStringAsFixed(2);
+        }
+
+        _recalcBuyItem(it);
+        _items.add(it);
       }
     }
 
@@ -235,12 +256,12 @@
 
     final isSell = _txType == "sell";
     final isWalkIn = (!isSell && _isWalkInBuy);
+    final fromCollectorSellRequest = _openedFromCollectorSellRequest;
 
     final collectorName = _sourceNameCtrl.text.trim();
     final walkInName = _walkInNameCtrl.text.trim();
 
     try {
-      // 1) must have items
       if (_items.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Add at least 1 item.")),
@@ -248,7 +269,6 @@
         return;
       }
 
-      // 2) validate source (BUY only)
       if (!isSell) {
         if (isWalkIn) {
           if (walkInName.isEmpty) {
@@ -258,7 +278,6 @@
             return;
           }
         } else {
-          // Collector required
           if (collectorName.isEmpty || _sourceUserId == null) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("Select the collector.")),
@@ -268,7 +287,6 @@
         }
       }
 
-      // compute fields
       final sourceType = isSell ? "" : (isWalkIn ? "walkin" : "collector");
       final sourceName = isSell ? "" : (isWalkIn ? walkInName : collectorName);
 
@@ -276,7 +294,6 @@
           ? _selectedSellBranch
           : (isWalkIn ? walkInName : collectorName);
 
-      // validate weights + inventory selection for SELL
       double totalWeightKg = 0.0;
 
       for (final it in _items) {
@@ -297,7 +314,6 @@
         }
       }
 
-      // prevent duplicate inventory selection in SELL
       if (isSell) {
         final ids = _items.map((it) => it.inventoryDocId).whereType<String>().toList();
         if (ids.toSet().length != ids.length) {
@@ -313,7 +329,6 @@
       final txCol = shopRef.collection('transaction');
       final invCol = shopRef.collection('inventory');
 
-      // pre-fetch BUY merge targets outside transaction
       final Map<_ReceiptItem, String?> buyTargets = {};
       if (!isSell) {
         for (final it in _items) {
@@ -326,6 +341,44 @@
       await db.runTransaction((trx) async {
         final txRef = txCol.doc();
         final itemsPayload = <Map<String, dynamic>>[];
+
+        DocumentReference<Map<String, dynamic>>? sellReqRef;
+
+        if (fromCollectorSellRequest && widget.sellRequestId != null) {
+          sellReqRef = db
+              .collection('Users')
+              .doc(widget.shopID)
+              .collection('sell_requests')
+              .doc(widget.sellRequestId);
+
+          final sellReqSnap = await trx.get(sellReqRef);
+
+          if (!sellReqSnap.exists) {
+            throw Exception("Sell request not found.");
+          }
+
+          final sellReqData = sellReqSnap.data() ?? {};
+          final status = (sellReqData['status'] ?? '').toString();
+
+          if (status == 'completed' || status == 'processed') {
+            throw Exception("This sell request was already processed.");
+          }
+
+          final collectorIdFromSellRequest =
+              (sellReqData['collectorId'] ?? '').toString().trim();
+
+          final requestedKg = ((sellReqData['kg'] as num?) ?? 0).toDouble();
+
+          if ((requestedKg - totalWeightKg).abs() > 0.001) {
+            throw Exception(
+              "Receipt weight must match the collector sell request (${requestedKg.toStringAsFixed(2)} kg).",
+            );
+          }
+
+          if (collectorIdFromSellRequest.isEmpty) {
+            throw Exception("Missing collectorId in sell request.");
+          }
+        }
 
         for (final it in _items) {
           final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
@@ -422,12 +475,32 @@
         };
 
         if (!isSell) {
-          payload['sourceType'] = sourceType;     // walkin | collector
+          payload['sourceType'] = sourceType;
           payload['sourceName'] = sourceName;
           if (!isWalkIn) payload['sourceUserId'] = _sourceUserId;
         }
 
+        if (fromCollectorSellRequest && widget.sellRequestId != null) {
+          payload['sellRequestId'] = widget.sellRequestId;
+          payload['receiptOrigin'] = 'collector_sell_request';
+        }
+
         trx.set(txRef, payload);
+
+        if (fromCollectorSellRequest && widget.sellRequestId != null && sellReqRef != null) {
+          trx.set(
+            sellReqRef,
+            {
+              'status': 'completed',
+              'seen': true,
+              'receiptSaved': true,
+              'receiptTransactionId': txRef.id,
+              'processedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+        }
       });
 
       if (!mounted) return;
@@ -467,8 +540,28 @@
                   ),
                   child: Row(
                     children: [
-                      _buildTypeButton("SELL", "sell"),
-                      _buildTypeButton("BUY", "buy"),
+                      if (_openedFromCollectorSellRequest) ...[
+                        Expanded(
+                          child: Container(
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              color: primaryColor.withOpacity(0.25),
+                            ),
+                            child: const Text(
+                              "BUY",
+                              style: TextStyle(
+                                color: Color(0xFF1FA9A7),
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ] else ...[
+                        _buildTypeButton("SELL", "sell"),
+                        _buildTypeButton("BUY", "buy"),
+                      ],
                     ],
                   ),
                 ),
@@ -481,21 +574,34 @@
                     _label(isSell ? "Client" : "Source"),
                     const SizedBox(height: 8),
 
-                    if (isSell)
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedSellBranch,
-                        items: _sellBranches
-                            .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                            .toList(),
-                        onChanged: (v) {
-                          if (v == null) return;
-                          setState(() => _selectedSellBranch = v);
-                        },
-                        dropdownColor: const Color(0xFF0F172A),
-                        style: const TextStyle(color: Colors.white),
-                        decoration: _dropdownDecoration(""),
-                      )
-                    else ...[
+                    if (_openedFromCollectorSellRequest) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withOpacity(0.2)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              "Collector",
+                              style: TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _sourceNameCtrl.text.isEmpty ? "Unknown Collector" : _sourceNameCtrl.text,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
                       DropdownButtonFormField<String>(
                         initialValue: _selectedBuySource,
                         items: _buySources
@@ -505,8 +611,6 @@
                           if (v == null) return;
                           setState(() {
                             _selectedBuySource = v;
-
-                            // reset fields when source changes
                             _sourceNameCtrl.clear();
                             _sourceUserId = null;
                             _walkInNameCtrl.clear();
@@ -581,6 +685,7 @@
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                  if (!_openedFromCollectorSellRequest)
                   TextButton.icon(
                     onPressed: _addItem,
                     icon: const Icon(Icons.add, color: Colors.green),
@@ -664,8 +769,11 @@
                               ),
                             ),
                             IconButton(
-                              onPressed: () => _removeItem(index),
-                              icon: const Icon(Icons.close, color: Colors.red),
+                              onPressed: _isLockedSellRequestItem(index) ? null : () => _removeItem(index),
+                              icon: Icon(
+                                Icons.close,
+                                color: _isLockedSellRequestItem(index) ? Colors.white24 : Colors.red,
+                              ),
                             ),
                           ],
                         ),
@@ -678,6 +786,7 @@
                                 controller: item.weightCtrl,
                                 label: "Weight (kg)",
                                 hint: "0.0",
+                                readOnly: _isLockedSellRequestItem(index),
                                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                 onChanged: (_) => setState(() {
                                   if (isSell) {
@@ -744,6 +853,7 @@
                   ),
                 ),
               ),
+              
 
               const SizedBox(height: 12),
               const Center(
