@@ -8,6 +8,7 @@ import 'auth/login_page.dart';
 import 'Collector/collectors_dashboard.dart';
 import 'household/household_dashboard.dart';
 import 'auth/restricted_account_page.dart';
+import 'screens/junkshop/junkshop_dashboard.dart';
 
 Future<void> grantMeAdminClaimIfOwner(User user) async {
   if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
@@ -33,18 +34,20 @@ class RoleGate extends StatefulWidget {
 class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
   String _normRole(dynamic raw) {
     final s = (raw ?? "").toString().trim().toLowerCase();
+
     if (s == "admins" || s == "admin") return "admin";
     if (s == "collectors" || s == "collector") return "collector";
+    if (s == "junkshop" || s == "junkshops") return "junkshop";
     if (s == "users" ||
         s == "user" ||
         s == "household" ||
         s == "households") {
       return "user";
     }
+
     return "unknown";
   }
 
-  // ✅ same reason mapping used by admin/login
   static const Map<String, String> restrictionReasonMap = {
     "potential_fake": "Potential fake account / identity",
     "false_information": "False information",
@@ -86,22 +89,19 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     };
   }
 
-  // ✅ USERS: only residentStatus matters
   bool _isResidentApproved(Map<String, dynamic> data) {
     final residentStatus =
         (data['residentStatus'] ?? "").toString().trim().toLowerCase();
     return residentStatus == "approved";
   }
 
-  // ✅ COLLECTORS: only collectorStatus matters
   bool _isCollectorApproved(Map<String, dynamic> data) {
     final status =
         (data['collectorStatus'] ?? "").toString().trim().toLowerCase();
 
-    if (status == "adminapproved") return true; // NEW
-    if (status == "approved") return true; // LEGACY
+    if (status == "adminapproved") return true;
+    if (status == "approved") return true;
 
-    // Optional legacy fallback
     final legacyAdminOk = data['adminVerified'] == true;
     final legacyAdminStatus =
         (data['adminStatus'] ?? "").toString().toLowerCase() == "approved";
@@ -129,6 +129,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
   Future<void> _logout(BuildContext context) async {
     await _setOnline(false);
     await FirebaseAuth.instance.signOut();
+
     if (context.mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginPage()),
@@ -167,9 +168,6 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return const LoginPage();
 
-    // Optional:
-    // grantMeAdminClaimIfOwner(user);
-
     final docStream = FirebaseFirestore.instance
         .collection('Users')
         .doc(user.uid)
@@ -204,9 +202,9 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
         final data = docSnap.data!.data() ?? {};
 
-        // ✅ HARD BLOCK: Restricted users always go to RestrictedAccountPage
         final status =
             (data['status'] ?? 'active').toString().trim().toLowerCase();
+
         if (status == "restricted") {
           final info = _buildRestrictionInfo(data);
           return RestrictedAccountPage(
@@ -219,12 +217,10 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
         final role = _normRole(data['Roles'] ?? data['roles'] ?? data['role']);
 
-        // ✅ Debug (remove later)
         debugPrint(
           "RoleGate => role=$role | status=$status | residentStatus=${data['residentStatus']} | collectorStatus=${data['collectorStatus']}",
         );
 
-        // ===== ADMIN =====
         if (role == 'admin') {
           return FutureBuilder<bool>(
             future: _hasAdminClaim(user),
@@ -259,7 +255,6 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
           );
         }
 
-        // ===== COLLECTOR =====
         if (role == 'collector') {
           final ok = _isCollectorApproved(data);
 
@@ -281,13 +276,23 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
           return const CollectorsDashboardPage();
         }
 
-        // ===== USER / HOUSEHOLD =====
+        if (role == 'junkshop') {
+          final shopName =
+              (data['Name'] ?? data['name'] ?? data['shopName'] ?? 'Junkshop')
+                  .toString()
+                  .trim();
+
+          return JunkshopDashboardPage(
+            shopID: user.uid,
+            shopName: shopName.isNotEmpty ? shopName : 'Junkshop',
+          );
+        }
+
         if (role == 'user') {
           final ok = _isResidentApproved(data);
 
           if (!ok) {
-            final rs =
-                (data['residentStatus'] ?? "").toString().toLowerCase();
+            final rs = (data['residentStatus'] ?? "").toString().toLowerCase();
 
             final msg = rs == "rejected"
                 ? "Account verification rejected.\n\nPlease re-submit a valid Government ID."
@@ -303,11 +308,10 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
           return const DashboardPage();
         }
 
-        // ===== UNKNOWN =====
         return _RoleErrorPage(
           message:
               "No valid role found for this account.\n\n"
-              "Fix Users/{uid}.Roles to one of: admin, user, collector.",
+              "Fix Users/{uid}.Roles to one of: admin, user, collector, junkshop.",
           actionLabel: "Logout",
           onAction: () => _logout(context),
         );

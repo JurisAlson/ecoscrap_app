@@ -352,9 +352,9 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       _toast(e.message ?? "Authentication failed", error: true);
     } catch (e) {
       // ✅ best-effort cleanup for partially created account (optional)
-      if (storagePathForPossibleCleanup != null && storagePathForPossibleCleanup!.isNotEmpty) {
+      if (storagePathForPossibleCleanup != null && storagePathForPossibleCleanup.isNotEmpty) {
         try {
-          await FirebaseStorage.instance.ref(storagePathForPossibleCleanup!).delete();
+          await FirebaseStorage.instance.ref(storagePathForPossibleCleanup).delete();
         } catch (_) {}
       }
       _toast("An unexpected error occurred: $e", error: true);
