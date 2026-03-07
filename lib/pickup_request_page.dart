@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'waiting_collector_page.dart';
 
 class PickupRequestPage extends StatefulWidget {
   final LatLng pickupLatLng;
@@ -51,10 +52,41 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
   String? _selectedBagKey;
 
+  String? _driverError;
+  String? _windowError;
+  String? _bagError;
+  String? _streetError;
+  String? _subdivisionError;
+  String? _landmarkError;
+  String? _phoneError;
+
+  final TextEditingController _streetController = TextEditingController();
+  final TextEditingController _subdivisionController = TextEditingController();
+  final TextEditingController _landmarkController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+
   static const List<Map<String, dynamic>> _bagOptions = [
-    {"key": "small", "label": "Small Bag", "kg": 2},
-    {"key": "medium", "label": "Medium Bag", "kg": 5},
-    {"key": "large", "label": "Large Bag", "kg": 10},
+    {
+      "key": "small",
+      "label": "Small Bag",
+      "minKg": 0,
+      "maxKg": 2,
+      "estimatedKg": 2,
+    },
+    {
+      "key": "medium",
+      "label": "Medium Bag",
+      "minKg": 2,
+      "maxKg": 5,
+      "estimatedKg": 5,
+    },
+    {
+      "key": "large",
+      "label": "Large Bag",
+      "minKg": 5,
+      "maxKg": 10,
+      "estimatedKg": 10,
+    },
   ];
 
   static const List<Map<String, dynamic>> _windowOptions = [
@@ -65,14 +97,29 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     {"label": "5–8 PM", "startHour": 17, "endHour": 20},
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedPhoneNumber();
+  }
+
+  @override
+  void dispose() {
+    _streetController.dispose();
+    _subdivisionController.dispose();
+    _landmarkController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
   String get _pickupLocationLabel {
     return widget.pickupSource == "pin"
         ? "Pinned Location"
-        : "Current Location (GPS)";
+        : "Current Location";
   }
 
   String get _scheduleSummary {
-    if (_pickupType == "now") return "Pickup: Now (ASAP)";
+    if (_pickupType == "now") return "Pickup: Now";
     if (_windowStart == null || _windowEnd == null) {
       return "Pickup: Choose a time window";
     }
@@ -111,6 +158,23 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
+  bool _isValidPHPhone(String phone) {
+    final normalized = phone.replaceAll(RegExp(r'[\s\-]'), '');
+    final phRegex = RegExp(r'^(09\d{9}|\+639\d{9}|639\d{9})$');
+    return phRegex.hasMatch(normalized);
+  }
+
+  String _normalizePHPhone(String phone) {
+    final normalized = phone.replaceAll(RegExp(r'[\s\-]'), '');
+
+    if (normalized.startsWith('+63')) return normalized;
+    if (normalized.startsWith('63')) return '+$normalized';
+    if (normalized.startsWith('09')) {
+      return '+63${normalized.substring(1)}';
+    }
+    return normalized;
+  }
+
   Future<void> _pickScheduleDate() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
@@ -126,6 +190,9 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
               surface: _sheet,
               onPrimary: _bg,
               onSurface: _textPrimary,
+            ),
+            dialogTheme: const DialogThemeData(
+              backgroundColor: _sheet,
             ),
           ),
           child: child!,
@@ -155,7 +222,42 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
       _windowStart = null;
       _windowEnd = null;
       _scheduleDate = DateTime.now();
+      _windowError = null;
     });
+  }
+
+  Future<void> _loadSavedPhoneNumber() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final doc =
+          await FirebaseFirestore.instance.collection('Users').doc(user.uid).get();
+
+      final data = doc.data();
+      if (data == null) return;
+
+      final savedPhone = (data['phoneNumber'] ?? '').toString().trim();
+      if (savedPhone.isNotEmpty) {
+        _phoneController.text = savedPhone;
+      }
+    } catch (e) {
+      debugPrint("Failed to load saved phone number: $e");
+    }
+  }
+
+  Future<void> _savePhoneNumber(String phone) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+        'phoneNumber': phone,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("Failed to save phone number: $e");
+    }
   }
 
   Future<String> _getUserName(String uid, {String fallback = "Unknown"}) async {
@@ -177,12 +279,61 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     }
   }
 
+  bool _validateForm() {
+    final street = _streetController.text.trim();
+    final subdivision = _subdivisionController.text.trim();
+    final landmark = _landmarkController.text.trim();
+    final phone = _phoneController.text.trim();
+
+    setState(() {
+      _driverError =
+          _selectedCollectorId == null ? "Please choose a driver." : null;
+      _bagError = _selectedBagKey == null
+          ? "Please select a bag size (required)."
+          : null;
+      _windowError = (_pickupType == "window" &&
+              (_windowStart == null || _windowEnd == null))
+          ? "Please select a time window."
+          : null;
+      _streetError = street.isEmpty ? "Please enter your street." : null;
+      _subdivisionError =
+          subdivision.isEmpty ? "Please enter your subdivision." : null;
+      _landmarkError = landmark.isEmpty ? "Please enter a landmark." : null;
+
+      if (phone.isEmpty) {
+        _phoneError = "Please enter your phone number.";
+      } else if (!_isValidPHPhone(phone)) {
+        _phoneError = "Please enter a valid PH number (09XXXXXXXXX).";
+      } else {
+        _phoneError = null;
+      }
+    });
+
+    return _selectedCollectorId != null &&
+        _selectedBagKey != null &&
+        (_pickupType == "now" ||
+            (_windowStart != null && _windowEnd != null)) &&
+        street.isNotEmpty &&
+        subdivision.isNotEmpty &&
+        landmark.isNotEmpty &&
+        phone.isNotEmpty &&
+        _isValidPHPhone(phone);
+  }
+
   Future<void> requestPickupWithConfirm({
     required String bagKey,
     required String bagLabel,
-    required int bagKg,
+    required int bagMinKg,
+    required int bagMaxKg,
+    required int bagEstimatedKg,
   }) async {
     final bool isWindow = _pickupType == "window";
+
+    if (!_validateForm()) {
+      _snack("Please complete all required fields.", bg: _danger);
+      return;
+    }
+
     if (isWindow && (_windowStart == null || _windowEnd == null)) {
       _snack("Please select a time window.", bg: _danger);
       return;
@@ -195,6 +346,11 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
       _snack("Please choose an available collector first.", bg: _danger);
       return;
     }
+
+    final street = _streetController.text.trim();
+    final subdivision = _subdivisionController.text.trim();
+    final landmark = _landmarkController.text.trim();
+    final phoneNumber = _normalizePHPhone(_phoneController.text.trim());
 
     try {
       final active = await FirebaseFirestore.instance
@@ -231,8 +387,11 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
           "Send pickup request to $collectorName?\n\n"
           "Driver: $collectorName\n"
           "Pickup Location: ${widget.pickupSource == "pin" ? "Pinned location" : "Current GPS"}\n"
+          "Address: $street, $subdivision\n"
+          "Landmark: $landmark\n"
+          "Phone: $phoneNumber\n"
           "$_scheduleSummary\n"
-          "Bag: $bagLabel (${bagKg}kg)\n"
+          "Bag: $bagLabel ($bagMinKg-$bagMaxKg kg estimated)\n"
           "Distance/ETA: ${widget.distanceKm.toStringAsFixed(1)} km • ${widget.etaMinutes} min\n",
           style: const TextStyle(
             color: _textSecondary,
@@ -242,6 +401,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
+            style: TextButton.styleFrom(foregroundColor: _textSecondary),
             child: const Text("Cancel"),
           ),
           ElevatedButton(
@@ -259,7 +419,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     if (confirmed != true) return;
 
     try {
-      await FirebaseFirestore.instance.collection('requests').add({
+      final docRef = await FirebaseFirestore.instance.collection('requests').add({
         'type': 'pickup',
         'active': true,
         'householdId': user.uid,
@@ -287,9 +447,16 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
           widget.moresLatLng.latitude,
           widget.moresLatLng.longitude,
         ),
+        'street': street,
+        'subdivision': subdivision,
+        'landmark': landmark,
+        'phoneNumber': phoneNumber,
+        'fullAddress': "$street, $subdivision",
         'bagKey': bagKey,
         'bagLabel': bagLabel,
-        'bagKg': bagKg,
+        'bagMinKg': bagMinKg,
+        'bagMaxKg': bagMaxKg,
+        'bagEstimatedKg': bagEstimatedKg,
         'distanceKm': double.parse(widget.distanceKm.toStringAsFixed(2)),
         'etaMinutes': widget.etaMinutes,
         'arrived': false,
@@ -299,8 +466,22 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
+      await _savePhoneNumber(phoneNumber);
+
       if (!mounted) return;
-      _snack("Pickup request sent!", bg: _accent);
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => WaitingCollectorPage(
+            requestId: docRef.id,
+            pickupLatLng: widget.pickupLatLng,
+            destinationLatLng: widget.moresLatLng,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
       if (mounted) _snack("Pickup failed: $e", bg: _danger);
@@ -363,375 +544,524 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     );
   }
 
+  Widget _inputField({
+    required TextEditingController controller,
+    required String hint,
+    TextInputType keyboardType = TextInputType.text,
+    int maxLines = 1,
+    String? errorText,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: _surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: errorText != null ? _danger : _border,
+            ),
+          ),
+          child: TextField(
+            controller: controller,
+            keyboardType: keyboardType,
+            maxLines: maxLines,
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+            cursorColor: _accent,
+            decoration: const InputDecoration().copyWith(
+              filled: true,
+              fillColor: _surface,
+              hintText: hint,
+              hintStyle: const TextStyle(color: _textMuted),
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 14,
+              ),
+            ),
+            onChanged: (_) {
+              setState(() {
+                if (controller == _streetController) _streetError = null;
+                if (controller == _subdivisionController) _subdivisionError = null;
+                if (controller == _landmarkController) _landmarkError = null;
+                if (controller == _phoneController) _phoneError = null;
+              });
+            },
+          ),
+        ),
+        if (errorText != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            errorText,
+            style: const TextStyle(
+              color: _danger,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _sectionTitle(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 10,
+        color: _textMuted,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 1,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    String? windowError;
-    String? driverError;
-    String? bagError;
-
     final bagMeta = _bagOptions.firstWhere(
       (b) => b["key"] == _selectedBagKey,
-      orElse: () => {"label": "-", "kg": 0, "key": ""},
+      orElse: () => {
+        "label": "-",
+        "minKg": 0,
+        "maxKg": 0,
+        "estimatedKg": 0,
+        "key": ""
+      },
     );
 
     final bagLabel = bagMeta["label"] as String;
-    final bagKg = bagMeta["kg"] as int;
+    final bagMinKg = bagMeta["minKg"] as int;
+    final bagMaxKg = bagMeta["maxKg"] as int;
+    final bagEstimatedKg = bagMeta["estimatedKg"] as int;
 
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _sheet,
-        elevation: 0,
-        title: const Text(
-          "Request Pickup",
-          style: TextStyle(
+    final hasCollectors = widget.availableCollectors.isNotEmpty;
+    final bagPicked = _selectedBagKey != null;
+    final collectorPicked = _selectedCollectorId != null;
+    final isWindow = _pickupType == "window";
+    final windowOk = !isWindow || (_windowStart != null && _windowEnd != null);
+
+    final addressOk = _streetController.text.trim().isNotEmpty &&
+        _subdivisionController.text.trim().isNotEmpty &&
+        _landmarkController.text.trim().isNotEmpty &&
+        _phoneController.text.trim().isNotEmpty &&
+        _isValidPHPhone(_phoneController.text.trim());
+
+    final canSubmit = bagPicked && collectorPicked && windowOk && addressOk;
+
+    return Theme(
+      data: Theme.of(context).copyWith(
+        canvasColor: _dropdown,
+        chipTheme: ChipThemeData(
+          backgroundColor: _surface,
+          disabledColor: _surface,
+          selectedColor: _accent,
+          secondarySelectedColor: _accent,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          labelStyle: const TextStyle(
             color: _textPrimary,
-            fontWeight: FontWeight.w900,
+            fontWeight: FontWeight.w700,
+          ),
+          secondaryLabelStyle: const TextStyle(
+            color: _bg,
+            fontWeight: FontWeight.w800,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: _border),
           ),
         ),
       ),
-      body: StatefulBuilder(
-        builder: (context, setLocal) {
-          void localSet(VoidCallback fn) {
-            setState(fn);
-            setLocal(fn);
-          }
+      child: Scaffold(
+        backgroundColor: _bg,
+        appBar: AppBar(
+          backgroundColor: _sheet,
+          elevation: 0,
+          title: const Text(
+            "Request Pickup",
+            style: TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          iconTheme: const IconThemeData(color: _textPrimary),
+        ),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _miniInfoCard(
+                title: "Estimated Trip",
+                value:
+                    "${widget.distanceKm.toStringAsFixed(1)} km • ${widget.etaMinutes} min",
+                icon: Icons.route_outlined,
+                valueColor: _accent,
+              ),
+              const SizedBox(height: 14),
 
-          final hasCollectors = widget.availableCollectors.isNotEmpty;
-          final bagPicked = _selectedBagKey != null;
-          final collectorPicked = _selectedCollectorId != null;
-          final isWindow = _pickupType == "window";
-          final windowOk =
-              !isWindow || (_windowStart != null && _windowEnd != null);
-
-          final canSubmit = bagPicked && collectorPicked && windowOk;
-
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _miniInfoCard(
-                  title: "Estimated Trip",
-                  value:
-                      "${widget.distanceKm.toStringAsFixed(1)} km • ${widget.etaMinutes} min",
-                  icon: Icons.route_outlined,
-                  valueColor: _accent,
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: _surface,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: _border),
                 ),
-                const SizedBox(height: 14),
-
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: _surface,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: _border),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "PICKUP LOCATION",
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: _textMuted,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _pickupLocationLabel,
-                        style: const TextStyle(
-                          color: _textPrimary,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 18),
-                const Text(
-                  "CHOOSE A DRIVER",
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: _textMuted,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1,
-                  ),
-                ),
-                if (driverError != null) ...[
-                  const SizedBox(height: 8),
-                  Text(driverError!, style: const TextStyle(color: _danger)),
-                ],
-                const SizedBox(height: 8),
-
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: _surface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _border),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value: _selectedCollectorId,
-                      dropdownColor: _dropdown,
-                      isExpanded: true,
-                      hint: Text(
-                        hasCollectors
-                            ? "Choose a driver"
-                            : "No collectors online",
-                        style: const TextStyle(color: _textMuted),
-                      ),
-                      items: widget.availableCollectors.map((c) {
-                        final uid = c['uid']!;
-                        final name = c['name']!;
-                        return DropdownMenuItem<String>(
-                          value: uid,
-                          child: Text(
-                            name,
-                            style: const TextStyle(
-                              color: _textPrimary,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                      onChanged: hasCollectors
-                          ? (uid) {
-                              if (uid == null) return;
-                              final found = widget.availableCollectors
-                                  .firstWhere((c) => c['uid'] == uid);
-                              localSet(() {
-                                _selectedCollectorId = uid;
-                                _selectedCollectorName = found['name'];
-                                driverError = null;
-                              });
-                            }
-                          : null,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 18),
-                const Text(
-                  "PICKUP SCHEDULE",
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: _textMuted,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1,
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                Text(
-                  _scheduleSummary,
-                  style: const TextStyle(
-                    color: _textPrimary,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 10),
-
-                Wrap(
-                  spacing: 10,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    ChoiceChip(
-                      label: const Text("Now (ASAP)"),
-                      selected: _pickupType == "now",
-                      onSelected: (_) => localSet(() {
-                        windowError = null;
-                        _selectNow();
-                      }),
-                    ),
-                    ChoiceChip(
-                      label: const Text("Schedule (Window)"),
-                      selected: _pickupType == "window",
-                      onSelected: (_) => localSet(() {
-                        windowError = null;
-                        _pickupType = "window";
-                      }),
+                    _sectionTitle("PICKUP LOCATION"),
+                    const SizedBox(height: 8),
+                    Text(
+                      _pickupLocationLabel,
+                      style: const TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ],
                 ),
+              ),
 
-                if (_pickupType == "window") ...[
-                  const SizedBox(height: 12),
-                  InkWell(
-                    onTap: () async {
-                      await _pickScheduleDate();
-                      setLocal(() => windowError = null);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _surfaceAlt,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: _border),
-                      ),
-                      child: Text(
-                        "${_scheduleDate.year}-${_scheduleDate.month.toString().padLeft(2, '0')}-${_scheduleDate.day.toString().padLeft(2, '0')}",
-                        style: const TextStyle(
-                          color: _textPrimary,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
+              const SizedBox(height: 18),
+              _sectionTitle("CHOOSE A DRIVER"),
+              if (_driverError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _driverError!,
+                  style: const TextStyle(color: _danger),
+                ),
+              ],
+              const SizedBox(height: 8),
+
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: _surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _driverError != null ? _danger : _border,
                   ),
-                  const SizedBox(height: 12),
-
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: _windowOptions.map((w) {
-                      final label = w["label"] as String;
-                      final startHour = w["startHour"] as int;
-                      final endHour = w["endHour"] as int;
-
-                      final selected = _windowStart != null &&
-                          _windowEnd != null &&
-                          _windowStart!.hour == startHour &&
-                          _windowEnd!.hour == endHour;
-
-                      return ChoiceChip(
-                        label: Text(label),
-                        selected: selected,
-                        onSelected: (_) {
-                          final d = _scheduleDate;
-                          final start =
-                              DateTime(d.year, d.month, d.day, startHour, 0);
-                          final end =
-                              DateTime(d.year, d.month, d.day, endHour, 0);
-                          final now = DateTime.now();
-
-                          if (end.isBefore(now)) {
-                            setLocal(() => windowError =
-                                "That time window already ended. Choose a later window.");
-                            return;
-                          }
-
-                          if (start.isBefore(
-                                    now.add(const Duration(minutes: 10)),
-                                  ) &&
-                              _dateOnly(d) == _dateOnly(now)) {
-                            setLocal(() => windowError =
-                                "Please choose a window at least 10 minutes from now.");
-                            return;
-                          }
-
-                          localSet(() {
-                            windowError = null;
-                            _pickupType = "window";
-                            _windowStart = start;
-                            _windowEnd = end;
-                          });
-                        },
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedCollectorId,
+                    dropdownColor: _dropdown,
+                    isExpanded: true,
+                    iconEnabledColor: _textSecondary,
+                    hint: Text(
+                      hasCollectors ? "Choose a driver" : "No collectors online",
+                      style: const TextStyle(color: _textMuted),
+                    ),
+                    style: const TextStyle(color: _textPrimary),
+                    items: widget.availableCollectors.map((c) {
+                      final uid = c['uid']!;
+                      final name = c['name']!;
+                      return DropdownMenuItem<String>(
+                        value: uid,
+                        child: Text(
+                          name,
+                          style: const TextStyle(
+                            color: _textPrimary,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       );
                     }).toList(),
-                  ),
-
-                  if (windowError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(windowError!, style: const TextStyle(color: _danger)),
-                  ],
-                ],
-
-                const SizedBox(height: 18),
-                const Text(
-                  "BAG SIZE (REQUIRED)",
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: _textMuted,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1,
+                    onChanged: hasCollectors
+                        ? (uid) {
+                            if (uid == null) return;
+                            final found = widget.availableCollectors
+                                .firstWhere((c) => c['uid'] == uid);
+                            setState(() {
+                              _selectedCollectorId = uid;
+                              _selectedCollectorName = found['name'];
+                              _driverError = null;
+                            });
+                          }
+                        : null,
                   ),
                 ),
-                if (bagError != null) ...[
-                  const SizedBox(height: 8),
-                  Text(bagError!, style: const TextStyle(color: _danger)),
-                ],
-                const SizedBox(height: 8),
+              ),
 
+              const SizedBox(height: 18),
+              _sectionTitle("PICKUP SCHEDULE"),
+              const SizedBox(height: 8),
+
+              Text(
+                _scheduleSummary,
+                style: const TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  ChoiceChip(
+                    label: const Text("Now"),
+                    selected: _pickupType == "now",
+                    selectedColor: _accent,
+                    backgroundColor: _surface,
+                    labelStyle: TextStyle(
+                      color: _pickupType == "now" ? _bg : _textPrimary,
+                      fontWeight: FontWeight.w800,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: _border),
+                    ),
+                    onSelected: (_) => _selectNow(),
+                  ),
+                  ChoiceChip(
+                    label: const Text("Schedule"),
+                    selected: _pickupType == "window",
+                    selectedColor: _accent,
+                    backgroundColor: _surface,
+                    labelStyle: TextStyle(
+                      color: _pickupType == "window" ? _bg : _textPrimary,
+                      fontWeight: FontWeight.w800,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: _border),
+                    ),
+                    onSelected: (_) {
+                      setState(() {
+                        _windowError = null;
+                        _pickupType = "window";
+                      });
+                    },
+                  ),
+                ],
+              ),
+
+              if (_pickupType == "window") ...[
+                const SizedBox(height: 12),
+                InkWell(
+                  onTap: () async {
+                    await _pickScheduleDate();
+                    setState(() => _windowError = null);
+                  },
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _surfaceAlt,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _windowError != null ? _danger : _border,
+                      ),
+                    ),
+                    child: Text(
+                      "${_scheduleDate.year}-${_scheduleDate.month.toString().padLeft(2, '0')}-${_scheduleDate.day.toString().padLeft(2, '0')}",
+                      style: const TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
                 Wrap(
                   spacing: 10,
                   runSpacing: 10,
-                  children: _bagOptions.map((b) {
-                    final key = b["key"] as String;
-                    final label = b["label"] as String;
-                    final kg = b["kg"] as int;
-                    final selected = _selectedBagKey == key;
+                  children: _windowOptions.map((w) {
+                    final label = w["label"] as String;
+                    final startHour = w["startHour"] as int;
+                    final endHour = w["endHour"] as int;
+
+                    final selected = _windowStart != null &&
+                        _windowEnd != null &&
+                        _windowStart!.hour == startHour &&
+                        _windowEnd!.hour == endHour;
 
                     return ChoiceChip(
-                      label: Text("$label • ${kg}kg"),
+                      label: Text(label),
                       selected: selected,
-                      onSelected: (_) => localSet(() {
-                        _selectedBagKey = key;
-                        bagError = null;
-                      }),
+                      selectedColor: _accent,
+                      backgroundColor: _surface,
+                      labelStyle: TextStyle(
+                        color: selected ? _bg : _textPrimary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: const BorderSide(color: _border),
+                      ),
+                      onSelected: (_) {
+                        final d = _scheduleDate;
+                        final start =
+                            DateTime(d.year, d.month, d.day, startHour, 0);
+                        final end =
+                            DateTime(d.year, d.month, d.day, endHour, 0);
+                        final now = DateTime.now();
+
+                        if (end.isBefore(now)) {
+                          setState(() {
+                            _windowError =
+                                "That time window already ended. Choose a later window.";
+                          });
+                          return;
+                        }
+
+                        if (start.isBefore(now.add(const Duration(minutes: 10))) &&
+                            _dateOnly(d) == _dateOnly(now)) {
+                          setState(() {
+                            _windowError =
+                                "Please choose a window at least 10 minutes from now.";
+                          });
+                          return;
+                        }
+
+                        setState(() {
+                          _windowError = null;
+                          _pickupType = "window";
+                          _windowStart = start;
+                          _windowEnd = end;
+                        });
+                      },
                     );
                   }).toList(),
                 ),
-
-                const SizedBox(height: 24),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: canSubmit
-                        ? () async {
-                            final selectedId = _selectedCollectorId;
-                            final stillOnline = selectedId != null &&
-                                widget.availableCollectors.any(
-                                  (c) => c['uid'] == selectedId,
-                                );
-
-                            if (!stillOnline) {
-                              _snack(
-                                "Selected driver is no longer available. Please choose another.",
-                                bg: _danger,
-                              );
-                              return;
-                            }
-
-                            await requestPickupWithConfirm(
-                              bagKey: _selectedBagKey!,
-                              bagLabel: bagLabel,
-                              bagKg: bagKg,
-                            );
-                          }
-                        : () {
-                            setLocal(() {
-                              if (!collectorPicked) {
-                                driverError = "Please choose a driver.";
-                              }
-                              if (!bagPicked) {
-                                bagError =
-                                    "Please select a bag size (required).";
-                              }
-                              if (_pickupType == "window" &&
-                                  (_windowStart == null || _windowEnd == null)) {
-                                windowError = "Please select a time window.";
-                              }
-                            });
-                          },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _accent,
-                      foregroundColor: _bg,
-                    ),
-                    child: const Text(
-                      "CONFIRM PICKUP",
-                      style: TextStyle(fontWeight: FontWeight.w900),
-                    ),
+                if (_windowError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _windowError!,
+                    style: const TextStyle(color: _danger),
                   ),
+                ],
+              ],
+
+              const SizedBox(height: 18),
+              _sectionTitle("ADDRESS DETAILS"),
+              const SizedBox(height: 8),
+              _inputField(
+                controller: _streetController,
+                hint: "Street",
+                errorText: _streetError,
+              ),
+              const SizedBox(height: 10),
+              _inputField(
+                controller: _subdivisionController,
+                hint: "Subdivision",
+                errorText: _subdivisionError,
+              ),
+              const SizedBox(height: 10),
+              _inputField(
+                controller: _landmarkController,
+                hint: "Landmark (example: near blue gate / basketball court)",
+                errorText: _landmarkError,
+              ),
+              const SizedBox(height: 10),
+              _inputField(
+                controller: _phoneController,
+                hint: "Phone Number (09XXXXXXXXX)",
+                keyboardType: TextInputType.phone,
+                errorText: _phoneError,
+              ),
+
+              const SizedBox(height: 18),
+              _sectionTitle("BAG SIZE (REQUIRED)"),
+              if (_bagError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _bagError!,
+                  style: const TextStyle(color: _danger),
                 ),
               ],
-            ),
-          );
-        },
+              const SizedBox(height: 8),
+
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: _bagOptions.map((b) {
+                  final key = b["key"] as String;
+                  final label = b["label"] as String;
+                  final minKg = b["minKg"] as int;
+                  final maxKg = b["maxKg"] as int;
+                  final selected = _selectedBagKey == key;
+
+                  return ChoiceChip(
+                    label: Text("$label • $minKg-$maxKg kg"),
+                    selected: selected,
+                    selectedColor: _accent,
+                    backgroundColor: _surface,
+                    labelStyle: TextStyle(
+                      color: selected ? _bg : _textPrimary,
+                      fontWeight: FontWeight.w800,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: _border),
+                    ),
+                    onSelected: (_) {
+                      setState(() {
+                        _selectedBagKey = key;
+                        _bagError = null;
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+
+              const SizedBox(height: 24),
+
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    final selectedId = _selectedCollectorId;
+                    final stillOnline = selectedId != null &&
+                        widget.availableCollectors.any(
+                          (c) => c['uid'] == selectedId,
+                        );
+
+                    if (!stillOnline) {
+                      _snack(
+                        "Selected driver is no longer available. Please choose another.",
+                        bg: _danger,
+                      );
+                      return;
+                    }
+
+                    if (!canSubmit) {
+                      _validateForm();
+                      return;
+                    }
+
+                    await requestPickupWithConfirm(
+                      bagKey: _selectedBagKey!,
+                      bagLabel: bagLabel,
+                      bagMinKg: bagMinKg,
+                      bagMaxKg: bagMaxKg,
+                      bagEstimatedKg: bagEstimatedKg,
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _accent,
+                    foregroundColor: _bg,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: const Text(
+                    "CONFIRM PICKUP",
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
