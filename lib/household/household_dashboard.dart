@@ -45,8 +45,6 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _autoOpenedOrderForActiveRequest = false;
 
   // (kept)
-  static const double _bottomBarClosedHeight = 140;
-  static const double _bottomBarOpenHeight = 230;
   bool _cameraBarOpen = false;
 
   // ================= TAB SCREENS =================
@@ -58,25 +56,25 @@ class _DashboardPageState extends State<DashboardPage> {
       ];
 
     @override
-    void initState() {
-      super.initState();
+void initState() {
+  super.initState();
 
-      _activeTabIndex = widget.initialTabIndex;
+  _activeTabIndex = widget.initialTabIndex;
 
-      NotificationService.init();
-      _listenForAcceptedPickup();
-      _ensureNotificationBaseline();
+  NotificationService.init();
+  _listenForAcceptedPickup();
+  _ensureNotificationBaseline();
 
-      _promoTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-        if (!_promoController.hasClients) return;
-        final next = (_promoIndex + 1) % 3;
-        _promoController.animateToPage(
-          next,
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeOut,
-        );
-      });
-    }
+  _promoTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+    if (!_promoController.hasClients) return;
+    final next = (_promoIndex + 1) % 3;
+    _promoController.animateToPage(
+      next,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOut,
+    );
+  });
+}
 
   Stream<QuerySnapshot> _activePendingRequestStream() {
     final user = FirebaseAuth.instance.currentUser;
@@ -265,9 +263,18 @@ class _DashboardPageState extends State<DashboardPage> {
     });
   }
 
-  void _toggleCameraBar() => setState(() => _cameraBarOpen = !_cameraBarOpen);
+Future<void> _clearTransactionHistory() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-  Future<void> _markNotificationsSeen() async {
+  final now = Timestamp.now();
+
+  await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+    'lastHistoryClearedAt': now,
+  }, SetOptions(merge: true));
+}
+
+Future<void> _markNotificationsSeen() async {
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return;
 
@@ -570,7 +577,7 @@ Future<void> _clearNotifications() async {
     );
   }
 
-  Widget _buildNotifBell() {
+Widget _buildNotifBell() {
   final uid = FirebaseAuth.instance.currentUser?.uid;
 
   if (uid == null) {
@@ -617,11 +624,11 @@ Future<void> _clearNotifications() async {
             Icons.notifications_outlined,
             badge: hasUnread,
             onTap: () async {
-  _closeCameraBar();
-  await _markNotificationsSeen();
-  if (!mounted) return;
-  _scaffoldKey.currentState?.openEndDrawer();
-},
+              _closeCameraBar();
+              await _markNotificationsSeen();
+              if (!mounted) return;
+              _scaffoldKey.currentState?.openEndDrawer();
+            },
           );
         },
       );
@@ -1331,53 +1338,34 @@ Future<void> _clearNotifications() async {
   }
 
   // ================= HISTORY TAB =================
-  Widget _historyScreen() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      return const Center(
-        child: Text("Not logged in.", style: TextStyle(color: Colors.white)),
-      );
-    }
+Widget _historyScreen() {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) {
+    return const Center(
+      child: Text("Not logged in.", style: TextStyle(color: Colors.white)),
+    );
+  }
 
-    final query = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'pickup')
-        .where('householdId', isEqualTo: user.uid)
-        .where('active', isEqualTo: false)
-        .orderBy('updatedAt', descending: true)
-        .limit(30);
+  final userDocStream =
+      FirebaseFirestore.instance.collection('Users').doc(user.uid).snapshots();
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+  final query = FirebaseFirestore.instance
+      .collection('requests')
+      .where('type', isEqualTo: 'pickup')
+      .where('householdId', isEqualTo: user.uid)
+      .where('active', isEqualTo: false)
+      .orderBy('updatedAt', descending: true)
+      .limit(30);
 
-        if (snap.hasError) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              "Error loading history: ${snap.error}",
-              style: const TextStyle(color: Colors.white70),
-            ),
-          );
-        }
-
-        final docs = snap.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return const Center(
-            child: Text("No history yet.",
-                style: TextStyle(color: Colors.white70)),
-          );
-        }
-
-        return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
                 "Transaction History",
                 style: TextStyle(
                   color: Colors.white,
@@ -1385,14 +1373,79 @@ Future<void> _clearNotifications() async {
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              const SizedBox(height: 10),
-              for (final d in docs) _pickupHistoryCard(d),
-            ],
+            ),
+            TextButton.icon(
+              onPressed: () async {
+                await _clearTransactionHistory();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Transaction history cleared")),
+                );
+              },
+              icon: const Icon(Icons.done_all, size: 18),
+              label: const Text("Clear"),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Expanded(
+          child: StreamBuilder<DocumentSnapshot>(
+            stream: userDocStream,
+            builder: (context, userSnap) {
+              final userData =
+                  userSnap.data?.data() as Map<String, dynamic>? ?? {};
+              final lastHistoryCleared =
+                  userData['lastHistoryClearedAt'] as Timestamp?;
+
+              return StreamBuilder<QuerySnapshot>(
+                stream: query.snapshots(),
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  if (snap.hasError) {
+                    return Center(
+                      child: Text(
+                        "Error loading history: ${snap.error}",
+                        style: const TextStyle(color: Colors.white70),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
+
+                  final allDocs = snap.data?.docs ?? [];
+
+                  final docs = allDocs.where((d) {
+                    final data = d.data() as Map<String, dynamic>;
+                    final updatedAt = data['updatedAt'] as Timestamp?;
+                    if (updatedAt == null) return false;
+                    if (lastHistoryCleared == null) return true;
+                    return updatedAt.toDate().isAfter(lastHistoryCleared.toDate());
+                  }).toList();
+
+                  if (docs.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        "No history yet.",
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    );
+                  }
+
+                  return ListView.builder(
+                    itemCount: docs.length,
+                    itemBuilder: (_, i) => _pickupHistoryCard(docs[i]),
+                  );
+                },
+              );
+            },
           ),
-        );
-      },
-    );
-  }
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _pickupHistoryCard(QueryDocumentSnapshot d) {
     final data = d.data() as Map<String, dynamic>;
@@ -1642,6 +1695,17 @@ Future<void> _clearNotifications() async {
                 ),
               ),
             ),
+            TextButton.icon(
+              onPressed: () async {
+                await _clearNotifications();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Notifications cleared")),
+                );
+              },
+              icon: const Icon(Icons.done_all, size: 18),
+              label: const Text("Clear"),
+            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -1651,7 +1715,8 @@ Future<void> _clearNotifications() async {
             builder: (context, userSnap) {
               final userData =
                   userSnap.data?.data() as Map<String, dynamic>? ?? {};
-              final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
+              final lastCleared =
+                  userData['lastNotifClearedAt'] as Timestamp?;
 
               final query = FirebaseFirestore.instance
                   .collection('requests')
@@ -1682,8 +1747,8 @@ Future<void> _clearNotifications() async {
                     final data = d.data() as Map<String, dynamic>;
                     final updatedAt = data['updatedAt'] as Timestamp?;
                     if (updatedAt == null) return false;
-                    if (lastSeen == null) return true;
-                    return updatedAt.toDate().isAfter(lastSeen.toDate());
+                    if (lastCleared == null) return true;
+                    return updatedAt.toDate().isAfter(lastCleared.toDate());
                   }).toList();
 
                   if (docs.isEmpty) {
@@ -1710,7 +1775,7 @@ Future<void> _clearNotifications() async {
                         title: _pickupStatusToTitle(status),
                         subtitle: "Driver: $driver",
                         time: _formatTimestamp(updatedAt),
-                        unread: true,
+                        unread: false,
                       );
                     },
                   );

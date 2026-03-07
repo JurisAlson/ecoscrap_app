@@ -135,11 +135,6 @@ class RestrictedAccountPage extends StatelessWidget {
                                 "Email: $email",
                                 style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12),
                               ),
-                            if ((uid ?? "").isNotEmpty)
-                              Text(
-                                "UID: $uid",
-                                style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 12),
-                              ),
                           ],
                         ),
                       ),

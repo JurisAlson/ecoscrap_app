@@ -3,10 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
-import '../screens/junkshop/junkshop_dashboard.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
-import 'restricted_account_page.dart';
 import 'forgot_password.dart';
 import 'UserAccountCreation.dart';
 import '../role_gate.dart';
@@ -24,17 +22,6 @@ class _LoginPageState extends State<LoginPage> {
 
   bool _isLoading = false;
   bool _obscurePassword = true;
-
-  // ✅ same reason mapping used by admin
-  static const Map<String, String> restrictionReasonMap = {
-    "potential_fake": "Potential fake account / identity",
-    "false_information": "False information",
-    "suspicious_activity": "Suspicious activity / fraud",
-    "spam_abuse": "Spam / abuse",
-    "duplicate_account": "Duplicate account",
-    "policy_violation": "Violation of app rules / policy",
-    "other": "Others",
-  };
 
   @override
   void dispose() {
@@ -65,7 +52,9 @@ class _LoginPageState extends State<LoginPage> {
       "updatedAt": FieldValue.serverTimestamp(),
     };
 
-    if ((data["uid"] ?? "").toString().isEmpty) updates["uid"] = u.uid;
+    if ((data["uid"] ?? "").toString().isEmpty) {
+      updates["uid"] = u.uid;
+    }
 
     if ((data["emailDisplay"] ?? "").toString().isEmpty &&
         (u.email ?? "").isNotEmpty) {
@@ -74,6 +63,7 @@ class _LoginPageState extends State<LoginPage> {
 
     final roles = (data["Roles"] ?? data["roles"] ?? "").toString().trim();
     final role = (data["role"] ?? "").toString().trim();
+
     if (roles.isEmpty && role.isNotEmpty) updates["Roles"] = role;
     if (role.isEmpty && roles.isNotEmpty) updates["role"] = roles;
 
@@ -96,53 +86,18 @@ class _LoginPageState extends State<LoginPage> {
       "updatedAt": FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // keep token fresh
     FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
 
-      await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
+      await FirebaseFirestore.instance
+          .collection("Users")
+          .doc(currentUser.uid)
+          .set({
         "fcmToken": token,
         "updatedAt": FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
-  }
-
-  /// ✅ Build detailed restriction title + details from Firestore fields
-  /// Fields expected:
-  /// - status: "restricted"
-  /// - restrictedReasonCode
-  /// - restrictedReasonText (only for "other")
-  Map<String, String> _buildRestrictionInfo(Map<String, dynamic> data) {
-    final reasonCode = (data['restrictedReasonCode'] ?? '').toString().trim();
-    final reasonText = (data['restrictedReasonText'] ?? '').toString().trim();
-
-    final title = (reasonCode.isNotEmpty)
-        ? (restrictionReasonMap[reasonCode] ?? "Restricted")
-        : "Restricted";
-
-    // ✅ detailed message
-    String details;
-
-    if (reasonCode == "other" && reasonText.isNotEmpty) {
-      details =
-          "Admin note:\n$reasonText\n\n"
-          "If you believe this is a mistake, please contact the admin and provide supporting details.";
-    } else if (reasonCode.isNotEmpty) {
-      details =
-          "Your account was restricted due to:\n$title\n\n"
-          "You can still sign in, but you cannot use EcoScrap until the admin reviews your account.\n\n"
-          "If you believe this is a mistake, contact the admin and request an appeal/unrestriction.";
-    } else {
-      details =
-          "Your account has been restricted by an administrator.\n\n"
-          "If you believe this is a mistake, please contact the admin to request a review.";
-    }
-
-    return {
-      "title": title,
-      "details": details,
-    };
   }
 
   Future<void> _login() async {
@@ -173,73 +128,16 @@ class _LoginPageState extends State<LoginPage> {
       debugPrint("LOGIN OK UID=${u.uid} EMAIL=${u.email}");
       debugPrint("PROJECT=${Firebase.app().options.projectId}");
 
-      // ✅ Ensure Users/{uid} exists so RoleGate won't block with "profile missing"
       await _ensureUserProfile(u);
-
-      // ✅ Save FCM token after login
       await saveFcmToken();
 
       if (!mounted) return;
 
-      // Read Users/{uid}
-      final snap =
-          await FirebaseFirestore.instance.collection('Users').doc(u.uid).get();
-      final data = snap.data() ?? {};
-
-      // ✅ Restriction check -> go to RestrictedAccountPage (NOT toast)
-      final status =
-          (data['status'] ?? 'active').toString().trim().toLowerCase();
-      if (status == 'restricted') {
-        final info = _buildRestrictionInfo(data);
-
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RestrictedAccountPage(
-              reasonTitle: info["title"] ?? "Restricted",
-              reasonDetails: info["details"] ?? "",
-              uid: u.uid,
-              email: u.email,
-            ),
-          ),
-        );
-        return;
-      }
-
-      final role = (data['Roles'] ?? data['role'] ?? data['roles'] ?? '')
-          .toString()
-          .trim()
-          .toLowerCase();
-
-      if (!mounted) return;
-
-      // junkshop goes to junkshop dashboard
-      if (role == 'junkshop' || role == 'junkshops') {
-        final shopName =
-            (data['Name'] ?? data['name'] ?? data['shopName'] ?? 'Junkshop')
-                .toString()
-                .trim();
-
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => JunkshopDashboardPage(
-              shopID: u.uid,
-              shopName: shopName.isNotEmpty ? shopName : 'Junkshop',
-            ),
-          ),
-        );
-        return;
-      }
-
-      // default: go through RoleGate (admin/user/collector)
-      Navigator.pushReplacement(
-        context,
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const RoleGate()),
+        (_) => false,
       );
-      return;
     } on FirebaseAuthException catch (e) {
-      // ✅ HARD BLOCK: Firebase Auth disabled user (cannot login)
       if (e.code == "user-disabled") {
         _showToast(
           "Your account has been restricted. Please contact the admin.",
@@ -248,21 +146,19 @@ class _LoginPageState extends State<LoginPage> {
         return;
       }
 
-      // clearer messages
       if (e.code == "wrong-password" || e.code == "invalid-credential") {
         _showToast("Incorrect email or password.", isError: true);
         return;
       }
+
       if (e.code == "user-not-found") {
         _showToast("No account found for that email.", isError: true);
         return;
       }
 
       _showToast(e.message ?? "Login failed", isError: true);
-      return;
     } catch (e) {
       _showToast("Login failed: $e", isError: true);
-      return;
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -402,8 +298,11 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         borderRadius: BorderRadius.circular(24),
                       ),
-                      child: const Icon(Icons.recycling,
-                          color: Colors.white, size: 40),
+                      child: const Icon(
+                        Icons.recycling,
+                        color: Colors.white,
+                        size: 40,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 25),
@@ -428,15 +327,18 @@ class _LoginPageState extends State<LoginPage> {
                         Text(
                           "Sign In",
                           style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold),
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         SizedBox(height: 8),
                         Text(
                           "Welcome back 🌿 enter your details",
                           style: TextStyle(
-                              color: Color(0xFF94A3B8), fontSize: 14),
+                            color: Color(0xFF94A3B8),
+                            fontSize: 14,
+                          ),
                         ),
                       ],
                     ),
@@ -455,8 +357,9 @@ class _LoginPageState extends State<LoginPage> {
                     icon: Icons.lock_outline,
                     isPassword: true,
                     obscureText: _obscurePassword,
-                    onToggleVisibility: () => setState(
-                        () => _obscurePassword = !_obscurePassword),
+                    onToggleVisibility: () {
+                      setState(() => _obscurePassword = !_obscurePassword);
+                    },
                   ),
                   Align(
                     alignment: Alignment.centerRight,
@@ -487,17 +390,21 @@ class _LoginPageState extends State<LoginPage> {
                         backgroundColor: const Color(0xFF1FA9A7),
                         foregroundColor: const Color(0xFF0F172A),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16)),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
                       ),
                       onPressed: _isLoading ? null : _login,
                       child: _isLoading
                           ? const CircularProgressIndicator(
-                              strokeWidth: 3, color: Color(0xFF0F172A))
+                              strokeWidth: 3,
+                              color: Color(0xFF0F172A),
+                            )
                           : const Text(
                               "Continue",
                               style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold),
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                     ),
                   ),
@@ -505,22 +412,26 @@ class _LoginPageState extends State<LoginPage> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Text("Don't have an account?",
-                          style: TextStyle(color: Color(0xFF94A3B8))),
+                      const Text(
+                        "Don't have an account?",
+                        style: TextStyle(color: Color(0xFF94A3B8)),
+                      ),
                       TextButton(
                         onPressed: () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                                builder: (_) =>
-                                    const UserAccountCreationPage()),
+                              builder: (_) =>
+                                  const UserAccountCreationPage(),
+                            ),
                           );
                         },
                         child: const Text(
                           "Create one",
                           style: TextStyle(
-                              color: Color(0xFF1FA9A7),
-                              fontWeight: FontWeight.bold),
+                            color: Color(0xFF1FA9A7),
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ],
