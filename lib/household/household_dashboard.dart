@@ -45,8 +45,6 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _autoOpenedOrderForActiveRequest = false;
 
   // (kept)
-  static const double _bottomBarClosedHeight = 140;
-  static const double _bottomBarOpenHeight = 230;
   bool _cameraBarOpen = false;
 
   // ================= TAB SCREENS =================
@@ -270,7 +268,7 @@ class _DashboardPageState extends State<DashboardPage> {
     if (_cameraBarOpen) setState(() => _cameraBarOpen = false);
   }
 
-  Future<void> _markNotificationsSeen() async {
+Future<void> _markNotificationsSeen() async {
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return;
 
@@ -771,9 +769,22 @@ class _DashboardPageState extends State<DashboardPage> {
                 });
 
                 final hasUserNotifUnread = notifDocs.any((d) {
-                  final data = d.data() as Map<String, dynamic>;
-                  return _isUserNotificationUnread(data, lastSeen);
-                });
+  final data = d.data() as Map<String, dynamic>;
+  return _isUserNotificationUnread(data, lastSeen);
+});
+
+return _iconButton(
+  Icons.notifications_none_rounded,
+  badge: hasRequestUnread || hasUserNotifUnread,
+  onTap: () {
+    _closeCameraBar();
+    _scaffoldKey.currentState?.openEndDrawer();
+    Future.delayed(const Duration(milliseconds: 320), () async {
+      if (!mounted) return;
+      await _markNotificationsSeen();
+    });
+  },
+);
 
                 return _iconButton(
                   Icons.notifications_none_rounded,
@@ -1386,6 +1397,17 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
             ),
+            TextButton.icon(
+              onPressed: () async {
+                await _clearNotifications();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Notifications cleared")),
+                );
+              },
+              icon: const Icon(Icons.done_all, size: 18),
+              label: const Text("Clear"),
+            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -1395,7 +1417,8 @@ class _DashboardPageState extends State<DashboardPage> {
             builder: (context, userSnap) {
               final userData =
                   userSnap.data?.data() as Map<String, dynamic>? ?? {};
-              final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
+              final lastCleared =
+                  userData['lastNotifClearedAt'] as Timestamp?;
 
               final requestQuery = FirebaseFirestore.instance
                   .collection('requests')

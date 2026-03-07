@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -20,7 +19,8 @@ class WaitingCollectorPage extends StatefulWidget {
   State<WaitingCollectorPage> createState() => _WaitingCollectorPageState();
 }
 
-class _WaitingCollectorPageState extends State<WaitingCollectorPage> {
+class _WaitingCollectorPageState extends State<WaitingCollectorPage>
+    with TickerProviderStateMixin {
   static const Color _bg = Color(0xFF0B1220);
   static const Color _sheet = Color(0xFF121C2E);
   static const Color _surface = Color(0xFF162235);
@@ -32,6 +32,8 @@ class _WaitingCollectorPageState extends State<WaitingCollectorPage> {
   GoogleMapController? _mapController;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _requestSub;
   bool _hasNavigated = false;
+
+  late final AnimationController _pulseController;
 
   static const String _darkMapStyle = r'''
 [
@@ -55,42 +57,45 @@ class _WaitingCollectorPageState extends State<WaitingCollectorPage> {
   @override
   void initState() {
     super.initState();
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat();
+
     _listenToRequest();
   }
 
-void _goToOrderTab() {
-  if (!mounted || _hasNavigated) return;
+  void _goToOrderTab() {
+    if (!mounted || _hasNavigated) return;
 
-  _hasNavigated = true;
-  _requestSub?.cancel();
+    _hasNavigated = true;
+    _requestSub?.cancel();
 
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (!mounted) return;
-
-    final navigator = Navigator.of(context);
-
-    if (navigator.canPop()) {
-      navigator.pop(true);
-    }
-  });
-}
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) {
+        navigator.pop(true);
+      }
+    });
+  }
 
   void _closeWaitingPage() {
-  if (!mounted || _hasNavigated) return;
+    if (!mounted || _hasNavigated) return;
 
-  _hasNavigated = true;
-  _requestSub?.cancel();
+    _hasNavigated = true;
+    _requestSub?.cancel();
 
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) {
+        navigator.pop(false);
+      }
+    });
+  }
 
-    final navigator = Navigator.of(context);
-
-    if (navigator.canPop()) {
-      navigator.pop(false);
-    }
-  });
-}
   void _listenToRequest() {
     _requestSub = FirebaseFirestore.instance
         .collection('requests')
@@ -125,45 +130,85 @@ void _goToOrderTab() {
     );
   }
 
-  @override
-  void dispose() {
-    _requestSub?.cancel();
-    _mapController?.dispose();
-    super.dispose();
+  Future<void> _onMapCreated(GoogleMapController controller) async {
+    _mapController = controller;
+    await controller.setMapStyle(_darkMapStyle);
   }
 
   Set<Marker> _buildMarkers() {
     return {
       Marker(
-        markerId: const MarkerId('pickup'),
-        position: widget.pickupLatLng,
-        infoWindow: const InfoWindow(title: 'Pickup'),
-      ),
-      Marker(
         markerId: const MarkerId('destination'),
         position: widget.destinationLatLng,
-        infoWindow: const InfoWindow(title: 'Destination'),
+        infoWindow: const InfoWindow(title: 'Junkshop'),
       ),
     };
   }
 
-  Set<Polyline> _buildPolylines() {
-    return {
-      Polyline(
-        polylineId: const PolylineId('pickup_to_destination'),
-        points: [
-          widget.pickupLatLng,
-          widget.destinationLatLng,
-        ],
-        width: 4,
-        color: _accent,
-      ),
-    };
+  @override
+  void dispose() {
+    _requestSub?.cancel();
+    _mapController?.dispose();
+    _pulseController.dispose();
+    super.dispose();
   }
 
-  Future<void> _onMapCreated(GoogleMapController controller) async {
-    _mapController = controller;
-    await _mapController!.setMapStyle(_darkMapStyle);
+  Widget _buildCenterPulse() {
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _pulseController,
+        builder: (context, _) {
+          final t = _pulseController.value;
+
+          final outerSize = 120 + (70 * t);
+          final midSize = 80 + (45 * t);
+
+          final outerOpacity = (1 - t) * 0.20;
+          final midOpacity = (1 - t) * 0.28;
+
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: outerSize,
+                height: outerSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _accent.withOpacity(outerOpacity),
+                ),
+              ),
+              Container(
+                width: midSize,
+                height: midSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _accent.withOpacity(midOpacity),
+                ),
+              ),
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _accent,
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 3,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _accent.withOpacity(0.45),
+                      blurRadius: 16,
+                      spreadRadius: 3,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -182,14 +227,14 @@ void _goToOrderTab() {
               onMapCreated: _onMapCreated,
               initialCameraPosition: CameraPosition(
                 target: widget.pickupLatLng,
-                zoom: 15,
+                zoom: 16,
               ),
-              myLocationEnabled: true,
+              myLocationEnabled: false,
               myLocationButtonEnabled: false,
               zoomControlsEnabled: false,
               compassEnabled: false,
               markers: _buildMarkers(),
-              polylines: _buildPolylines(),
+              polylines: const {},
               mapToolbarEnabled: false,
               buildingsEnabled: false,
               indoorViewEnabled: false,
@@ -197,9 +242,15 @@ void _goToOrderTab() {
               tiltGesturesEnabled: false,
               rotateGesturesEnabled: true,
             ),
+
             Container(
               color: Colors.black.withOpacity(0.10),
             ),
+
+            Center(
+              child: _buildCenterPulse(),
+            ),
+
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(14),
@@ -224,6 +275,7 @@ void _goToOrderTab() {
                 ),
               ),
             ),
+
             Align(
               alignment: Alignment.bottomCenter,
               child: Container(
@@ -275,7 +327,7 @@ void _goToOrderTab() {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      "Please wait while the collector reviews and accepts your pickup request.",
+                      "Stay available while a collector reviews and accepts your pickup request.",
                       style: TextStyle(
                         color: _textSecondary,
                         fontSize: 14,
@@ -290,26 +342,13 @@ void _goToOrderTab() {
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(color: _border),
                       ),
-                      child: const Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.access_time_rounded,
-                            color: _accent,
-                            size: 20,
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              "This page will automatically go to your Order tab once the collector accepts.",
-                              style: TextStyle(
-                                color: _textPrimary,
-                                fontWeight: FontWeight.w700,
-                                height: 1.4,
-                              ),
-                            ),
-                          ),
-                        ],
+                      child: const Text(
+                        "Your pickup location is centered on the map. This page will automatically go to your Order tab once the collector accepts.",
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontWeight: FontWeight.w700,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ],
