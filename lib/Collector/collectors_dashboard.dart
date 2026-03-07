@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'collector_inventory_plastics_page.dart';
 import 'collector_transaction_page.dart'; // the merged BUY/SELL page we made
 import 'collector_pickup_map_page.dart';
 
@@ -605,9 +604,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           ),
           const CollectorMessagesPage(),
 
-          // ✅ Inventory TAB (make sure you created CollectorInventoryPlasticsTab)
-          const CollectorInventoryPlasticsPage(),
-
           // ✅ Transactions TAB (your merged buy/sell page)
           const CollectorTransactionPage(embedded: true),
 ];
@@ -671,7 +667,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: "HOME"),
           BottomNavigationBarItem(icon: Icon(Icons.forum_outlined), label: "CHATS"),
-          BottomNavigationBarItem(icon: Icon(Icons.inventory_2_outlined), label: "INVENTORY"),
           BottomNavigationBarItem(icon: Icon(Icons.receipt_long), label: "TRANSACTION"),
         ],
       ),
