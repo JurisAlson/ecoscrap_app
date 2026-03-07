@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:ui';
 
+import '../waiting_collector_page.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -14,7 +17,12 @@ import '../services/notification_service.dart';
 import 'package:ecoscrap_app/chat/screens/chat_list_page.dart';
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key});
+  final int initialTabIndex;
+
+  const DashboardPage({
+    super.key,
+    this.initialTabIndex = 0,
+  });
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -22,7 +30,7 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  int _activeTabIndex = 0;
+  late int _activeTabIndex;
 
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
@@ -31,6 +39,10 @@ class _DashboardPageState extends State<DashboardPage> {
   final PageController _promoController = PageController();
   int _promoIndex = 0;
   Timer? _promoTimer;
+
+  // ===== FIXED MISSING FIELDS =====
+  StreamSubscription<QuerySnapshot>? _acceptedRequestSub;
+  bool _autoOpenedOrderForActiveRequest = false;
 
   // (kept)
   static const double _bottomBarClosedHeight = 140;
@@ -45,25 +57,136 @@ class _DashboardPageState extends State<DashboardPage> {
         const ChatListPage(type: "pickup", title: "Chats"),
       ];
 
-  @override
-  void initState() {
-    super.initState();
+    @override
+    void initState() {
+      super.initState();
 
-    NotificationService.init();
+      _activeTabIndex = widget.initialTabIndex;
 
-    _promoTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (!_promoController.hasClients) return;
-      final next = (_promoIndex + 1) % 3;
-      _promoController.animateToPage(
-        next,
-        duration: const Duration(milliseconds: 350),
-        curve: Curves.easeOut,
-      );
-    });
+      NotificationService.init();
+      _listenForAcceptedPickup();
+      _ensureNotificationBaseline();
+
+      _promoTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+        if (!_promoController.hasClients) return;
+        final next = (_promoIndex + 1) % 3;
+        _promoController.animateToPage(
+          next,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+        );
+      });
+    }
+
+  Stream<QuerySnapshot> _activePendingRequestStream() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Stream<QuerySnapshot>.empty();
+    }
+
+    return FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('householdId', isEqualTo: user.uid)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: ['pending', 'scheduled'])
+        .limit(1)
+        .snapshots();
+  }
+
+  Widget _waitingCollectorBanner() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _activePendingRequestStream(),
+      builder: (context, snap) {
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final doc = snap.data!.docs.first;
+        final data = doc.data() as Map<String, dynamic>;
+
+        final pickupGeo = data['pickupLocation'] as GeoPoint?;
+        final destGeo = data['destinationLocation'] as GeoPoint?;
+
+        if (pickupGeo == null || destGeo == null) {
+          return const SizedBox.shrink();
+        }
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => WaitingCollectorPage(
+                      requestId: doc.id,
+                      pickupLatLng: LatLng(
+                        pickupGeo.latitude,
+                        pickupGeo.longitude,
+                      ),
+                      destinationLatLng: LatLng(
+                        destGeo.latitude,
+                        destGeo.longitude,
+                      ),
+                    ),
+                  ),
+                );
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 11,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: primaryColor.withOpacity(0.28),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        "Waiting for collector",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right,
+                      color: Colors.grey.shade400,
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _swipeHint({
-    String? label, // optional, you can pass null if you want ZERO text
+    String? label,
   }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -103,24 +226,171 @@ class _DashboardPageState extends State<DashboardPage> {
   void dispose() {
     _promoTimer?.cancel();
     _promoController.dispose();
+    _acceptedRequestSub?.cancel();
     super.dispose();
+  }
+
+  void _listenForAcceptedPickup() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _acceptedRequestSub = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('householdId', isEqualTo: user.uid)
+        .where('active', isEqualTo: true)
+        .limit(1)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted || snap.docs.isEmpty) return;
+
+      final data = snap.docs.first.data() as Map<String, dynamic>;
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+
+      final shouldOpenOrder = status == 'accepted' ||
+          status == 'confirmed' ||
+          status == 'ongoing' ||
+          status == 'arrived';
+
+      if (shouldOpenOrder) {
+        if (_activeTabIndex != 2 || !_autoOpenedOrderForActiveRequest) {
+          setState(() {
+            _activeTabIndex = 2;
+            _autoOpenedOrderForActiveRequest = true;
+          });
+        }
+      } else if (status == 'pending' || status == 'scheduled') {
+        _autoOpenedOrderForActiveRequest = false;
+      }
+    });
   }
 
   void _toggleCameraBar() => setState(() => _cameraBarOpen = !_cameraBarOpen);
 
+  Future<void> _markNotificationsSeen() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+    'lastNotifSeenAt': Timestamp.now(),
+  }, SetOptions(merge: true));
+}
   void _closeCameraBar() {
     if (_cameraBarOpen) setState(() => _cameraBarOpen = false);
   }
+  Future<void> _openPickupFlow() async {
+  _closeCameraBar();
 
-  Future<void> _markNotifsSeen() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
-      'lastNotifSeenAt': FieldValue.serverTimestamp(),
+  try {
+    final query = await FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('householdId', isEqualTo: user.uid)
+        .where('active', isEqualTo: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isNotEmpty) {
+      final doc = query.docs.first;
+      final data = doc.data();
+
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+
+      final isStillWaiting = status == 'pending' || status == 'scheduled';
+
+      if (isStillWaiting) {
+        final pickupGeo = data['pickupLocation'] as GeoPoint?;
+        final destGeo = data['destinationLocation'] as GeoPoint?;
+
+        if (pickupGeo != null && destGeo != null) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => WaitingCollectorPage(
+                requestId: doc.id,
+                pickupLatLng: LatLng(
+                  pickupGeo.latitude,
+                  pickupGeo.longitude,
+                ),
+                destinationLatLng: LatLng(
+                  destGeo.latitude,
+                  destGeo.longitude,
+                ),
+              ),
+            ),
+          );
+          return;
+        }
+      }
+
+      final hasActiveRequest = [
+        'pending',
+        'scheduled',
+        'accepted',
+        'confirmed',
+        'ongoing',
+        'arrived',
+      ].contains(status);
+
+      if (hasActiveRequest) {
+        setState(() {
+          _activeTabIndex = 2;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You already have an active pickup request.'),
+          ),
+        );
+        return;
+      }
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const GeoMappingPage()),
+    );
+  } catch (e) {
+    debugPrint('Error opening pickup flow: $e');
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const GeoMappingPage()),
+    );
+  }
+}
+
+Future<void> _ensureNotificationBaseline() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  final userRef = FirebaseFirestore.instance.collection('Users').doc(user.uid);
+  final userDoc = await userRef.get();
+
+  final data = userDoc.data();
+  final hasLastSeen = data != null && data['lastNotifSeenAt'] != null;
+
+  if (!hasLastSeen) {
+    await userRef.set({
+      'lastNotifSeenAt': Timestamp.now(),
     }, SetOptions(merge: true));
   }
+}
 
+Future<void> _clearNotifications() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  final now = Timestamp.now();
+
+  await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+    'lastNotifSeenAt': now,
+    'lastNotifClearedAt': now,
+  }, SetOptions(merge: true));
+}
   // ================= CAMERA =================
   Future<void> _openLens(BuildContext context) async {
     final proceed = await _showScanHowToSheet(context);
@@ -143,13 +413,11 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Stream<int> _householdNotifCountStream(String householdUid) {
-    // Count "important updates" for the household:
-    // - accepted / arrived / completed / cancelled (and scheduled if you want)
     return FirebaseFirestore.instance
         .collection('requests')
         .where('type', isEqualTo: 'pickup')
         .where('householdId', isEqualTo: householdUid)
-        .where('active', isEqualTo: true) // focus on current order notifications
+        .where('active', isEqualTo: true)
         .where('status',
             whereIn: ['accepted', 'arrived', 'completed', 'cancelled', 'canceled'])
         .snapshots()
@@ -236,14 +504,23 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
         body: Stack(
           children: [
-            _blurCircle(primaryColor.withOpacity(0.14), 320,
-                top: -120, right: -120),
-            _blurCircle(Colors.green.withOpacity(0.10), 380,
-                bottom: 110, left: -130),
+            _blurCircle(
+              primaryColor.withOpacity(0.14),
+              320,
+              top: -120,
+              right: -120,
+            ),
+            _blurCircle(
+              Colors.green.withOpacity(0.10),
+              380,
+              bottom: 110,
+              left: -130,
+            ),
             SafeArea(
               child: Column(
                 children: [
                   _header(user),
+                  _waitingCollectorBanner(),
                   Expanded(
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 240),
@@ -260,8 +537,6 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
           ],
         ),
-
-        // ✅ FIXED BOTTOM NAV (uniform spacing / better tap feedback)
         bottomNavigationBar: SizedBox(
           height: 90,
           child: Container(
@@ -296,69 +571,63 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildNotifBell() {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    if (uid == null) {
-      return _iconButton(
-        Icons.notifications_outlined,
-        badge: false,
-        onTap: () {
-          _closeCameraBar();
-          _scaffoldKey.currentState?.openEndDrawer();
-        },
-      );
-    }
-
-    final userDocStream =
-        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
-
-    return StreamBuilder<DocumentSnapshot>(
-      stream: userDocStream,
-      builder: (context, userSnap) {
-        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
-        final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
-
-        final requestQuery = FirebaseFirestore.instance
-            .collection('requests')
-            .where('type', isEqualTo: 'pickup')
-            .where('householdId', isEqualTo: uid)
-            .orderBy('updatedAt', descending: true)
-            .limit(1);
-
-        return StreamBuilder<QuerySnapshot>(
-          stream: requestQuery.snapshots(),
-          builder: (context, snap) {
-            bool hasUnread = false;
-
-            final docs = snap.data?.docs ?? [];
-            if (docs.isNotEmpty) {
-              final data = docs.first.data() as Map<String, dynamic>;
-              final updatedAt = data['updatedAt'] as Timestamp?;
-
-              if (updatedAt != null) {
-                if (lastSeen == null) {
-                  hasUnread = true;
-                } else {
-                  hasUnread = updatedAt.toDate().isAfter(lastSeen.toDate());
-                }
-              }
-            }
-
-            return _iconButton(
-              Icons.notifications_outlined,
-              badge: hasUnread,
-              onTap: () async {
-                _closeCameraBar();
-                _scaffoldKey.currentState?.openEndDrawer();
-                await _markNotifsSeen(); // mark as read
-              },
-            );
-          },
-        );
+  if (uid == null) {
+    return _iconButton(
+      Icons.notifications_outlined,
+      badge: false,
+      onTap: () {
+        _closeCameraBar();
+        _scaffoldKey.currentState?.openEndDrawer();
       },
     );
   }
 
+  final userDocStream =
+      FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
+
+  final requestQuery = FirebaseFirestore.instance
+      .collection('requests')
+      .where('type', isEqualTo: 'pickup')
+      .where('householdId', isEqualTo: uid)
+      .orderBy('updatedAt', descending: true)
+      .limit(20);
+
+  return StreamBuilder<DocumentSnapshot>(
+    stream: userDocStream,
+    builder: (context, userSnap) {
+      final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+      final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
+
+      return StreamBuilder<QuerySnapshot>(
+        stream: requestQuery.snapshots(),
+        builder: (context, snap) {
+          final docs = snap.data?.docs ?? [];
+
+          final hasUnread = docs.any((d) {
+            final data = d.data() as Map<String, dynamic>;
+            final updatedAt = data['updatedAt'] as Timestamp?;
+            if (updatedAt == null) return false;
+            if (lastSeen == null) return false;
+            return updatedAt.toDate().isAfter(lastSeen.toDate());
+          });
+
+          return _iconButton(
+            Icons.notifications_outlined,
+            badge: hasUnread,
+            onTap: () async {
+  _closeCameraBar();
+  await _markNotificationsSeen();
+  if (!mounted) return;
+  _scaffoldKey.currentState?.openEndDrawer();
+},
+          );
+        },
+      );
+    },
+  );
+}
   // ================= HEADER =================
   Widget _header(User? user) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -471,7 +740,6 @@ class _DashboardPageState extends State<DashboardPage> {
             "Tip: The photo examples are your main guide. Use Scan only to validate an item when you are not sure.",
           ),
           const SizedBox(height: 12),
-
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -503,10 +771,7 @@ class _DashboardPageState extends State<DashboardPage> {
               ],
             ),
           ),
-
           const SizedBox(height: 12),
-
-          // ✅ UNIFORM action cards (Scan + Drop-off/Pickup)
           _actionCard(
             icon: Icons.camera_alt,
             title: "Validate with Scan",
@@ -517,31 +782,19 @@ class _DashboardPageState extends State<DashboardPage> {
               await _openLens(context);
             },
           ),
-
           const SizedBox(height: 12),
-
           _actionCard(
             icon: Icons.location_on_outlined,
             title: "Drop-off & Pickup",
             subtitle: "Set a schedule for recyclables",
             gradientColors: [Colors.green, const Color(0xFF1FA9A7)],
-            onTap: () {
-              _closeCameraBar();
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const GeoMappingPage()),
-              );
-            },
+            onTap: _openPickupFlow,
           ),
-
           const SizedBox(height: 14),
-
           _hintText(
             "If your item already matches the examples above, you can proceed with pickup or drop-off. Only use Scan if you want to validate an uncertain item.",
           ),
-
           const SizedBox(height: 22),
-
           const Text(
             "Why this matters",
             style: TextStyle(
@@ -551,7 +804,6 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
           ),
           const SizedBox(height: 12),
-
           _infoCard(
             "Stronger communities (SDG 11)",
             "Segregating waste and tracking recyclable materials helps keep neighborhoods clean, "
@@ -610,7 +862,6 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ✅ NEW uniform Action Card (Scan + Drop-off/Pickup)
   Widget _actionCard({
     required IconData icon,
     required String title,
@@ -708,7 +959,6 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   // ================= ACCEPTED PLASTICS =================
-  // ✅ UPDATED: moved the swipe/hand hint to TOP of this widget
   Widget _acceptedPlasticsSection() {
     final plastics = [
       {
@@ -912,10 +1162,17 @@ class _DashboardPageState extends State<DashboardPage> {
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             children: [
-              _exampleSlot(imagePath: exampleImages.isNotEmpty ? exampleImages[0] : null),
-              _exampleSlot(imagePath: exampleImages.length > 1 ? exampleImages[1] : null),
-              _exampleSlot(imagePath: exampleImages.length > 2 ? exampleImages[2] : null),
-              _exampleSlot(imagePath: exampleImages.length > 3 ? exampleImages[3] : null),
+              _exampleSlot(
+                  imagePath: exampleImages.isNotEmpty ? exampleImages[0] : null),
+              _exampleSlot(
+                  imagePath:
+                      exampleImages.length > 1 ? exampleImages[1] : null),
+              _exampleSlot(
+                  imagePath:
+                      exampleImages.length > 2 ? exampleImages[2] : null),
+              _exampleSlot(
+                  imagePath:
+                      exampleImages.length > 3 ? exampleImages[3] : null),
             ],
           ),
           const SizedBox(height: 10),
@@ -966,17 +1223,20 @@ class _DashboardPageState extends State<DashboardPage> {
       _promoSlide(
         icon: Icons.lightbulb_outline,
         title: "Quick Tip",
-        body: "Check the accepted plastic photos first. Use Scan only if you need validation.",
+        body:
+            "Check the accepted plastic photos first. Use Scan only if you need validation.",
       ),
       _promoSlide(
         icon: Icons.verified_outlined,
         title: "Validation Only",
-        body: "Scan helps validate unclear items. You do not need to scan plastics that already match the examples.",
+        body:
+            "Scan helps validate unclear items. You do not need to scan plastics that already match the examples.",
       ),
       _promoSlide(
         icon: Icons.recycling_outlined,
         title: "Know Your Plastics",
-        body: "If the item looks like the accepted examples, you can proceed without scanning.",
+        body:
+            "If the item looks like the accepted examples, you can proceed without scanning.",
       ),
     ];
 
@@ -992,14 +1252,10 @@ class _DashboardPageState extends State<DashboardPage> {
                 onPageChanged: (i) => setState(() => _promoIndex = i),
                 itemBuilder: (context, index) => slides[index],
               ),
-
-              // ✅ swipe cue (no reading required)
             ],
           ),
         ),
         const SizedBox(height: 10),
-
-        // dots already help too
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: List.generate(
@@ -1354,36 +1610,30 @@ class _DashboardPageState extends State<DashboardPage> {
 
   // ================= NOTIFICATIONS DRAWER (RIGHT) =================
   Widget _notificationsDrawer() {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
-      return const Center(
-        child: Text("Not logged in", style: TextStyle(color: Colors.white)),
-      );
-    }
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) {
+    return const Center(
+      child: Text("Not logged in", style: TextStyle(color: Colors.white)),
+    );
+  }
 
-    final userDocStream =
-        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
+  final userDocStream =
+      FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
 
-    final query = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'pickup')
-        .where('householdId', isEqualTo: uid)
-        .orderBy('updatedAt', descending: true)
-        .limit(20);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              ),
-              const SizedBox(width: 8),
-              const Text(
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
                 "Notifications",
                 style: TextStyle(
                   color: Colors.white,
@@ -1391,74 +1641,88 @@ class _DashboardPageState extends State<DashboardPage> {
                   fontWeight: FontWeight.w900,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: StreamBuilder<DocumentSnapshot>(
-              stream: userDocStream,
-              builder: (context, userSnap) {
-                final userData =
-                    userSnap.data?.data() as Map<String, dynamic>? ?? {};
-                final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
-
-                return StreamBuilder<QuerySnapshot>(
-                  stream: query.snapshots(),
-                  builder: (context, snap) {
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (snap.hasError) {
-                      return Center(
-                        child: Text(
-                          "Failed to load notifications:\n${snap.error}",
-                          style: const TextStyle(color: Colors.white70),
-                          textAlign: TextAlign.center,
-                        ),
-                      );
-                    }
-
-                    final docs = snap.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Center(
-                        child: Text("No notifications yet.",
-                            style: TextStyle(color: Colors.white70)),
-                      );
-                    }
-
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (_, i) {
-                        final d = docs[i];
-                        final data = d.data() as Map<String, dynamic>;
-
-                        final status =
-                            (data['status'] ?? '').toString().toLowerCase();
-                        final driver = (data['collectorName'] ?? '—').toString();
-
-                        final updatedAt = data['updatedAt'] as Timestamp?;
-                        final isUnread = (lastSeen == null ||
-                            (updatedAt != null &&
-                                updatedAt.toDate().isAfter(lastSeen.toDate())));
-
-                        return _notificationLogTile(
-                          title: _pickupStatusToTitle(status),
-                          subtitle: "Driver: $driver",
-                          time: _formatTimestamp(updatedAt),
-                          unread: isUnread,
-                        );
-                      },
-                    );
-                  },
-                );
-              },
             ),
-          ),
-        ],
-      ),
-    );
-  }
+          ],
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: StreamBuilder<DocumentSnapshot>(
+            stream: userDocStream,
+            builder: (context, userSnap) {
+              final userData =
+                  userSnap.data?.data() as Map<String, dynamic>? ?? {};
+              final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
 
+              final query = FirebaseFirestore.instance
+                  .collection('requests')
+                  .where('type', isEqualTo: 'pickup')
+                  .where('householdId', isEqualTo: uid)
+                  .orderBy('updatedAt', descending: true)
+                  .limit(20);
+
+              return StreamBuilder<QuerySnapshot>(
+                stream: query.snapshots(),
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snap.hasError) {
+                    return Center(
+                      child: Text(
+                        "Failed to load notifications:\n${snap.error}",
+                        style: const TextStyle(color: Colors.white70),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
+
+                  final allDocs = snap.data?.docs ?? [];
+
+                  final docs = allDocs.where((d) {
+                    final data = d.data() as Map<String, dynamic>;
+                    final updatedAt = data['updatedAt'] as Timestamp?;
+                    if (updatedAt == null) return false;
+                    if (lastSeen == null) return true;
+                    return updatedAt.toDate().isAfter(lastSeen.toDate());
+                  }).toList();
+
+                  if (docs.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        "No notifications yet.",
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    );
+                  }
+
+                  return ListView.builder(
+                    itemCount: docs.length,
+                    itemBuilder: (_, i) {
+                      final d = docs[i];
+                      final data = d.data() as Map<String, dynamic>;
+
+                      final status =
+                          (data['status'] ?? '').toString().toLowerCase();
+                      final driver = (data['collectorName'] ?? '—').toString();
+                      final updatedAt = data['updatedAt'] as Timestamp?;
+
+                      return _notificationLogTile(
+                        title: _pickupStatusToTitle(status),
+                        subtitle: "Driver: $driver",
+                        time: _formatTimestamp(updatedAt),
+                        unread: true,
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  );
+}
   String _pickupStatusToTitle(String status) {
     switch (status) {
       case 'completed':
@@ -1651,8 +1915,6 @@ class _DashboardPageState extends State<DashboardPage> {
           const SizedBox(height: 30),
           _howToUseCard(),
           const SizedBox(height: 20),
-
-          // ✅ APPLY AS COLLECTOR
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(20),
@@ -1705,9 +1967,7 @@ class _DashboardPageState extends State<DashboardPage> {
               ],
             ),
           ),
-
           const SizedBox(height: 26),
-
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -1957,7 +2217,6 @@ class _HowToRow extends StatelessWidget {
   }
 }
 
-// ✅ Scan instruction sheet shown BEFORE camera permission/page
 class _ScanHowToSheet extends StatelessWidget {
   final Color primaryColor;
   final Color bgColor;
