@@ -4,15 +4,38 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 
 class NotificationService {
   static Future<void> init() async {
-    await FirebaseMessaging.instance.requestPermission();
+    final messaging = FirebaseMessaging.instance;
 
-    final token = await FirebaseMessaging.instance.getToken();
+    try {
+      await messaging.requestPermission();
+    } catch (e) {
+      print('requestPermission failed: $e');
+    }
+
+    String? token;
+    try {
+      token = await messaging.getToken();
+      print('FCM token: $token');
+    } catch (e, st) {
+      print('getToken failed: $e');
+      print(st);
+      return;
+    }
+
     if (token == null) return;
 
-    await _saveToken(token);
+    try {
+      await _saveToken(token);
+    } catch (e) {
+      print('saveToken failed: $e');
+    }
 
-    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-      await _saveToken(newToken);
+    messaging.onTokenRefresh.listen((newToken) async {
+      try {
+        await _saveToken(newToken);
+      } catch (e) {
+        print('token refresh save failed: $e');
+      }
     });
   }
 

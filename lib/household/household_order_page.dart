@@ -269,7 +269,7 @@ class _OrderCard extends StatelessWidget {
                     child: ElevatedButton.icon(
                       onPressed: () => _rejectOrder(context, bgColor),
                       icon: const Icon(Icons.cancel_outlined),
-                      label: const Text("Reject Order"),
+                      label: const Text("Cancel Order"),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.redAccent,
                         foregroundColor: Colors.white,
@@ -409,16 +409,18 @@ class _OrderCard extends StatelessWidget {
   }
 
   Future<void> _rejectOrder(BuildContext context, Color bgColor) async {
+
     final confirmed = await showDialog<bool>(
+      
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: bgColor,
         title: const Text(
-          "Reject pickup?",
+          "Cancel pickup?",
           style: TextStyle(color: Colors.white),
         ),
         content: const Text(
-          "Are you sure you want to reject your current pickup request?",
+          "Are you sure you want to cancel your current pickup request?",
           style: TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -440,18 +442,46 @@ class _OrderCard extends StatelessWidget {
     if (reason == null || reason.trim().isEmpty) return;
 
     try {
-      debugPrint("🟡 Rejecting requests/$requestId");
+      
+      debugPrint("🟡 Cancelling requests/$requestId");
 
-      await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(requestId)
-          .update({
+      final requestRef =
+          FirebaseFirestore.instance.collection('requests').doc(requestId);
+
+      final collectorId = (data['collectorId'] ?? '').toString().trim();
+      final householdId = (data['householdId'] ?? '').toString().trim();
+      final householdName = (data['householdName'] ?? 'Resident').toString();
+      final pickupAddress = (data['pickupAddress'] ?? '').toString();
+
+      debugPrint('collectorId=$collectorId');
+      debugPrint('WRITING TO userNotifications/$collectorId/items');
+
+      await requestRef.update({
         'status': 'rejected',
         'active': false,
         'reason': reason.trim(),
         'rejectedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      if (collectorId.isNotEmpty) {
+        await FirebaseFirestore.instance
+          .collection('userNotifications')
+          .doc(collectorId)
+          .collection('items')
+          .add({
+        'type': 'resident_rejected_pickup',
+        'title': 'Pickup cancelled',
+        'message': '$householdName cancelled the pickup request.',
+        'reason': reason.trim(),
+        'requestId': requestId,
+        'householdName': householdName,
+        'pickupAddress': pickupAddress,
+        'status': 'unread',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+        debugPrint('NOTIFICATION WRITE OK');
+      }
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

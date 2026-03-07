@@ -5,7 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'services/notification_service.dart';
-import 'services/tflite_service.dart'; // ✅ ADD THIS
+import 'services/tflite_service.dart'; 
 import 'firebase_options.dart';
 import 'role_gate.dart';
 import 'auth/login_page.dart';
@@ -44,6 +44,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       if (user == null) return;
 
       await _setOnline(true);
+
+      // wait for Firebase services to stabilize
+      await Future.delayed(const Duration(seconds: 2));
+
       await NotificationService.init();
     });
   }

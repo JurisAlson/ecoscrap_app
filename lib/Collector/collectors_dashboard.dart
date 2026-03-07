@@ -5,87 +5,106 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'collector_transaction_page.dart'; // the merged BUY/SELL page we made
+import 'collector_transaction_page.dart';
 import 'collector_pickup_map_page.dart';
 
-// ✅ Chat (pickup list + junkshop direct chat)
 import '../chat/services/chat_services.dart';
 
 class CollectorsDashboardPage extends StatefulWidget {
   const CollectorsDashboardPage({super.key});
 
   @override
-  State<CollectorsDashboardPage> createState() => _CollectorsDashboardPageState();
+  State<CollectorsDashboardPage> createState() =>
+      _CollectorsDashboardPageState();
 }
 
 class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     with WidgetsBindingObserver {
-  // Theme
   static const Color primaryColor = Color(0xFF1FA9A7);
   static const Color bgColor = Color(0xFF0F172A);
 
-  // ✅ RIGHT DRAWER controller
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-
-  // ✅ Chat service
   final ChatService _chat = ChatService();
-  
 
-  // ✅ Footer current tab
   int _tabIndex = 0;
 
   Future<void> _acceptPickup(String requestId) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    final db = FirebaseFirestore.instance;
+  final db = FirebaseFirestore.instance;
+  final ref = db.collection('requests').doc(requestId);
 
-    try {
-      // ✅ block if collector already has an active accepted/arrived pickup
+  try {
+    await db.runTransaction((tx) async {
+      final currentSnap = await tx.get(ref);
+      if (!currentSnap.exists) throw "Request not found";
+
+      final currentData = currentSnap.data() as Map<String, dynamic>;
+      final currentCollectorId =
+          (currentData['collectorId'] ?? '').toString().trim();
+      final currentStatus =
+          (currentData['status'] ?? '').toString().toLowerCase();
+      final currentActive = currentData['active'] == true;
+
+      if (!currentActive) throw "Request not active";
+      if (!(currentStatus == 'pending' || currentStatus == 'scheduled')) {
+        throw "Request is no longer available";
+      }
+      if (currentCollectorId.isNotEmpty && currentCollectorId != user.uid) {
+        throw "Already assigned";
+      }
+
       final existing = await db
           .collection('requests')
           .where('type', isEqualTo: 'pickup')
           .where('collectorId', isEqualTo: user.uid)
           .where('active', isEqualTo: true)
-          .where('status', whereIn: ['accepted', 'arrived'])
-          .limit(1)
           .get();
 
-      if (existing.docs.isNotEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("You already have an active pickup. Complete it first.")),
-        );
-        return;
-      }
+      final hasAnotherActivePickup = existing.docs.any((d) {
+        if (d.id == requestId) return false;
+        final data = d.data();
+        final status = (data['status'] ?? '').toString().toLowerCase();
 
-      await db.collection('requests').doc(requestId).update({
-        'status': 'accepted',
-        'active': true,
-        'collectorId': user.uid,
-        'acceptedAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
+        return status == 'pending' ||
+            status == 'scheduled' ||
+            status == 'accepted' ||
+            status == 'arrived';
       });
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Pickup accepted.")),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Accept failed: $e")),
-      );
-    }
+      if (hasAnotherActivePickup) {
+        throw "You already have an active pickup. Complete it first.";
+      }
+
+      final update = <String, dynamic>{
+        'collectorId': user.uid,
+        'status': 'accepted',
+        'active': true,
+        'acceptedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      tx.update(ref, update);
+    });
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Pickup accepted.")),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Accept failed: $e")),
+    );
   }
+}
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _setOnline(true);
-
-    // ✅ save FCM token
     _saveFcmToken();
   }
 
@@ -114,7 +133,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     try {
       final fcm = FirebaseMessaging.instance;
 
-      // ✅ Android 13+ + iOS permission
       await fcm.requestPermission(alert: true, badge: true, sound: true);
 
       final token = await fcm.getToken();
@@ -130,7 +148,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
       debugPrint("✅ FCM token saved for ${user.uid}: $token");
 
-      // ✅ keep updated on refresh
       FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
         await FirebaseFirestore.instance.collection("Users").doc(user.uid).set({
           "fcmToken": newToken,
@@ -157,30 +174,63 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       debugPrint("❌ setOnline failed: $e");
     }
   }
-  Future<void> _declinePickup(String requestId) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
-    try {
-      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+  Future<void> _declinePickup(String requestId, {required String reason}) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  final ref = FirebaseFirestore.instance.collection('requests').doc(requestId);
+
+  try {
+    await FirebaseFirestore.instance.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      if (!snap.exists) throw "Request not found";
+
+      final data = snap.data() as Map<String, dynamic>;
+      final householdId = (data['householdId'] ?? '').toString().trim();
+      final collectorName = (data['collectorName'] ?? 'Collector').toString();
+      final pickupAddress = (data['pickupAddress'] ?? '').toString();
+
+      tx.update(ref, {
         'status': 'declined',
         'active': false,
         'declinedBy': FieldValue.arrayUnion([user.uid]),
-        'declinedAt': FieldValue.serverTimestamp(),
+        'collectorDeclineReason': reason.trim(),
+        'collectorDeclinedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Declined.")),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Decline failed: $e")),
-      );
-    }
+      if (householdId.isNotEmpty) {
+        final notifRef = FirebaseFirestore.instance
+            .collection('userNotifications')
+            .doc(householdId)
+            .collection('items')
+            .doc();
+
+        tx.set(notifRef, {
+          'type': 'collector_declined_pickup',
+          'title': 'Pickup declined',
+          'message': '$collectorName declined the pickup request.',
+          'reason': reason.trim(),
+          'requestId': requestId,
+          'pickupAddress': pickupAddress,
+          'status': 'unread',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+    });
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Pickup declined.")),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Decline failed: $e")),
+    );
   }
+}
 
   Widget _collectorProfileDrawer(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -208,10 +258,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
             ],
           ),
           const SizedBox(height: 20),
-
           const Icon(Icons.person, size: 80, color: Colors.white54),
           const SizedBox(height: 16),
-
           Text(
             user?.displayName ?? "Collector",
             style: const TextStyle(
@@ -227,10 +275,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
             style: const TextStyle(color: Colors.white70),
             textAlign: TextAlign.center,
           ),
-
           const SizedBox(height: 24),
-
-          // ✅ Logout
           SizedBox(
             width: double.infinity,
             height: 48,
@@ -258,10 +303,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     );
   }
 
-  // ✅ UPDATED: Admin-approved collectors can enter dashboard immediately
-  // New separated logic:
-  // - allow if Roles == collector AND collectorStatus == "adminApproved"
-  // - legacy fallback remains
   Widget _pendingVerificationScreenNew({
     required String collectorStatus,
     required bool legacyAdminOk,
@@ -271,14 +312,13 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     final s = collectorStatus.toLowerCase();
 
     String title = "Collector account pending";
-    String body = "Your account is not verified yet.\nPlease wait for approval.";
+    String body =
+        "Your account is not verified yet.\nPlease wait for approval.";
 
-    // NEW FLOW
     if (s == "pending") {
       title = "Collector request submitted";
       body = "Please wait for admin approval.";
     } else if (s == "adminapproved") {
-      // should not normally show if allowDashboard is correct
       title = "Admin approved";
       body = "You may now access the Collector Dashboard.";
     } else if (s == "rejected") {
@@ -286,7 +326,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       body = "Your collector request was rejected.\nYou may submit again.";
     }
 
-    // LEGACY FLOW fallback messaging
     if (collectorStatus.isEmpty) {
       if (!legacyAdminOk) {
         title = "Collector account pending";
@@ -307,7 +346,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.hourglass_top, color: Colors.white70, size: 70),
+              const Icon(Icons.hourglass_top,
+                  color: Colors.white70, size: 70),
               const SizedBox(height: 16),
               Text(
                 title,
@@ -358,167 +398,190 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     return rolesRaw == "collector" || rolesRaw == "collectors";
   }
 
-  // ✅ NEW FLOW: allow entry once admin approved (no junkshop needed)
   bool _isCollectorAdminApproved(Map<String, dynamic>? data) {
     final s = (data?['collectorStatus'] ?? "").toString().trim().toLowerCase();
     return s == "adminapproved";
   }
 
-  // ✅ legacy fallback (keep)
   bool _isLegacyCollectorVerified(Map<String, dynamic>? data) {
     final legacyAdminOk = data?['adminVerified'] == true;
-    final legacyAdminStatus = (data?['adminStatus'] ?? "").toString().toLowerCase();
+    final legacyAdminStatus =
+        (data?['adminStatus'] ?? "").toString().toLowerCase();
     final legacyJunkshopOk = data?['junkshopVerified'] == true;
     final legacyActive = data?['collectorActive'] == true;
-    return legacyAdminOk && legacyAdminStatus == "approved" && legacyJunkshopOk && legacyActive;
-  } 
+    return legacyAdminOk &&
+        legacyAdminStatus == "approved" &&
+        legacyJunkshopOk &&
+        legacyActive;
+  }
 
-  Widget _buildCollectorNotifBell() {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+Widget _buildCollectorNotifBell() {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    // fallback bell (shouldn't happen if dashboard requires login)
-    if (uid == null) {
-      return InkWell(
-        onTap: () async {
-          if (!context.mounted) return;
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const CollectorNotificationsPage()),
-          );
-        },
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.05),
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
+  if (uid == null) {
+    return InkWell(
+      onTap: () async {
+        if (!context.mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const CollectorNotificationsPage(),
           ),
-          child: Icon(Icons.notifications_outlined, color: Colors.grey.shade300),
-        ),
-      );
-    }
-
-    final userDocStream =
-        FirebaseFirestore.instance.collection('Users').doc(uid).snapshots();
-
-    // ✅ Orders that are NOT yet assigned to any collector
-    final unassignedQuery = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'pickup')
-        .where('status', whereIn: ['pending', 'scheduled'])
-        .orderBy('updatedAt', descending: true)
-        .limit(1);
-
-    // ✅ Orders already assigned to me (optional, but useful)
-    final mineQuery = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'pickup')
-        .where('collectorId', isEqualTo: uid)
-        .where('status', whereIn: ['pending', 'scheduled'])
-        .orderBy('updatedAt', descending: true)
-        .limit(1);
-
-    Widget bell({required bool hasUnread}) {
-      return InkWell(
-        onTap: () async {
-          // mark as seen BEFORE opening notifications
-          await FirebaseFirestore.instance.collection('Users').doc(uid).set({
-            'lastNotifSeenAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-
-          if (!context.mounted) return;
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const CollectorNotificationsPage()),
-          );
-        },
-        borderRadius: BorderRadius.circular(999),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            AnimatedScale(
-              scale: hasUnread ? 1.08 : 1.0,
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutBack,
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withOpacity(0.06)),
-                ),
-                child: Icon(
-                  Icons.notifications_outlined,
-                  color: hasUnread ? Colors.amberAccent : Colors.grey.shade300,
-                ),
-              ),
-            ),
-            if (hasUnread)
-              Positioned(
-                right: 8,
-                top: 8,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      );
-    }
-
-    Timestamp? _pickTs(QuerySnapshot? qs) {
-      final docs = qs?.docs ?? [];
-      if (docs.isEmpty) return null;
-      final data = docs.first.data() as Map<String, dynamic>;
-      return data['updatedAt'] as Timestamp?;
-    }
-
-    return StreamBuilder<DocumentSnapshot>(
-      stream: userDocStream,
-      builder: (context, userSnap) {
-        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
-        final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
-
-        return StreamBuilder<QuerySnapshot>(
-          stream: unassignedQuery.snapshots(),
-          builder: (context, unassignedSnap) {
-            return StreamBuilder<QuerySnapshot>(
-              stream: mineQuery.snapshots(),
-              builder: (context, mineSnap) {
-                final a = _pickTs(unassignedSnap.data);
-                final b = _pickTs(mineSnap.data);
-
-                Timestamp? newestTs;
-                if (a != null && b != null) {
-                  newestTs = a.toDate().isAfter(b.toDate()) ? a : b;
-                } else {
-                  newestTs = a ?? b;
-                }
-
-                bool hasUnread = false;
-                if (newestTs != null) {
-                  if (lastSeen == null) {
-                    hasUnread = true;
-                  } else {
-                    hasUnread = newestTs!.toDate().isAfter(lastSeen.toDate());
-                  }
-                }
-
-                return bell(hasUnread: hasUnread);
-              },
-            );
-          },
         );
       },
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withOpacity(0.06)),
+        ),
+        child: Icon(
+          Icons.notifications_none_rounded,
+          color: Colors.grey.shade300,
+        ),
+      ),
     );
   }
-    
+
+  final unreadNotifStream = FirebaseFirestore.instance
+      .collection('userNotifications')
+      .doc(uid)
+      .collection('items')
+      .where('status', isEqualTo: 'unread')
+      .snapshots();
+
+  final unassignedStream = FirebaseFirestore.instance
+      .collection('requests')
+      .where('type', isEqualTo: 'pickup')
+      .where('active', isEqualTo: true)
+      .where('collectorId', isEqualTo: "")
+      .where('status', whereIn: ['pending', 'scheduled'])
+      .snapshots();
+
+  final mineStream = FirebaseFirestore.instance
+      .collection('requests')
+      .where('type', isEqualTo: 'pickup')
+      .where('collectorId', isEqualTo: uid)
+      .where('status', whereIn: ['pending', 'scheduled', 'accepted'])
+      .snapshots();
+
+  return StreamBuilder<QuerySnapshot>(
+    stream: unreadNotifStream,
+    builder: (context, notifSnap) {
+      return StreamBuilder<QuerySnapshot>(
+        stream: unassignedStream,
+        builder: (context, aSnap) {
+          return StreamBuilder<QuerySnapshot>(
+            stream: mineStream,
+            builder: (context, bSnap) {
+              if (notifSnap.hasError) {
+                debugPrint('BELL notifSnap error: ${notifSnap.error}');
+              }
+              if (aSnap.hasError) {
+                debugPrint('BELL unassignedStream error: ${aSnap.error}');
+              }
+              if (bSnap.hasError) {
+                debugPrint('BELL mineStream error: ${bSnap.error}');
+              }
+
+              final hasUnread = (notifSnap.data?.docs.isNotEmpty ?? false);
+
+              final Map<String, QueryDocumentSnapshot> byId = {};
+
+              for (final d in (aSnap.data?.docs ?? [])) {
+                byId[d.id] = d;
+              }
+
+              for (final d in (bSnap.data?.docs ?? [])) {
+                byId[d.id] = d;
+              }
+
+              final visiblePickupDocs = byId.values.where((d) {
+                final data = d.data() as Map<String, dynamic>;
+                final declinedRaw = data['declinedBy'];
+                final declinedBy = declinedRaw is List
+                    ? declinedRaw.map((e) => e.toString()).toList()
+                    : <String>[];
+
+                final active = data['active'] == true;
+                final status = (data['status'] ?? '').toString().toLowerCase();
+
+                final visible = !declinedBy.contains(uid);
+                final alertable = active &&
+                    (status == 'pending' || status == 'scheduled');
+
+                debugPrint(
+                  'BELL DOC ${d.id} => active=$active status=$status declinedBy=$declinedBy visible=$visible alertable=$alertable',
+                );
+
+                return visible && alertable;
+              }).toList();
+
+              final hasAvailablePickup = visiblePickupDocs.isNotEmpty;
+              final hasAlert = hasUnread || hasAvailablePickup;
+
+              debugPrint(
+                'BELL => unread=$hasUnread, aDocs=${aSnap.data?.docs.length ?? 0}, bDocs=${bSnap.data?.docs.length ?? 0}, visiblePickupDocs=${visiblePickupDocs.length}, hasAlert=$hasAlert',
+              );
+
+              return InkWell(
+                onTap: () async {
+                  if (!context.mounted) return;
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const CollectorNotificationsPage(),
+                    ),
+                  );
+                },
+                borderRadius: BorderRadius.circular(999),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white.withOpacity(0.10)),
+                        color: Colors.white.withOpacity(0.04),
+                      ),
+                      child: Icon(
+                        Icons.notifications_none_rounded,
+                        color: hasAlert ? Colors.amber : Colors.white70,
+                        size: 28,
+                      ),
+                    ),
+                    if (hasAlert)
+                      Positioned(
+                        right: 8,
+                        top: 8,
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: bgColor,
+                              width: 1.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+}
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -533,7 +596,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     }
 
     return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('Users').doc(user.uid).snapshots(),
+      stream:
+          FirebaseFirestore.instance.collection('Users').doc(user.uid).snapshots(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Scaffold(
@@ -556,18 +620,16 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
         final data = snap.data?.data() as Map<String, dynamic>?;
 
-        // NEW FLOW checks
         final isCollectorRole = _isCollectorRole(data);
         final collectorStatus = (data?['collectorStatus'] ?? "").toString();
 
-        // LEGACY checks
         final legacyAdminOk = data?['adminVerified'] == true;
         final legacyJunkshopOk = data?['junkshopVerified'] == true;
         final legacyActive = data?['collectorActive'] == true;
 
-        // ✅ IMPORTANT: allow dashboard when adminApproved (no junkshop needed)
         final allowDashboard =
-            (isCollectorRole && _isCollectorAdminApproved(data)) || _isLegacyCollectorVerified(data);
+            (isCollectorRole && _isCollectorAdminApproved(data)) ||
+                _isLegacyCollectorVerified(data);
 
         if (!allowDashboard) {
           return Scaffold(
@@ -581,14 +643,12 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           );
         }
 
-        // ✅ 3 bottom tabs (NOTIFS is now a RIGHT drawer)
         final pages = <Widget>[
           _CollectorHomeTab(
             collectorId: user.uid,
             onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
             notifBell: _buildCollectorNotifBell(),
             onAcceptPickup: _acceptPickup,
-            // ✅ add this so HOME can still open Orders
             onOpenOrders: () {
               Navigator.push(
                 context,
@@ -603,21 +663,16 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
             },
           ),
           const CollectorMessagesPage(),
-
-          // ✅ Transactions TAB (your merged buy/sell page)
           const CollectorTransactionPage(embedded: true),
-];
+        ];
 
         return Scaffold(
           key: _scaffoldKey,
           backgroundColor: bgColor,
-
-          // ✅ LEFT DRAWER = PROFILE
           drawer: Drawer(
             backgroundColor: bgColor,
             child: SafeArea(child: _collectorProfileDrawer(context)),
           ),
-
           body: Stack(
             children: [
               Positioned(
@@ -630,8 +685,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                 left: -120,
                 child: _blurCircle(Colors.green.withOpacity(0.10), 360),
               ),
-
-              // ✅ MUST be inside children list
               SafeArea(child: pages[_tabIndex]),
             ],
           ),
@@ -644,7 +697,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     );
   }
 
-  // ================== FOOTER ==================
   Widget _collectorFooter({
     required int currentIndex,
     required ValueChanged<int> onTap,
@@ -665,15 +717,17 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         selectedFontSize: 11,
         unselectedFontSize: 11,
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: "HOME"),
-          BottomNavigationBarItem(icon: Icon(Icons.forum_outlined), label: "CHATS"),
-          BottomNavigationBarItem(icon: Icon(Icons.receipt_long), label: "TRANSACTION"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.home_rounded), label: "HOME"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.forum_outlined), label: "CHATS"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.receipt_long), label: "TRANSACTION"),
         ],
       ),
     );
   }
 
-  // ================== UI HELPERS ==================
   static Widget _blurCircle(Color color, double size) {
     return Container(
       width: size,
@@ -687,7 +741,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   }
 }
 
-// ===================== HOME TAB =====================
 class _CollectorHomeTab extends StatelessWidget {
   const _CollectorHomeTab({
     required this.collectorId,
@@ -695,8 +748,8 @@ class _CollectorHomeTab extends StatelessWidget {
     required this.notifBell,
     required this.onAcceptPickup,
     required this.onOpenOrders,
-
   });
+
   final Widget notifBell;
   final String collectorId;
   final VoidCallback onOpenProfile;
@@ -708,11 +761,10 @@ class _CollectorHomeTab extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 90), // leave space for footer
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 90),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ✅ Header: profile left, bell right (like household/admin)
           Row(
             children: [
               GestureDetector(
@@ -739,7 +791,8 @@ class _CollectorHomeTab extends StatelessWidget {
                       maxLines: 1,
                       softWrap: false,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                      style:
+                          TextStyle(color: Colors.grey.shade400, fontSize: 12),
                     ),
                     Text(
                       user?.displayName ?? "Collector",
@@ -755,14 +808,10 @@ class _CollectorHomeTab extends StatelessWidget {
                   ],
                 ),
               ),
-
-              // ✅ uniform bell widget from parent
               notifBell,
             ],
           ),
-
           const SizedBox(height: 14),
-
           _card(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -783,14 +832,17 @@ class _CollectorHomeTab extends StatelessWidget {
                     children: [
                       Text(
                         "Community + Environment",
-                        style:
-                            TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold),
                       ),
                       SizedBox(height: 4),
                       Text(
                         "Every pickup helps the community, supports junkshops, and reduces pollution.",
                         style: TextStyle(
-                            color: Colors.white70, fontSize: 12, height: 1.35),
+                            color: Colors.white70,
+                            fontSize: 12,
+                            height: 1.35),
                       ),
                     ],
                   ),
@@ -799,13 +851,14 @@ class _CollectorHomeTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-
           const Text(
             "Logs",
-            style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 10),
-
           _CollectorLogsHome(
             collectorId: collectorId,
             onAcceptPickup: onAcceptPickup,
@@ -828,7 +881,6 @@ class _CollectorHomeTab extends StatelessWidget {
   }
 }
 
-// ===================== MAP TAB =====================
 class _CollectorMapTab extends StatelessWidget {
   const _CollectorMapTab({
     required this.collectorId,
@@ -838,7 +890,7 @@ class _CollectorMapTab extends StatelessWidget {
 
   final String collectorId;
   final Future<void> Function(String requestId) onAcceptPickup;
-  final Future<void> Function(String requestId) onDeclinePickup;
+  final Future<void> Function(String requestId, {required String reason}) onDeclinePickup;
 
   String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -868,13 +920,14 @@ class _CollectorMapTab extends StatelessWidget {
     final e = endTs.toDate();
     return "$date • ${hm(s)}–${hm(e)}";
   }
+
   @override
   Widget build(BuildContext context) {
     final resumeQuery = FirebaseFirestore.instance
         .collection('requests')
         .where('type', isEqualTo: 'pickup')
         .where('collectorId', isEqualTo: collectorId)
-        .where('status', whereIn: ['pending', 'accepted', 'arrived', 'scheduled'])
+        .where('status', whereIn: ['pending', 'scheduled'])
         .orderBy('updatedAt', descending: true)
         .limit(1);
 
@@ -885,7 +938,10 @@ class _CollectorMapTab extends StatelessWidget {
         children: [
           const Text(
             "Orders",
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           StreamBuilder<QuerySnapshot>(
@@ -911,157 +967,151 @@ class _CollectorMapTab extends StatelessWidget {
               final address = (data['pickupAddress'] ?? '').toString();
 
               final bagLabel = (data['bagLabel'] ?? '').toString();
-              final bagKgNum = (data['bagKg'] is num) ? (data['bagKg'] as num).toDouble() : null;
+              final bagKgNum =
+                  (data['bagKg'] is num) ? (data['bagKg'] as num).toDouble() : null;
 
-              final etaMinutes = (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
+              final etaMinutes = (data['etaMinutes'] is num)
+                  ? (data['etaMinutes'] as num).toInt()
+                  : null;
 
-              // schedule text (you already use this in drawer page)
-              // If this function is not accessible here, I’ll show you the quick fix below.
               final pickupTimeText = _formatPickupSchedule(data);
-
               final isAcceptable = status == 'pending' || status == 'scheduled';
 
               return Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.06),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.08)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Top row: icon + title + status chip
-                  Row(
-                    children: [
-                      Container(
-                        width: 46,
-                        height: 46,
-                        decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.14),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: const Icon(Icons.navigation_rounded, color: Colors.green),
-                      ),
-                      const SizedBox(width: 12),
-
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              "Current pickup",
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 14,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.grey.shade300,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      _statusChip(status),
-                    ],
-                  ),
-
-                  const SizedBox(height: 10),
-
-                  if (address.isNotEmpty)
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Row(
                       children: [
-                        Icon(Icons.place_outlined, size: 16, color: Colors.grey.shade400),
-                        const SizedBox(width: 6),
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: Colors.green.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Icon(Icons.navigation_rounded,
+                              color: Colors.green),
+                        ),
+                        const SizedBox(width: 12),
                         Expanded(
-                          child: Text(
-                            address,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.grey.shade400,
-                              fontSize: 12,
-                              height: 1.25,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                "Current pickup",
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.grey.shade300,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
+                        _statusChip(status),
                       ],
                     ),
-
-                  const SizedBox(height: 12),
-
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _metaChip(Icons.access_time_rounded, "Pickup: $pickupTimeText"),
-
-                      if (bagLabel.isNotEmpty)
+                    const SizedBox(height: 10),
+                    if (address.isNotEmpty)
+                      Row(
+                        children: [
+                          Icon(Icons.place_outlined,
+                              size: 16, color: Colors.grey.shade400),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              address,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                                height: 1.25,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
                         _metaChip(
-                          Icons.shopping_bag_outlined,
-                          "Bag: $bagLabel${bagKgNum != null ? " • ${bagKgNum.toStringAsFixed(1)} kg" : ""}",
-                        ),
-
-                      if (etaMinutes != null)
-                        _metaChip(Icons.timer_outlined, "ETA: $etaMinutes min"),
-
-                    ],
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  // Buttons row
-                  Row(
-                    children: [
-                      if (isAcceptable) ...[
-                        Expanded(
-                          child: _pillButton(
-                            label: "DECLINE",
-                            isPrimary: false,
-                            onTap: () async => await onDeclinePickup(doc.id),
+                            Icons.access_time_rounded, "Pickup: $pickupTimeText"),
+                        if (bagLabel.isNotEmpty)
+                          _metaChip(
+                            Icons.shopping_bag_outlined,
+                            "Bag: $bagLabel${bagKgNum != null ? " • ${bagKgNum.toStringAsFixed(1)} kg" : ""}",
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _pillButton(
-                            label: "ACCEPT",
-                            isPrimary: true,
-                            onTap: () async => await onAcceptPickup(doc.id),
-                          ),
-                        ),
-                      ] else ...[
-                        Expanded(
-                          child: _pillButton(
-                            label: "OPEN",
-                            isPrimary: true,
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => CollectorPickupMapPage(requestId: doc.id),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
+                        if (etaMinutes != null)
+                          _metaChip(Icons.timer_outlined, "ETA: $etaMinutes min"),
                       ],
-                    ],
-                  ),
-                ],
-              ),
-            );
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        if (isAcceptable) ...[
+                          Expanded(
+                            child: _pillButton(
+                              label: "DECLINE",
+                              isPrimary: false,
+                              onTap: () async => await onDeclinePickup(
+                                doc.id,
+                                reason: "Collector declined the pickup",
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _pillButton(
+                              label: "ACCEPT",
+                              isPrimary: true,
+                              onTap: () async => await onAcceptPickup(doc.id),
+                            ),
+                          ),
+                        ] else ...[
+                          Expanded(
+                            child: _pillButton(
+                              label: "OPEN",
+                              isPrimary: true,
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        CollectorPickupMapPage(requestId: doc.id),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              );
             },
           ),
         ],
@@ -1080,13 +1130,18 @@ class _CollectorMapTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          Text(title,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          Text(body, style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.35)),
+          Text(body,
+              style: const TextStyle(
+                  color: Colors.white70, fontSize: 12, height: 1.35)),
         ],
       ),
     );
   }
+
   Widget _metaChip(IconData icon, String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -1112,6 +1167,7 @@ class _CollectorMapTab extends StatelessWidget {
       ),
     );
   }
+
   Widget _statusChip(String status) {
     final s = status.toLowerCase();
 
@@ -1204,9 +1260,8 @@ class _CollectorMapTab extends StatelessWidget {
   }
 }
 
-// ================= LOGS HOME (unchanged) =================
-  class _CollectorLogsHome extends StatelessWidget {
-    const _CollectorLogsHome({
+class _CollectorLogsHome extends StatelessWidget {
+  const _CollectorLogsHome({
     required this.collectorId,
     required this.onAcceptPickup,
   });
@@ -1238,7 +1293,7 @@ class _CollectorMapTab extends StatelessWidget {
         .where('collectorId', isEqualTo: collectorId)
         .where('active', isEqualTo: true)
         .where('status', whereIn: ['pending', 'accepted', 'arrived', 'scheduled'])
-        .orderBy('updatedAt', descending: true) 
+        .orderBy('updatedAt', descending: true)
         .limit(1);
 
     return StreamBuilder<QuerySnapshot>(
@@ -1288,7 +1343,8 @@ class _CollectorMapTab extends StatelessWidget {
             if (activeDocs.isEmpty && historyDocs.isEmpty) {
               return const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text("No logs yet.", style: TextStyle(color: Colors.white70)),
+                child: Text("No logs yet.",
+                    style: TextStyle(color: Colors.white70)),
               );
             }
 
@@ -1318,7 +1374,8 @@ class _CollectorMapTab extends StatelessWidget {
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.play_arrow_rounded, color: Colors.green),
+                          const Icon(Icons.play_arrow_rounded,
+                              color: Colors.green),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
@@ -1334,12 +1391,14 @@ class _CollectorMapTab extends StatelessWidget {
                                 const SizedBox(height: 4),
                                 Text(
                                   "$name • $status",
-                                  style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
+                                  style: TextStyle(
+                                      color: Colors.grey.shade300, fontSize: 12),
                                 ),
                                 if (address.isNotEmpty)
                                   Text(
                                     address,
-                                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                                    style: TextStyle(
+                                        color: Colors.grey.shade400, fontSize: 11),
                                   ),
                               ],
                             ),
@@ -1349,7 +1408,8 @@ class _CollectorMapTab extends StatelessWidget {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => CollectorPickupMapPage(requestId: doc.id),
+                                  builder: (_) =>
+                                      CollectorPickupMapPage(requestId: doc.id),
                                 ),
                               );
                             },
@@ -1374,13 +1434,12 @@ class _CollectorMapTab extends StatelessWidget {
                 if (activeDocs.isEmpty)
                   const Padding(
                     padding: EdgeInsets.only(bottom: 10),
-                    child: Text("No active pickups.", style: TextStyle(color: Colors.white54)),
+                    child: Text("No active pickups.",
+                        style: TextStyle(color: Colors.white54)),
                   )
                 else
                   for (final d in activeDocs) _buildLogCard(d),
-
                 const SizedBox(height: 14),
-
                 const Text(
                   "History",
                   style: TextStyle(
@@ -1392,7 +1451,8 @@ class _CollectorMapTab extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 if (historyDocs.isEmpty)
-                  const Text("No history yet.", style: TextStyle(color: Colors.white54))
+                  const Text("No history yet.",
+                      style: TextStyle(color: Colors.white54))
                 else
                   for (final d in historyDocs) _buildLogCard(d),
               ],
@@ -1501,7 +1561,8 @@ class _CollectorMapTab extends StatelessWidget {
     }
   }
 
-  static Timestamp? _pickBestTimestamp(Map<String, dynamic> data, String status) {
+  static Timestamp? _pickBestTimestamp(
+      Map<String, dynamic> data, String status) {
     Timestamp? t(dynamic v) => v is Timestamp ? v : null;
 
     if (status == 'accepted') {
@@ -1511,19 +1572,22 @@ class _CollectorMapTab extends StatelessWidget {
       return t(data['completedAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
     }
     if (status == 'transferred') {
-      return t(data['transferredAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
+      return t(data['transferredAt']) ??
+          t(data['updatedAt']) ??
+          t(data['createdAt']);
     }
     return t(data['updatedAt']) ?? t(data['createdAt']);
   }
 
-  
   static String _formatTimestamp(Timestamp? ts) {
     if (ts == null) return "—";
     final dt = ts.toDate();
     final now = DateTime.now();
 
-    final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
-    final yesterday = dt.year == now.year && dt.month == now.month && dt.day == now.day - 1;
+    final sameDay =
+        dt.year == now.year && dt.month == now.month && dt.day == now.day;
+    final yesterday =
+        dt.year == now.year && dt.month == now.month && dt.day == now.day - 1;
 
     String two(int n) => n.toString().padLeft(2, '0');
 
@@ -1535,7 +1599,20 @@ class _CollectorMapTab extends StatelessWidget {
     if (sameDay) return "Today • $time";
     if (yesterday) return "Yesterday • $time";
 
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
     final m = months[dt.month - 1];
     return "$m ${dt.day} • $time";
   }
@@ -1574,7 +1651,8 @@ class _CollectorMapTab extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -1593,4 +1671,3 @@ class _CollectorMapTab extends StatelessWidget {
     );
   }
 }
-
