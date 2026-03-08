@@ -2,8 +2,8 @@
 import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'receipt_screen.dart';
-import 'transactiondetailscreen.dart'; // make sure filename matches EXACTLY
+import 'receipt_screen.dart' as receipt;
+import 'transactiondetailscreen.dart';
 
 class TransactionScreen extends StatefulWidget {
   final String shopID;
@@ -131,7 +131,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => ReceiptScreen(shopID: widget.shopID),
+              builder: (_) => receipt.ReceiptScreen(shopID: widget.shopID),
             ),
           );
         },
