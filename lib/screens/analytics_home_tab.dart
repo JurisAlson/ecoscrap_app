@@ -49,27 +49,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     return end.subtract(const Duration(days: 1)).day;
   }
 
-  String _normalizeCategory(String raw) {
-    final v = raw.trim().toUpperCase();
-
-    if (v.startsWith('PET')) return 'PET';
-    if (v.startsWith('HDPE')) return 'HDPE';
-    if (v.startsWith('LDPE')) return 'LDPE';
-    if (v.startsWith('PVC')) return 'PVC';
-    if (v.startsWith('PP WHITE')) return 'PP WHITE';
-    if (v.startsWith('PP COLORED')) return 'PP COLORED';
-    if (v.startsWith('PP')) return 'PP';
-    if (v.startsWith('PS')) return 'PS';
-
-    return v;
-  }
-
-  Map<String, double> _emptyCategoryMap() {
-    return {
-      for (final c in kMajorCategories) c.trim().toUpperCase(): 0.0,
-    };
-  }
-
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -113,10 +92,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
       children: [
         _homeHeader(),
         const SizedBox(height: 12),
-
         PromoSlider(primaryColor: primaryColor),
         const SizedBox(height: 16),
-
         _buildMonthSelector(),
         const SizedBox(height: 16),
 
@@ -126,7 +103,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             if (txSnap.connectionState == ConnectionState.waiting) {
               return _card(
                 child: const SizedBox(
-                  height: 240,
+                  height: 260,
                   child: Center(child: CircularProgressIndicator()),
                 ),
               );
@@ -147,7 +124,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                 if (invSnap.connectionState == ConnectionState.waiting) {
                   return _card(
                     child: const SizedBox(
-                      height: 240,
+                      height: 260,
                       child: Center(child: CircularProgressIndicator()),
                     ),
                   );
@@ -169,8 +146,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                   dailyRevenue[d] = 0.0;
                 }
 
-                final revByCat = _emptyCategoryMap();
-                final inventoryKgByCat = _emptyCategoryMap();
+                final revByCat = emptyMajorCategoryMap();
+                final inventoryKgByCat = emptyMajorCategoryMap();
 
                 for (final doc in txSnap.data!.docs) {
                   final data = doc.data() as Map<String, dynamic>;
@@ -190,8 +167,9 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
                   for (final raw in items) {
                     final it = raw as Map<String, dynamic>;
+
                     final cat =
-                        _normalizeCategory((it['category'] ?? '').toString());
+                        normalizeCategoryKey((it['category'] ?? '').toString());
                     final sellTotal =
                         (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
 
@@ -199,8 +177,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
                     if (revByCat.containsKey(cat)) {
                       revByCat[cat] = revByCat[cat]! + sellTotal;
-                    } else {
-                      revByCat[cat] = sellTotal;
                     }
                   }
 
@@ -212,8 +188,9 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
                 for (final doc in invSnap.data!.docs) {
                   final data = doc.data() as Map<String, dynamic>;
-                  final rawCat = (data['category'] ?? '').toString();
-                  final cat = _normalizeCategory(rawCat);
+                  final cat = normalizeCategoryKey(
+                    (data['category'] ?? '').toString(),
+                  );
                   final unitsKg =
                       (data['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
@@ -222,8 +199,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                   if (inventoryKgByCat.containsKey(cat)) {
                     inventoryKgByCat[cat] =
                         inventoryKgByCat[cat]! + unitsKg;
-                  } else {
-                    inventoryKgByCat[cat] = unitsKg;
                   }
                 }
 
@@ -264,8 +239,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             double profit = 0;
             int salesCount = 0;
 
-            final revByCat = _emptyCategoryMap();
-            final profitByCat = _emptyCategoryMap();
+            final revByCat = emptyMajorCategoryMap();
+            final profitByCat = emptyMajorCategoryMap();
 
             for (final doc in snap.data!.docs) {
               final data = doc.data() as Map<String, dynamic>;
@@ -281,9 +256,9 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               final items = (data['items'] as List<dynamic>?) ?? [];
               for (final raw in items) {
                 final it = raw as Map<String, dynamic>;
-                final cat =
-                    _normalizeCategory((it['category'] ?? '').toString());
 
+                final cat =
+                    normalizeCategoryKey((it['category'] ?? '').toString());
                 final sellTotal =
                     (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
                 final costTotal =
@@ -298,14 +273,10 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
                 if (revByCat.containsKey(cat)) {
                   revByCat[cat] = revByCat[cat]! + sellTotal;
-                } else {
-                  revByCat[cat] = sellTotal;
                 }
 
                 if (profitByCat.containsKey(cat)) {
                   profitByCat[cat] = profitByCat[cat]! + itemProfit;
-                } else {
-                  profitByCat[cat] = itemProfit;
                 }
               }
             }
@@ -340,7 +311,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                       ),
                       const SizedBox(height: 10),
                       ...kMajorCategories.map((c) {
-                        final key = c.trim().toUpperCase();
+                        final key = normalizeCategoryKey(c);
                         final r = revByCat[key] ?? 0.0;
                         final p = profitByCat[key] ?? 0.0;
 
@@ -681,8 +652,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
       );
     }
 
-    final totalKg =
-        entries.fold<double>(0.0, (sum, e) => sum + e.value);
+    final totalKg = entries.fold<double>(0.0, (sum, e) => sum + e.value);
     final top = entries.first;
     final maxKg = top.value <= 0 ? 1.0 : top.value;
 
