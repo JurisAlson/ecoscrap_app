@@ -1,10 +1,8 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
-
-// ✅ charts package
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/material.dart';
 
 import '../constants/categories.dart';
 
@@ -51,6 +49,27 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     return end.subtract(const Duration(days: 1)).day;
   }
 
+  String _normalizeCategory(String raw) {
+    final v = raw.trim().toUpperCase();
+
+    if (v.startsWith('PET')) return 'PET';
+    if (v.startsWith('HDPE')) return 'HDPE';
+    if (v.startsWith('LDPE')) return 'LDPE';
+    if (v.startsWith('PVC')) return 'PVC';
+    if (v.startsWith('PP WHITE')) return 'PP WHITE';
+    if (v.startsWith('PP COLORED')) return 'PP COLORED';
+    if (v.startsWith('PP')) return 'PP';
+    if (v.startsWith('PS')) return 'PS';
+
+    return v;
+  }
+
+  Map<String, double> _emptyCategoryMap() {
+    return {
+      for (final c in kMajorCategories) c.trim().toUpperCase(): 0.0,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -68,15 +87,25 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
       );
     }
 
-    // ✅ FIXED: Users/{shopId}/transaction
     final txStream = FirebaseFirestore.instance
         .collection('Users')
         .doc(shopId)
         .collection('transaction')
-        .where('transactionDate',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(start))
-        .where('transactionDate', isLessThan: Timestamp.fromDate(end))
+        .where(
+          'transactionDate',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(start),
+        )
+        .where(
+          'transactionDate',
+          isLessThan: Timestamp.fromDate(end),
+        )
         .orderBy('transactionDate', descending: true)
+        .snapshots();
+
+    final inventoryStream = FirebaseFirestore.instance
+        .collection('Users')
+        .doc(shopId)
+        .collection('inventory')
         .snapshots();
 
     return ListView(
@@ -85,79 +114,126 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
         _homeHeader(),
         const SizedBox(height: 12),
 
-        // ✅ isolated widget so swiping does NOT rebuild whole Analytics page
         PromoSlider(primaryColor: primaryColor),
         const SizedBox(height: 16),
 
         _buildMonthSelector(),
         const SizedBox(height: 16),
 
-        // ✅ CHARTS BETWEEN MONTH SELECTOR AND SUMMARY
         StreamBuilder<QuerySnapshot>(
           stream: txStream,
-          builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
+          builder: (context, txSnap) {
+            if (txSnap.connectionState == ConnectionState.waiting) {
               return _card(
                 child: const SizedBox(
-                  height: 220,
+                  height: 240,
                   child: Center(child: CircularProgressIndicator()),
                 ),
               );
             }
 
-            if (snap.hasError) {
+            if (txSnap.hasError) {
               return _card(
                 child: Text(
-                  "Chart error: ${snap.error}",
+                  "Chart error: ${txSnap.error}",
                   style: const TextStyle(color: Colors.redAccent),
                 ),
               );
             }
 
-            // ---- Compute Daily Revenue + Revenue by Category (sale only) ----
-            final days = _daysInMonth(start);
-
-            final dailyRevenue = <int, double>{};
-            for (int d = 1; d <= days; d++) {
-              dailyRevenue[d] = 0.0;
-            }
-
-            final revByCat = {for (final c in kMajorCategories) c: 0.0};
-
-            for (final doc in snap.data!.docs) {
-              final data = doc.data() as Map<String, dynamic>;
-              final type = (data['transactionType'] ?? '').toString();
-              if (type != 'sell' && type != 'sale') continue;
-
-              final ts = data['transactionDate'] as Timestamp?;
-              final dt = ts?.toDate();
-              if (dt == null) continue;
-
-              final items = (data['items'] as List<dynamic>?) ?? [];
-              double txRevenue = 0.0;
-
-              for (final raw in items) {
-                final it = raw as Map<String, dynamic>;
-                final cat = (it['category'] ?? '').toString();
-                final sellTotal = (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
-
-                txRevenue += sellTotal;
-
-                if (revByCat.containsKey(cat)) {
-                  revByCat[cat] = revByCat[cat]! + sellTotal;
+            return StreamBuilder<QuerySnapshot>(
+              stream: inventoryStream,
+              builder: (context, invSnap) {
+                if (invSnap.connectionState == ConnectionState.waiting) {
+                  return _card(
+                    child: const SizedBox(
+                      height: 240,
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  );
                 }
-              }
 
-              final day = dt.day;
-              if (dailyRevenue.containsKey(day)) {
-                dailyRevenue[day] = (dailyRevenue[day] ?? 0.0) + txRevenue;
-              }
-            }
+                if (invSnap.hasError) {
+                  return _card(
+                    child: Text(
+                      "Inventory chart error: ${invSnap.error}",
+                      style: const TextStyle(color: Colors.redAccent),
+                    ),
+                  );
+                }
 
-            return _chartsBlock(
-              start: start,
-              dailyRevenue: dailyRevenue,
-              revByCat: revByCat,
+                final days = _daysInMonth(start);
+
+                final dailyRevenue = <int, double>{};
+                for (int d = 1; d <= days; d++) {
+                  dailyRevenue[d] = 0.0;
+                }
+
+                final revByCat = _emptyCategoryMap();
+                final inventoryKgByCat = _emptyCategoryMap();
+
+                for (final doc in txSnap.data!.docs) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final type = (data['transactionType'] ?? '')
+                      .toString()
+                      .trim()
+                      .toLowerCase();
+
+                  if (type != 'sell' && type != 'sale') continue;
+
+                  final ts = data['transactionDate'] as Timestamp?;
+                  final dt = ts?.toDate();
+                  if (dt == null) continue;
+
+                  final items = (data['items'] as List<dynamic>?) ?? [];
+                  double txRevenue = 0.0;
+
+                  for (final raw in items) {
+                    final it = raw as Map<String, dynamic>;
+                    final cat =
+                        _normalizeCategory((it['category'] ?? '').toString());
+                    final sellTotal =
+                        (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
+
+                    txRevenue += sellTotal;
+
+                    if (revByCat.containsKey(cat)) {
+                      revByCat[cat] = revByCat[cat]! + sellTotal;
+                    } else {
+                      revByCat[cat] = sellTotal;
+                    }
+                  }
+
+                  final day = dt.day;
+                  if (dailyRevenue.containsKey(day)) {
+                    dailyRevenue[day] = (dailyRevenue[day] ?? 0.0) + txRevenue;
+                  }
+                }
+
+                for (final doc in invSnap.data!.docs) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final rawCat = (data['category'] ?? '').toString();
+                  final cat = _normalizeCategory(rawCat);
+                  final unitsKg =
+                      (data['unitsKg'] as num?)?.toDouble() ?? 0.0;
+
+                  if (unitsKg <= 0) continue;
+
+                  if (inventoryKgByCat.containsKey(cat)) {
+                    inventoryKgByCat[cat] =
+                        inventoryKgByCat[cat]! + unitsKg;
+                  } else {
+                    inventoryKgByCat[cat] = unitsKg;
+                  }
+                }
+
+                return _chartsBlock(
+                  start: start,
+                  dailyRevenue: dailyRevenue,
+                  revByCat: revByCat,
+                  inventoryKgByCat: inventoryKgByCat,
+                );
+              },
             );
           },
         ),
@@ -188,12 +264,16 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             double profit = 0;
             int salesCount = 0;
 
-            final revByCat = {for (final c in kMajorCategories) c: 0.0};
-            final profitByCat = {for (final c in kMajorCategories) c: 0.0};
+            final revByCat = _emptyCategoryMap();
+            final profitByCat = _emptyCategoryMap();
 
             for (final doc in snap.data!.docs) {
               final data = doc.data() as Map<String, dynamic>;
-              final type = (data['transactionType'] ?? '').toString();
+              final type = (data['transactionType'] ?? '')
+                  .toString()
+                  .trim()
+                  .toLowerCase();
+
               if (type != 'sell' && type != 'sale') continue;
 
               salesCount++;
@@ -201,12 +281,16 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               final items = (data['items'] as List<dynamic>?) ?? [];
               for (final raw in items) {
                 final it = raw as Map<String, dynamic>;
-                final cat = (it['category'] ?? '').toString();
+                final cat =
+                    _normalizeCategory((it['category'] ?? '').toString());
 
-                final sellTotal = (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
-                final costTotal = (it['costTotal'] as num?)?.toDouble() ?? 0.0;
+                final sellTotal =
+                    (it['sellTotal'] as num?)?.toDouble() ?? 0.0;
+                final costTotal =
+                    (it['costTotal'] as num?)?.toDouble() ?? 0.0;
                 final itemProfit =
-                    (it['profit'] as num?)?.toDouble() ?? (sellTotal - costTotal);
+                    (it['profit'] as num?)?.toDouble() ??
+                        (sellTotal - costTotal);
 
                 revenue += sellTotal;
                 cost += costTotal;
@@ -214,9 +298,14 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
                 if (revByCat.containsKey(cat)) {
                   revByCat[cat] = revByCat[cat]! + sellTotal;
+                } else {
+                  revByCat[cat] = sellTotal;
                 }
+
                 if (profitByCat.containsKey(cat)) {
                   profitByCat[cat] = profitByCat[cat]! + itemProfit;
+                } else {
+                  profitByCat[cat] = itemProfit;
                 }
               }
             }
@@ -251,24 +340,29 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                       ),
                       const SizedBox(height: 10),
                       ...kMajorCategories.map((c) {
-                        final r = revByCat[c] ?? 0.0;
-                        final p = profitByCat[c] ?? 0.0;
+                        final key = c.trim().toUpperCase();
+                        final r = revByCat[key] ?? 0.0;
+                        final p = profitByCat[key] ?? 0.0;
 
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceBetween,
                             children: [
                               Expanded(
                                 child: Text(
                                   c,
-                                  style: const TextStyle(color: Colors.white70),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                  ),
                                 ),
                               ),
                               Text(
                                 "₱${p.toStringAsFixed(2)}",
-                                style:
-                                    const TextStyle(color: Colors.greenAccent),
+                                style: const TextStyle(
+                                  color: Colors.greenAccent,
+                                ),
                               ),
                               const SizedBox(width: 10),
                               Text(
@@ -295,15 +389,15 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     );
   }
 
-  // ===================== Charts Block =====================
   Widget _chartsBlock({
     required DateTime start,
     required Map<int, double> dailyRevenue,
     required Map<String, double> revByCat,
+    required Map<String, double> inventoryKgByCat,
   }) {
     return _card(
       child: SizedBox(
-        height: 200,
+        height: 260,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -323,7 +417,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                     children: [
                       const Text(
                         "Daily Revenue",
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                        style:
+                            TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                       const SizedBox(height: 6),
                       Expanded(
@@ -339,10 +434,27 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                     children: [
                       const Text(
                         "Revenue by Category",
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                        style:
+                            TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                       const SizedBox(height: 6),
-                      Expanded(child: _revenueByCategoryBarChart(revByCat)),
+                      Expanded(
+                        child: _revenueByCategoryBarChart(revByCat),
+                      ),
+                    ],
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Inventory Overview",
+                        style:
+                            TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      const SizedBox(height: 6),
+                      Expanded(
+                        child: _inventoryOverviewCard(inventoryKgByCat),
+                      ),
                     ],
                   ),
                 ],
@@ -364,7 +476,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     double maxY = 0.0;
 
     for (int d = 1; d <= days; d++) {
-      final y = (dailyRevenue[d] ?? 0.0);
+      final y = dailyRevenue[d] ?? 0.0;
       if (y > maxY) maxY = y;
       spots.add(FlSpot(d.toDouble(), y));
     }
@@ -394,7 +506,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
         ),
         borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           rightTitles:
               const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           leftTitles: AxisTitles(
@@ -411,7 +524,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                 }
                 return Text(
                   label,
-                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  style:
+                      const TextStyle(color: Colors.white54, fontSize: 10),
                 );
               },
             ),
@@ -422,10 +536,13 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               interval: 5,
               getTitlesWidget: (value, meta) {
                 final day = value.toInt();
-                if (day < 1 || day > days) return const SizedBox.shrink();
+                if (day < 1 || day > days) {
+                  return const SizedBox.shrink();
+                }
                 return Text(
                   "$day",
-                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  style:
+                      const TextStyle(color: Colors.white54, fontSize: 10),
                 );
               },
             ),
@@ -496,7 +613,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
           ),
         ),
         titlesData: FlTitlesData(
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           rightTitles:
               const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           leftTitles: AxisTitles(
@@ -513,7 +631,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                 }
                 return Text(
                   label,
-                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                  style:
+                      const TextStyle(color: Colors.white54, fontSize: 10),
                 );
               },
             ),
@@ -523,7 +642,9 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               showTitles: true,
               getTitlesWidget: (value, meta) {
                 final i = value.toInt();
-                if (i < 0 || i >= entries.length) return const SizedBox.shrink();
+                if (i < 0 || i >= entries.length) {
+                  return const SizedBox.shrink();
+                }
 
                 final name = entries[i].key;
                 final short = name.length <= 3 ? name : name.substring(0, 3);
@@ -532,7 +653,10 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
                     short.toUpperCase(),
-                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 10,
+                    ),
                   ),
                 );
               },
@@ -544,7 +668,147 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
     );
   }
 
-  // ===================== UI helpers =====================
+  Widget _inventoryOverviewCard(Map<String, double> inventoryKgByCat) {
+    final entries = inventoryKgByCat.entries.where((e) => e.value > 0).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    if (entries.isEmpty) {
+      return const Center(
+        child: Text(
+          "No inventory data yet.",
+          style: TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    final totalKg =
+        entries.fold<double>(0.0, (sum, e) => sum + e.value);
+    final top = entries.first;
+    final maxKg = top.value <= 0 ? 1.0 : top.value;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _miniStatCard(
+                title: "Total Stock",
+                value: "${totalKg.toStringAsFixed(2)} kg",
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _miniStatCard(
+                title: "Highest Category",
+                value: top.key,
+                subValue: "${top.value.toStringAsFixed(2)} kg",
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: ListView.separated(
+            itemCount: entries.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 10),
+            itemBuilder: (context, i) {
+              final e = entries[i];
+              final percent = e.value / maxKg;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          e.key,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        "${e.value.toStringAsFixed(2)} kg",
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(99),
+                    child: LinearProgressIndicator(
+                      value: percent.clamp(0.0, 1.0),
+                      minHeight: 8,
+                      backgroundColor: Colors.white.withOpacity(0.08),
+                      valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _miniStatCard({
+    required String title,
+    required String value,
+    String? subValue,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title.toUpperCase(),
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          if (subValue != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              subValue,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _homeHeader() {
     return Row(
       children: [
@@ -655,7 +919,8 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                               colors: [Color(0xFF1FA9A7), Colors.green],
                             )
                           : null,
-                      color: isSelected ? null : Colors.white.withOpacity(0.06),
+                      color:
+                          isSelected ? null : Colors.white.withOpacity(0.06),
                       border: Border.all(
                         color: isSelected
                             ? Colors.white.withOpacity(0.18)
@@ -768,42 +1033,6 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             ),
           ),
         ),
-      ],
-    );
-  }
-
-  Widget _iconButton(
-    IconData icon, {
-    bool badge = false,
-    required VoidCallback onTap,
-  }) {
-    return Stack(
-      children: [
-        GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
-            ),
-            child: Icon(icon, color: Colors.grey.shade300),
-          ),
-        ),
-        if (badge)
-          Positioned(
-            right: 10,
-            top: 10,
-            child: Container(
-              width: 8,
-              height: 8,
-              decoration: const BoxDecoration(
-                color: Colors.red,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
       ],
     );
   }
