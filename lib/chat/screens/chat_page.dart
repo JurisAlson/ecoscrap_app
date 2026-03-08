@@ -24,6 +24,22 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
+class PendingUploadItem {
+  final String id;
+  final File file;
+  double progress;
+  bool failed;
+  String? error;
+
+  PendingUploadItem({
+    required this.id,
+    required this.file,
+    this.progress = 0.0,
+    this.failed = false,
+    this.error,
+  });
+}
+
 class _ChatPageState extends State<ChatPage> {
   static const Color bgColor = Color(0xFF0F172A);
   static const Color primaryColor = Color(0xFF1FA9A7);
@@ -33,8 +49,11 @@ class _ChatPageState extends State<ChatPage> {
   final _scroll = ScrollController();
   final _picker = ImagePicker();
 
-  // ✅ MULTI IMAGE QUEUE (preview before sending)
+  // queue before sending
   final List<File> _pendingImages = [];
+
+  // uploads currently being sent
+  final List<PendingUploadItem> _uploadingImages = [];
 
   String? get _me => FirebaseAuth.instance.currentUser?.uid;
 
@@ -61,7 +80,6 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  // ✅ Pick MULTIPLE images (adds to queue)
   Future<void> _pickImages() async {
     try {
       final picked = await _picker.pickMultiImage(imageQuality: 80);
@@ -79,27 +97,83 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  // ✅ Send ALL queued images (one-by-one)
   Future<void> _sendPendingImages() async {
     if (_pendingImages.isEmpty) return;
 
-    // copy so we can clear UI immediately
     final imagesToSend = List<File>.from(_pendingImages);
 
     if (!mounted) return;
     setState(() => _pendingImages.clear());
 
+    for (final file in imagesToSend) {
+      await _startSingleImageUpload(file);
+    }
+
+    _jumpToBottomSoon();
+  }
+
+  Future<void> _startSingleImageUpload(File file) async {
+    final id = DateTime.now().microsecondsSinceEpoch.toString();
+
+    final pending = PendingUploadItem(
+      id: id,
+      file: file,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _uploadingImages.add(pending);
+    });
+
     try {
-      for (final file in imagesToSend) {
-        await _chat.sendImage(chatId: widget.chatId, file: file);
-      }
-      _jumpToBottomSoon();
+      await _chat.sendImageWithProgress(
+        chatId: widget.chatId,
+        file: file,
+        onProgress: (progress) {
+          if (!mounted) return;
+
+          final index = _uploadingImages.indexWhere((e) => e.id == id);
+          if (index == -1) return;
+
+          setState(() {
+            _uploadingImages[index].progress = progress;
+          });
+        },
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _uploadingImages.removeWhere((e) => e.id == id);
+      });
     } catch (e) {
       if (!mounted) return;
+
+      final index = _uploadingImages.indexWhere((e) => e.id == id);
+      if (index != -1) {
+        setState(() {
+          _uploadingImages[index].failed = true;
+          _uploadingImages[index].error = e.toString();
+        });
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Image send failed: $e")),
       );
     }
+  }
+
+  Future<void> _retryUpload(PendingUploadItem item) async {
+    if (!mounted) return;
+    setState(() {
+      _uploadingImages.removeWhere((e) => e.id == item.id);
+    });
+    await _startSingleImageUpload(item.file);
+  }
+
+  void _removeUploadingItem(String id) {
+    setState(() {
+      _uploadingImages.removeWhere((e) => e.id == id);
+    });
   }
 
   void _jumpToBottomSoon() {
@@ -136,7 +210,7 @@ class _ChatPageState extends State<ChatPage> {
         iconTheme: const IconThemeData(color: Colors.white),
         title: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('Users') // ✅ capital U (matches your app)
+              .collection('Users')
               .doc(widget.otherUserId)
               .snapshots(),
           builder: (context, snap) {
@@ -165,16 +239,16 @@ class _ChatPageState extends State<ChatPage> {
                 Text(
                   otherName,
                   style: const TextStyle(
-                    fontWeight: FontWeight.w700,
                     color: Colors.white,
-                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
+                const SizedBox(height: 2),
                 Text(
                   statusText,
-                  style: TextStyle(
+                  style: const TextStyle(
+                    color: Colors.white70,
                     fontSize: 12,
-                    color: isOnline ? Colors.greenAccent : Colors.white60,
                   ),
                 ),
               ],
@@ -190,7 +264,7 @@ class _ChatPageState extends State<ChatPage> {
             child: _blurCircle(primaryColor.withOpacity(0.14), 320),
           ),
           Positioned(
-            bottom: 80,
+            bottom: 100,
             left: -120,
             child: _blurCircle(Colors.green.withOpacity(0.10), 360),
           ),
@@ -203,6 +277,7 @@ class _ChatPageState extends State<ChatPage> {
                     if (snap.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator());
                     }
+
                     if (snap.hasError) {
                       return Center(
                         child: Text(
@@ -213,7 +288,8 @@ class _ChatPageState extends State<ChatPage> {
                     }
 
                     final docs = snap.data?.docs ?? [];
-                    if (docs.isEmpty) {
+
+                    if (docs.isEmpty && _uploadingImages.isEmpty) {
                       return const Center(
                         child: Text(
                           "No messages yet.",
@@ -222,36 +298,46 @@ class _ChatPageState extends State<ChatPage> {
                       );
                     }
 
-                    _jumpToBottomSoon();
-
                     return ListView.builder(
                       controller: _scroll,
-                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-                      itemCount: docs.length,
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                      itemCount: docs.length + _uploadingImages.length,
                       itemBuilder: (context, i) {
-                        final data = docs[i].data();
-                        final text = (data['text'] ?? '').toString();
-                        final senderId = (data['senderId'] ?? '').toString();
-                        final createdAt = data['createdAt'];
-                        final type = (data['type'] ?? 'text').toString();
-                        final imageUrl = (data['imageUrl'] ?? '').toString();
+                        if (i < docs.length) {
+                          final d = docs[i];
+                          final data = d.data();
 
-                        final isMe = me != null && senderId == me;
+                          final text = (data['text'] ?? '').toString();
+                          final senderId = (data['senderId'] ?? '').toString();
+                          final createdAt = data['createdAt'];
+                          final type = (data['type'] ?? 'text').toString();
+                          final imageUrl = (data['imageUrl'] ?? '').toString();
 
-                        final prevSenderId = (i > 0)
-                            ? (docs[i - 1].data()['senderId'] ?? '').toString()
-                            : null;
+                          final isMe = me != null && senderId == me;
 
-                        final showName = !isMe && (i == 0 || senderId != prevSenderId);
+                          final prevSenderId = (i > 0)
+                              ? (docs[i - 1].data()['senderId'] ?? '').toString()
+                              : null;
 
-                        return _MessageBubble(
-                          type: type,
-                          imageUrl: imageUrl,
-                          text: text,
-                          isMe: isMe,
-                          timeText: _formatTime(createdAt),
-                          otherName: otherName,
-                          showName: showName,
+                          final showName =
+                              !isMe && (i == 0 || senderId != prevSenderId);
+
+                          return _MessageBubble(
+                            type: type,
+                            imageUrl: imageUrl,
+                            text: text,
+                            isMe: isMe,
+                            timeText: _formatTime(createdAt),
+                            otherName: otherName,
+                            showName: showName,
+                          );
+                        }
+
+                        final upload = _uploadingImages[i - docs.length];
+                        return _UploadingImageBubble(
+                          item: upload,
+                          onRetry: upload.failed ? () => _retryUpload(upload) : null,
+                          onRemove: () => _removeUploadingItem(upload.id),
                         );
                       },
                     );
@@ -277,7 +363,6 @@ class _ChatPageState extends State<ChatPage> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // ✅ MULTI IMAGE PREVIEW STRIP
                             if (_pendingImages.isNotEmpty)
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
@@ -316,7 +401,8 @@ class _ChatPageState extends State<ChatPage> {
                                               child: Container(
                                                 padding: const EdgeInsets.all(4),
                                                 decoration: BoxDecoration(
-                                                  color: Colors.black.withOpacity(0.6),
+                                                  color:
+                                                      Colors.black.withOpacity(0.6),
                                                   shape: BoxShape.circle,
                                                 ),
                                                 child: const Icon(
@@ -334,14 +420,14 @@ class _ChatPageState extends State<ChatPage> {
                                 ),
                               ),
 
-                            // ✅ INPUT ROW (unchanged UI, just logic updated)
                             Row(
                               children: [
                                 IconButton(
-                                  // ✅ pick multiple
                                   onPressed: _pickImages,
-                                  icon: const Icon(Icons.image_outlined,
-                                      color: Colors.white70),
+                                  icon: const Icon(
+                                    Icons.image_outlined,
+                                    color: Colors.white,
+                                  ),
                                 ),
                                 Expanded(
                                   child: TextField(
@@ -349,8 +435,11 @@ class _ChatPageState extends State<ChatPage> {
                                     style: const TextStyle(color: Colors.white),
                                     cursorColor: primaryColor,
                                     decoration: InputDecoration(
-                                      hintText: "Type a message...",
-                                      hintStyle: TextStyle(color: Colors.grey.shade400),
+                                      hintText: _pendingImages.isNotEmpty
+                                          ? "Add a caption or press send..."
+                                          : "Type a message.",
+                                      hintStyle:
+                                          TextStyle(color: Colors.grey.shade400),
                                       border: InputBorder.none,
                                     ),
                                     textInputAction: TextInputAction.send,
@@ -379,8 +468,11 @@ class _ChatPageState extends State<ChatPage> {
                                       color: primaryColor.withOpacity(0.95),
                                       borderRadius: BorderRadius.circular(14),
                                     ),
-                                    child: const Icon(Icons.send,
-                                        color: Colors.white, size: 18),
+                                    child: const Icon(
+                                      Icons.send,
+                                      color: Colors.white,
+                                      size: 18,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -407,6 +499,178 @@ class _ChatPageState extends State<ChatPage> {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
         child: Container(color: Colors.transparent),
+      ),
+    );
+  }
+}
+
+class _UploadingImageBubble extends StatelessWidget {
+  const _UploadingImageBubble({
+    required this.item,
+    required this.onRemove,
+    this.onRetry,
+  });
+
+  final PendingUploadItem item;
+  final VoidCallback onRemove;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Container(
+              constraints: const BoxConstraints(maxWidth: 260),
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1FA9A7).withOpacity(0.22),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.file(
+                      item.file,
+                      width: 240,
+                      height: 180,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        color: Colors.black.withOpacity(0.28),
+                      ),
+                    ),
+                  ),
+                  if (!item.failed)
+                    Positioned.fill(
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.55),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(
+                                  value: item.progress > 0 && item.progress < 1
+                                      ? item.progress
+                                      : null,
+                                  strokeWidth: 3,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                "Sending ${(item.progress * 100).toStringAsFixed(0)}%",
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (item.failed)
+                    Positioned.fill(
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.60),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.error_outline,
+                                color: Colors.redAccent,
+                                size: 28,
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                "Upload failed",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (onRetry != null)
+                                    TextButton.icon(
+                                      onPressed: onRetry,
+                                      icon: const Icon(
+                                        Icons.refresh,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                      label: const Text(
+                                        "Retry",
+                                        style: TextStyle(color: Colors.white),
+                                      ),
+                                    ),
+                                  TextButton.icon(
+                                    onPressed: onRemove,
+                                    icon: const Icon(
+                                      Icons.close,
+                                      color: Colors.white70,
+                                      size: 18,
+                                    ),
+                                    label: const Text(
+                                      "Dismiss",
+                                      style: TextStyle(color: Colors.white70),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              width: 240,
+              child: LinearProgressIndicator(
+                value: item.failed ? 0 : item.progress,
+                minHeight: 4,
+                borderRadius: BorderRadius.circular(999),
+                backgroundColor: Colors.white.withOpacity(0.10),
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                  Color(0xFF1FA9A7),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -464,14 +728,15 @@ class _MessageBubble extends StatelessWidget {
               child: Center(child: CircularProgressIndicator()),
             );
           },
-          errorBuilder: (_, __, ___) => const SizedBox(
+          errorBuilder: (_, __, ___) => Container(
             width: 240,
             height: 180,
-            child: Center(
-              child: Text(
-                "Failed to load image",
-                style: TextStyle(color: Colors.white70),
-              ),
+            color: Colors.black26,
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.broken_image_outlined,
+              color: Colors.white70,
+              size: 36,
             ),
           ),
         ),
@@ -479,60 +744,61 @@ class _MessageBubble extends StatelessWidget {
     } else {
       content = Text(
         text,
-        style: const TextStyle(color: Colors.white, height: 1.25),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 14.5,
+          height: 1.35,
+        ),
       );
     }
 
     return Align(
       alignment: align,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        children: [
-          if (!isMe && showName)
-            Padding(
-              padding: const EdgeInsets.only(left: 6, bottom: 4),
-              child: Text(
-                otherName,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          Container(
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.78,
-            ),
-            margin: EdgeInsets.only(bottom: showName ? 10 : 6),
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-            decoration: BoxDecoration(
-              color: bubbleColor,
-              borderRadius: radius,
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                content,
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerRight,
-                  widthFactor: 1,
-                  child: Text(
-                    timeText,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.65),
-                      fontSize: 10,
-                    ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          crossAxisAlignment:
+              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            if (showName)
+              Padding(
+                padding: const EdgeInsets.only(left: 6, right: 6, bottom: 4),
+                child: Text(
+                  otherName,
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ],
+              ),
+            Container(
+              constraints: const BoxConstraints(maxWidth: 280),
+              padding: EdgeInsets.all(type == 'image' ? 6 : 12),
+              decoration: BoxDecoration(
+                color: bubbleColor,
+                borderRadius: radius,
+              ),
+              child: Column(
+                crossAxisAlignment:
+                    isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: [
+                  content,
+                  if (timeText.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      timeText,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.75),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
