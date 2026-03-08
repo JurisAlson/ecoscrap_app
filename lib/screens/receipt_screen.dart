@@ -30,6 +30,27 @@
     final Color bgColor = const Color(0xFF0F172A);
     final TextEditingController _walkInNameCtrl = TextEditingController();
 
+    bool _isSellItemOverStock(_ReceiptItem item) {
+      if (_txType != "sell") return false;
+      final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
+      if (item.inventoryDocId == null) return false;
+      return enteredKg > item.availableKg;
+    }
+
+    double _remainingSellKg(_ReceiptItem item) {
+      final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
+      final remaining = item.availableKg - enteredKg;
+      return remaining < 0 ? 0.0 : remaining;
+    }
+
+    bool get _hasInvalidSellWeight {
+      if (_txType != "sell") return false;
+      for (final item in _items) {
+        if (_isSellItemOverStock(item)) return true;
+      }
+      return false;
+    }
+
     // ✅ prevents double-save/double-deduct
     bool _saving = false;
 
@@ -38,15 +59,14 @@
 
     // ✅ SELL branch dropdown values
     static const List<String> _sellBranches = [
-      "Cabuyao Branch",
-      "JMC Branch",
+      "JMC Plastic Corporation Valenzuela City",
+      "JMC Plastic Corporation Cabuyao City",
     ];
-    String _selectedSellBranch = _sellBranches.first;
+    String? _selectedSellBranch;
 
     // ✅ BUY source dropdown values (UPDATED: added Walk-in)
     static const List<String> _buySources = [
-      "Walk-in",
-      "Collector",
+      "Drop-off",
     ];
     String _selectedBuySource = _buySources.first;
 
@@ -97,6 +117,11 @@
       final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
       it.sellPricePerKg = sellPerKg;
 
+      if (it.inventoryDocId != null && kg > it.availableKg) {
+        it.subtotalCtrl.text = "0.00";
+        return;
+      }
+
       final sellTotal = kg * sellPerKg;
       it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
     }
@@ -121,6 +146,8 @@
     @override
     void initState() {
       super.initState();
+
+      _selectedSellBranch = _sellBranches.first;
 
       final name = widget.prefillCollectorName?.trim() ?? "";
       final id = widget.prefillCollectorId?.trim();
@@ -172,9 +199,7 @@
         item.sellPickedName = (picked['name'] ?? '').toString();
         item.categoryValue = (picked['category'] ?? '').toString();
         item.subCategoryValue = (picked['subCategory'] ?? '').toString();
-
-        // Optional: don’t auto-fill weight; keep what user typed
-        // item.weightCtrl.text = "";
+        item.availableKg = (picked['unitsKg'] as num?)?.toDouble() ?? 0.0; // ✅ add this
 
         _recalcSellItem(item);
       });
@@ -255,12 +280,13 @@
     setState(() => _saving = true);
 
     final isSell = _txType == "sell";
-    final isWalkIn = (!isSell && _isWalkInBuy);
     final fromCollectorSellRequest = _openedFromCollectorSellRequest;
+
+    // Manual BUY = drop-off
+    final isDropOff = !isSell && !fromCollectorSellRequest;
 
     final collectorName = _sourceNameCtrl.text.trim();
     final walkInName = _walkInNameCtrl.text.trim();
-
     try {
       if (_items.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -270,7 +296,7 @@
       }
 
       if (!isSell) {
-        if (isWalkIn) {
+        if (isDropOff) {
           if (walkInName.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("Enter walk-in name.")),
@@ -278,21 +304,22 @@
             return;
           }
         } else {
-          if (collectorName.isEmpty || _sourceUserId == null) {
+          // collector notification flow only
+          if (collectorName.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Select the collector.")),
+              const SnackBar(content: Text("Collector info is missing.")),
             );
             return;
           }
         }
       }
 
-      final sourceType = isSell ? "" : (isWalkIn ? "walkin" : "collector");
-      final sourceName = isSell ? "" : (isWalkIn ? walkInName : collectorName);
+      final sourceType = isSell ? "" : (isDropOff ? "walkin" : "collector");
+      final sourceName = isSell ? "" : (isDropOff ? walkInName : collectorName);
 
       final partyName = isSell
           ? _selectedSellBranch
-          : (isWalkIn ? walkInName : collectorName);
+          : (isDropOff ? walkInName : collectorName);
 
       double totalWeightKg = 0.0;
 
@@ -477,8 +504,9 @@
         if (!isSell) {
           payload['sourceType'] = sourceType;
           payload['sourceName'] = sourceName;
-          if (!isWalkIn) payload['sourceUserId'] = _sourceUserId;
-        }
+          if (!isDropOff && _sourceUserId != null) {
+            payload['sourceUserId'] = _sourceUserId;
+          }
 
         if (fromCollectorSellRequest && widget.sellRequestId != null) {
           payload['sellRequestId'] = widget.sellRequestId;
@@ -501,8 +529,9 @@
             SetOptions(merge: true),
           );
         }
-      });
-
+      }
+    });
+      
       if (!mounted) return;
       Navigator.pop(context);
     } catch (e) {
@@ -574,7 +603,26 @@
                     _label(isSell ? "Client" : "Source"),
                     const SizedBox(height: 8),
 
-                    if (_openedFromCollectorSellRequest) ...[
+                    if (isSell) ...[
+                      DropdownButtonFormField<String>(
+                        value: _sellBranches.contains(_selectedSellBranch)
+                            ? _selectedSellBranch
+                            : _sellBranches.first,
+                        items: _sellBranches
+                            .map((b) => DropdownMenuItem(
+                                  value: b,
+                                  child: Text(b, overflow: TextOverflow.ellipsis),
+                                ))
+                            .toList(),
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() => _selectedSellBranch = v);
+                        },
+                        dropdownColor: const Color(0xFF0F172A),
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _dropdownDecoration(""),
+                      ),
+                    ] else if (_openedFromCollectorSellRequest) ...[
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
@@ -592,7 +640,9 @@
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              _sourceNameCtrl.text.isEmpty ? "Unknown Collector" : _sourceNameCtrl.text,
+                              _sourceNameCtrl.text.isEmpty
+                                  ? "Unknown Collector"
+                                  : _sourceNameCtrl.text,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
@@ -611,8 +661,6 @@
                           if (v == null) return;
                           setState(() {
                             _selectedBuySource = v;
-                            _sourceNameCtrl.clear();
-                            _sourceUserId = null;
                             _walkInNameCtrl.clear();
                           });
                         },
@@ -621,52 +669,11 @@
                         decoration: _dropdownDecoration(""),
                       ),
                       const SizedBox(height: 10),
-
-                      if (_isWalkInBuy)
-                        TextField(
-                          controller: _walkInNameCtrl,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: _inputDecoration("Enter walk-in name"),
-                        )
-                      else
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: () async {
-                              final picked =
-                                  await showModalBottomSheet<Map<String, dynamic>>(
-                                context: context,
-                                backgroundColor: Colors.transparent,
-                                isScrollControlled: true,
-                                builder: (_) => const _UserPickerSheet(role: "collector"),
-                              );
-
-                              if (picked == null) return;
-
-                              setState(() {
-                                _sourceUserId = picked['id'] as String;
-                                _sourceNameCtrl.text = (picked['name'] ?? '').toString();
-                              });
-                            },
-                            icon: const Icon(Icons.person_search, color: Colors.white),
-                            label: Text(
-                              _sourceNameCtrl.text.isEmpty
-                                  ? "Select collector"
-                                  : _sourceNameCtrl.text,
-                              style: const TextStyle(color: Colors.white),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              backgroundColor: Colors.black.withOpacity(0.2),
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-                            ),
-                          ),
-                        ),
+                      TextField(
+                        controller: _walkInNameCtrl,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _inputDecoration("Enter walk-in name"),
+                      ),
                     ],
                   ],
                 ),
@@ -696,163 +703,241 @@
               const SizedBox(height: 8),
 
               ..._items.asMap().entries.map((entry) {
-                final index = entry.key;
-                final item = entry.value;
+                  final index = entry.key;
+                  final item = entry.value;
 
-                final pickedLabel = item.inventoryDocId == null
-                    ? "Select Item"
-                    : "${item.sellPickedName ?? ''} • ${item.categoryValue ?? ''}";
+                  final pickedLabel = item.inventoryDocId == null
+                      ? "Select Item"
+                      : "${item.sellPickedName ?? ''} • ${item.categoryValue ?? ''}";
 
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _glassCard(
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _label("Item"),
-                                  const SizedBox(height: 6),
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _glassCard(
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    _label(isSell ? "Item" : "Category"),
+                                    const SizedBox(height: 6),
 
-                                  if (isSell)
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: OutlinedButton.icon(
-                                        onPressed: () => _pickInventoryItem(item),
-                                        icon: const Icon(Icons.inventory_2, color: Colors.white),
-                                        label: Text(
-                                          pickedLabel,
-                                          style: const TextStyle(color: Colors.white),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        style: OutlinedButton.styleFrom(
-                                          side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(14),
+                                    if (isSell) ...[
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: OutlinedButton.icon(
+                                          onPressed: () => _pickInventoryItem(item),
+                                          icon: const Icon(Icons.inventory_2, color: Colors.white),
+                                          label: Text(
+                                            pickedLabel,
+                                            style: const TextStyle(color: Colors.white),
+                                            overflow: TextOverflow.ellipsis,
                                           ),
-                                          backgroundColor: Colors.black.withOpacity(0.2),
-                                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                                          style: OutlinedButton.styleFrom(
+                                            side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(14),
+                                            ),
+                                            backgroundColor: Colors.black.withOpacity(0.2),
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 14,
+                                              horizontal: 12,
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                    ),
 
-                                  if (!isSell) ...[
-                                    DropdownButtonFormField<String>(
-                                      initialValue: item.categoryValue ?? kMajorCategories.first,
-                                      items: kMajorCategories
-                                          .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                                          .toList(),
-                                      onChanged: (v) => setState(() {
-                                        item.categoryValue = v;
-                                        _recalcBuyItem(item);
-                                      }),
-                                      dropdownColor: const Color(0xFF0F172A),
-                                      style: const TextStyle(color: Colors.white),
-                                      decoration: _dropdownDecoration("Category"),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    DropdownButtonFormField<String>(
-                                      initialValue: item.subCategoryValue ?? kBuySubCategories.first,
-                                      items: kBuySubCategories
-                                          .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                                          .toList(),
-                                      onChanged: (v) => setState(() => item.subCategoryValue = v),
-                                      dropdownColor: const Color(0xFF0F172A),
-                                      style: const TextStyle(color: Colors.white),
-                                      decoration: _dropdownDecoration("Sub-category"),
-                                    ),
+                                      if (item.inventoryDocId != null) ...[
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              "Available: ${item.availableKg.toStringAsFixed(2)} kg",
+                                              style: const TextStyle(
+                                                color: Color(0xFF94A3B8),
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            Text(
+                                              "Remaining: ${_remainingSellKg(item).toStringAsFixed(2)} kg",
+                                              style: TextStyle(
+                                                color: _isSellItemOverStock(item)
+                                                    ? Colors.redAccent
+                                                    : const Color(0xFF1FA9A7),
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        if (_isSellItemOverStock(item)) ...[
+                                          const SizedBox(height: 6),
+                                          const Align(
+                                            alignment: Alignment.centerLeft,
+                                            child: Text(
+                                              "Entered weight exceeds available stock",
+                                              style: TextStyle(
+                                                color: Colors.redAccent,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ],
+
+                                    if (!isSell) ...[
+                                      DropdownButtonFormField<String>(
+                                        initialValue: item.categoryValue ?? kMajorCategories.first,
+                                        items: kMajorCategories
+                                            .map(
+                                              (c) => DropdownMenuItem(
+                                                value: c,
+                                                child: Text(c, overflow: TextOverflow.ellipsis),
+                                              ),
+                                            )
+                                            .toList(),
+                                        onChanged: (v) => setState(() {
+                                          item.categoryValue = v;
+                                          _recalcBuyItem(item);
+                                        }),
+                                        dropdownColor: const Color(0xFF0F172A),
+                                        style: const TextStyle(color: Colors.white),
+                                        decoration: _dropdownDecoration(""),
+                                      ),
+
+                                      const SizedBox(height: 10),
+
+                                      _label("Sub-category"),
+                                      const SizedBox(height: 6),
+
+                                      DropdownButtonFormField<String>(
+                                        initialValue:
+                                            item.subCategoryValue ?? kBuySubCategories.first,
+                                        items: kBuySubCategories
+                                            .map(
+                                              (c) => DropdownMenuItem(
+                                                value: c,
+                                                child: Text(c, overflow: TextOverflow.ellipsis),
+                                              ),
+                                            )
+                                            .toList(),
+                                        onChanged: (v) => setState(() {
+                                          item.subCategoryValue = v;
+                                          _recalcBuyItem(item);
+                                        }),
+                                        dropdownColor: const Color(0xFF0F172A),
+                                        style: const TextStyle(color: Colors.white),
+                                        decoration: _dropdownDecoration(""),
+                                      ),
+                                    ],
                                   ],
-                                ],
+                                ),
                               ),
-                            ),
-                            IconButton(
-                              onPressed: _isLockedSellRequestItem(index) ? null : () => _removeItem(index),
-                              icon: Icon(
-                                Icons.close,
-                                color: _isLockedSellRequestItem(index) ? Colors.white24 : Colors.red,
+                              IconButton(
+                                onPressed: _isLockedSellRequestItem(index)
+                                    ? null
+                                    : () => _removeItem(index),
+                                icon: Icon(
+                                  Icons.close,
+                                  color: _isLockedSellRequestItem(index)
+                                      ? Colors.white24
+                                      : Colors.red,
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
 
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _textField(
-                                controller: item.weightCtrl,
-                                label: "Weight (kg)",
-                                hint: "0.0",
-                                readOnly: _isLockedSellRequestItem(index),
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                onChanged: (_) => setState(() {
-                                  if (isSell) {
-                                    _recalcSellItem(item);
-                                  } else {
-                                    _recalcBuyItem(item);
-                                  }
-                                }),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _textField(
+                                  controller: item.weightCtrl,
+                                  label: "Weight (kg)",
+                                  hint: "0.0",
+                                  readOnly: _isLockedSellRequestItem(index),
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(decimal: true),
+                                  onChanged: (_) => setState(() {
+                                    if (isSell) {
+                                      _recalcSellItem(item);
+                                    } else {
+                                      _recalcBuyItem(item);
+                                    }
+                                  }),
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: _textField(
-                                controller: item.subtotalCtrl,
-                                label: isSell ? "Subtotal (₱)" : "Cost (₱)",
-                                hint: "0.00",
-                                readOnly: true,
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _textField(
+                                  controller: item.subtotalCtrl,
+                                  label: isSell ? "Subtotal (₱)" : "Cost (₱)",
+                                  hint: "0.00",
+                                  readOnly: true,
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              }),
+                  );
+                }),
 
-              const SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-              _glassCard(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      isSell ? "Total Amount" : "Total Cost",
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      "₱${_totalAmount.toStringAsFixed(2)}",
-                      style: TextStyle(color: primaryColor, fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 24),
-
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _saving ? null : _saveReceipt, // ✅ disabled while saving
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-                  ),
-                  child: Text(
-                    _saving ? "SAVING..." : "SAVE RECEIPT",
+            _glassCard(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    isSell ? "Total Amount" : "Total Cost",
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
                     ),
+                  ),
+                  Text(
+                    "₱${_totalAmount.toStringAsFixed(2)}",
+                    style: TextStyle(
+                      color: primaryColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                onPressed: (_saving || _hasInvalidSellWeight) ? null : _saveReceipt,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                ),
+                child: Text(
+                  _saving ? "SAVING..." : "SAVE RECEIPT",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
                   ),
                 ),
               ),
+            ),
               
 
               const SizedBox(height: 12),
@@ -962,6 +1047,8 @@
 
     double? buyCostPerKg;
     double? sellPricePerKg;
+
+    double availableKg = 0.0; // ✅ add this
 
     double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
 
@@ -1178,13 +1265,19 @@
                 final docs = snap.data?.docs ?? [];
 
                 final filtered = docs.where((d) {
-                  if (q.isEmpty) return true;
                   final m = d.data() as Map<String, dynamic>;
+                  final unitsKg = (m['unitsKg'] as num?)?.toDouble() ?? 0.0;
+
+                  if (unitsKg <= 0) return false;
+
+                  if (q.isEmpty) return true;
+
                   final hay = [
                     (m['name'] ?? '').toString(),
                     (m['category'] ?? '').toString(),
                     (m['subCategory'] ?? '').toString(),
                   ].join(' ').toLowerCase();
+
                   return hay.contains(q);
                 }).toList();
 

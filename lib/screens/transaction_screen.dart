@@ -124,14 +124,9 @@ class _TransactionScreenState extends State<TransactionScreen> {
 
     return Scaffold(
       backgroundColor: bgColor,
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: FloatingActionButton(
         backgroundColor: primaryColor,
-        elevation: 0,
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text(
-          "NEW RECEIPT",
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
+        elevation: 2,
         onPressed: () {
           Navigator.push(
             context,
@@ -140,7 +135,9 @@ class _TransactionScreenState extends State<TransactionScreen> {
             ),
           );
         },
+        child: const Icon(Icons.add, color: Colors.white, size: 28),
       ),
+
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
@@ -262,6 +259,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                     }
 
                     return ListView.separated(
+                      padding: const EdgeInsets.only(bottom: 100),
                       itemCount: docs.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
