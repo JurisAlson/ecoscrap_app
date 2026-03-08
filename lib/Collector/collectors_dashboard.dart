@@ -648,7 +648,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         unselectedFontSize: 11,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: "HOME"),
-          BottomNavigationBarItem(icon: Icon(Icons.forum_outlined), label: "CHATS"),
           BottomNavigationBarItem(icon: Icon(Icons.receipt_long), label: "TRANSACTION"),
         ],
       ),

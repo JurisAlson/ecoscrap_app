@@ -565,7 +565,6 @@ Future<void> _clearNotifications() async {
                       _navItem(0, Icons.home_outlined, "Home"),
                       _navItem(1, Icons.history, "History"),
                       _navItem(2, Icons.receipt_long, "Order"),
-                      _navItem(3, Icons.message_outlined, "Chat"),
                     ],
                   ),
                 ),
@@ -966,142 +965,179 @@ Widget _buildNotifBell() {
   }
 
   // ================= ACCEPTED PLASTICS =================
-  Widget _acceptedPlasticsSection() {
-    final plastics = [
-      {
-        "code": "A",
-        "short": "Polypropylene (PP) Colored",
-        "name": "Colored Plastics",
-        "note": "Hard plastic with strong colors like blue, red, or green.",
-        "examples": const [
-          "Example 1",
-          "Example 2",
-          "Example 3",
-          "Example 4",
-        ],
-        "images": const [
-          "assets/plastics/colored/1768218668879.jpg",
-          "assets/plastics/colored/1768218669345.jpg",
-          "assets/plastics/colored/plastic173.jpg",
-          "assets/plastics/colored/plastic468.jpg",
-        ],
-      },
-      {
-        "code": "B",
-        "short": "Polypropylene (PP) White",
-        "name": "White Plastics",
-        "note": "Solid white plastic items used around the house.",
-        "examples": const [
-          "Example 1",
-          "Example 2",
-          "Example 3",
-          "Example 4",
-        ],
-        "images": const [
-          "assets/plastics/White/1768218668821.jpg",
-          "assets/plastics/White/1768218669203.jpg",
-          "assets/plastics/White/IMG20260103194105.jpg",
-          "assets/plastics/White/plastic92.jpg",
-        ],
-      },
-      {
-        "code": "C",
-        "short": "Polyethylene Transparen (PET)",
-        "name": "Transparent Plastics",
-        "note": "Clear plastic that you can see through.",
-        "examples": const [
-          "Example 1",
-          "Example 2",
-          "Example 3",
-          "Example 4",
-        ],
-        "images": const [
-          "assets/plastics/Trans/1768218668973.jpg",
-          "assets/plastics/Trans/plastic212.jpg",
-          "assets/plastics/Trans/plastic386.jpg",
-          "assets/plastics/Trans/plastic431.jpg",
-        ],
-      },
-      {
-        "code": "D",
-        "short": "High-Density Polyethylene (HDPE)",
-        "name": "Thick Bottles & Containers",
-        "note": "Thick plastic bottles for cleaners and household liquids.",
-        "examples": const [
-          "Example 1",
-          "Example 2",
-          "Example 3",
-          "Example 4",
-        ],
-        "images": const [
-          "assets/plastics/HD/1768217102421.jpg",
-          "assets/plastics/HD/1768218668549.jpg",
-          "assets/plastics/HD/plastic101.jpg",
-          "assets/plastics/HD/plastic305.jpg",
-        ],
-      },
-    ];
-
-    return SizedBox(
-      height: 453,
-      child: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 34),
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: plastics.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
-              itemBuilder: (context, i) {
-                final p = plastics[i];
-                final images =
-                    (p["images"] as List?)?.cast<String>() ?? const <String>[];
-
-                return _plasticTypeCard(
-                  code: p["code"] as String,
-                  short: p["short"] as String,
-                  name: p["name"] as String,
-                  note: p["note"] as String,
-                  exampleLabels: (p["examples"] as List).cast<String>(),
-                  exampleImages: images,
-                );
-              },
-            ),
+  Widget _promoSlide({
+  required IconData icon,
+  required String title,
+  required String body,
+}) {
+  return Container(
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(0.05),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Colors.white.withOpacity(0.06)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: primaryColor.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(14),
           ),
-          Positioned(
-            top: 0,
-            right: 20,
-            child: _swipeHint(),
+          child: Icon(icon, color: primaryColor),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                body,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  height: 1.25,
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
-    );
-  }
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _acceptedPlasticsSection() {
+  return SizedBox(
+    height: 430,
+    child: ListView(
+      scrollDirection: Axis.horizontal,
+      children: [
+        _plasticTypeCard(
+          code: "A",
+          short: "Polypropylene (PP) Colored",
+          name: "Colored Plastics",
+          note:
+              "Hard plastic with strong colors like blue, red, or green.",
+          exampleLabels: const [
+            "Example 1",
+            "Example 2",
+            "Example 3",
+            "Example 4",
+          ],
+          exampleImages: const [
+            "assets/plastics/colored/1768218668879.jpg",
+            "assets/plastics/colored/1768218669345.jpg",
+            "assets/plastics/colored/plastic173.jpg",
+            "assets/plastics/colored/plastic468.jpg",
+          ],
+        ),
+        const SizedBox(width: 14),
+        _plasticTypeCard(
+          code: "B",
+          short: "Polypropylene (PP) White",
+          name: "White Plastics",
+          note:
+              "Solid white plastic items commonly used for containers.",
+          exampleLabels: const [
+            "Example 1",
+            "Example 2",
+            "Example 3",
+            "Example 4",
+          ],
+          exampleImages: const [
+            "assets/plastics/White/1768218668821.jpg",
+            "assets/plastics/White/1768218669203.jpg",
+            "assets/plastics/White/IMG20260103194105.jpg",
+            "assets/plastics/White/plastic92.jpg",
+          ],
+        ),
+        const SizedBox(width: 14),
+        _plasticTypeCard(
+          code: "C",
+          short: "Polyethylene Terephthalate (PET)",
+          name: "Transparent Plastics",
+          note:
+              "Clear plastic that you can see through, such as drink bottles.",
+          exampleLabels: const [
+            "Example 1",
+            "Example 2",
+            "Example 3",
+            "Example 4",
+          ],
+          exampleImages: const [
+            "assets/plastics/Trans/1768218668973.jpg",
+            "assets/plastics/Trans/plastic212.jpg",
+            "assets/plastics/Trans/plastic386.jpg",
+            "assets/plastics/Trans/plastic431.jpg",
+          ],
+        ),
+        const SizedBox(width: 14),
+        _plasticTypeCard(
+          code: "D",
+          short: "High-Density Polyethylene (HDPE)",
+          name: "Thick Bottles & Containers",
+          note:
+              "Thicker plastic bottles and containers used for household liquids.",
+          exampleLabels: const [
+            "Example 1",
+            "Example 2",
+            "Example 3",
+            "Example 4",
+          ],
+          exampleImages: const [
+            "assets/plastics/HD/1768217102421.jpg",
+            "assets/plastics/HD/1768218668549.jpg",
+            "assets/plastics/HD/plastic101.jpg",
+            "assets/plastics/HD/plastic305.jpg",
+          ],
+        ),
+        const SizedBox(width: 10),
+      ],
+    ),
+  );
+}
 
   Widget _plasticTypeCard({
-    required String code,
-    required String short,
-    required String name,
-    required String note,
-    required List<String> exampleLabels,
-    required List<String> exampleImages,
-  }) {
-    final labels = List<String>.from(exampleLabels);
-
-    return Container(
-      width: 300,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
+  required String code,
+  required String short,
+  required String name,
+  required String note,
+  required List<String> exampleLabels,
+  required List<String> exampleImages,
+}) {
+  return Container(
+    width: 300,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(0.06),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Colors.white.withOpacity(0.08)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
@@ -1111,6 +1147,8 @@ Widget _buildNotifBell() {
                 ),
                 child: Text(
                   "$code • $short",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: primaryColor,
                     fontWeight: FontWeight.bold,
@@ -1118,90 +1156,95 @@ Widget _buildNotifBell() {
                   ),
                 ),
               ),
-              const Spacer(),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                ),
-                child: Text(
-                  "Accepted",
-                  style: TextStyle(
-                    color: Colors.grey.shade300,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 11,
-                  ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Text(
+                "Accepted",
+                style: TextStyle(
+                  color: Colors.grey.shade300,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w900,
-              fontSize: 14,
-              height: 1.2,
             ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(
+          name,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            fontSize: 14,
+            height: 1.2,
           ),
-          const SizedBox(height: 6),
-          Text(
-            note,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.grey.shade400,
-              fontSize: 12,
-              height: 1.25,
-            ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          note,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.grey.shade400,
+            fontSize: 12,
+            height: 1.25,
           ),
-          const SizedBox(height: 12),
-          GridView.count(
-            crossAxisCount: 2,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            children: [
-              _exampleSlot(
-                  imagePath: exampleImages.isNotEmpty ? exampleImages[0] : null),
-              _exampleSlot(
-                  imagePath:
-                      exampleImages.length > 1 ? exampleImages[1] : null),
-              _exampleSlot(
-                  imagePath:
-                      exampleImages.length > 2 ? exampleImages[2] : null),
-              _exampleSlot(
-                  imagePath:
-                      exampleImages.length > 3 ? exampleImages[3] : null),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Icon(Icons.info_outline, size: 16, color: Colors.grey.shade400),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  "If your item looks like these examples, it is accepted. Use Scan only if you are unsure.",
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
-                ),
+        ),
+        const SizedBox(height: 12),
+        GridView.count(
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          childAspectRatio: 1.08,
+          children: [
+            _exampleSlot(
+                imagePath: exampleImages.isNotEmpty ? exampleImages[0] : null),
+            _exampleSlot(
+                imagePath:
+                    exampleImages.length > 1 ? exampleImages[1] : null),
+            _exampleSlot(
+                imagePath:
+                    exampleImages.length > 2 ? exampleImages[2] : null),
+            _exampleSlot(
+                imagePath:
+                    exampleImages.length > 3 ? exampleImages[3] : null),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.info_outline, size: 16, color: Colors.grey.shade400),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                "If your item looks like these examples, it is accepted. Use Scan only if you are unsure.",
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
               ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _exampleSlot({String? imagePath}) {
-    return Container(
+  return AspectRatio(
+    aspectRatio: 1,
+    child: Container(
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.04),
         borderRadius: BorderRadius.circular(14),
@@ -1221,121 +1264,66 @@ Widget _buildNotifBell() {
                     color: Colors.white38, size: 22),
               ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ================= TOP SLIDER =================
+  
+
   Widget _topSlider() {
-    final slides = [
-      _promoSlide(
-        icon: Icons.lightbulb_outline,
-        title: "Quick Tip",
-        body:
-            "Check the accepted plastic photos first. Use Scan only if you need validation.",
-      ),
-      _promoSlide(
-        icon: Icons.verified_outlined,
-        title: "Validation Only",
-        body:
-            "Scan helps validate unclear items. You do not need to scan plastics that already match the examples.",
-      ),
-      _promoSlide(
-        icon: Icons.recycling_outlined,
-        title: "Know Your Plastics",
-        body:
-            "If the item looks like the accepted examples, you can proceed without scanning.",
-      ),
-    ];
+  final slides = [
+    _promoSlide(
+      icon: Icons.lightbulb_outline,
+      title: "Quick Tip",
+      body:
+          "Check the accepted plastic photos first. Use Scan only if you need validation.",
+    ),
+    _promoSlide(
+      icon: Icons.verified_outlined,
+      title: "Validation Only",
+      body:
+          "Scan helps validate unclear items. You do not need to scan plastics that already match the examples.",
+    ),
+    _promoSlide(
+      icon: Icons.recycling_outlined,
+      title: "Know Your Plastics",
+      body:
+          "If the item looks like the accepted examples, you can proceed without scanning.",
+    ),
+  ];
 
-    return Column(
-      children: [
-        SizedBox(
-          height: 100,
-          child: Stack(
-            children: [
-              PageView.builder(
-                controller: _promoController,
-                itemCount: slides.length,
-                onPageChanged: (i) => setState(() => _promoIndex = i),
-                itemBuilder: (context, index) => slides[index],
-              ),
-            ],
-          ),
+  return Column(
+    children: [
+      SizedBox(
+        height: 124,
+        child: PageView.builder(
+          controller: _promoController,
+          itemCount: slides.length,
+          onPageChanged: (i) => setState(() => _promoIndex = i),
+          itemBuilder: (context, index) => slides[index],
         ),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(
-            slides.length,
-            (i) => AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              height: 6,
-              width: _promoIndex == i ? 18 : 6,
-              decoration: BoxDecoration(
-                color: _promoIndex == i ? primaryColor : Colors.white24,
-                borderRadius: BorderRadius.circular(99),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _promoSlide({
-    required IconData icon,
-    required String title,
-    required String body,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 44,
-            height: 44,
+      const SizedBox(height: 10),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(
+          slides.length,
+          (i) => AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            height: 6,
+            width: _promoIndex == i ? 18 : 6,
             decoration: BoxDecoration(
-              color: primaryColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: primaryColor),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  body,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    height: 1.25,
-                  ),
-                ),
-              ],
+              color: _promoIndex == i ? primaryColor : Colors.white24,
+              borderRadius: BorderRadius.circular(99),
             ),
           ),
-        ],
+        ),
       ),
-    );
-  }
+    ],
+  );
+}
 
   // ================= HISTORY TAB =================
 Widget _historyScreen() {
@@ -2045,7 +2033,7 @@ Widget _historyScreen() {
               icon: const Icon(Icons.logout),
               label: const Text("Logout"),
               style: ElevatedButton.styleFrom(
-                backgroundColor: primaryColor,
+                backgroundColor: Colors.red,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),

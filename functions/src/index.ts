@@ -1387,6 +1387,155 @@ export const notifyResidentAdminApproved = onDocumentUpdated(
 );
 
 /* ====================================================
+  CHAT CLEANUP ON TERMINATED PICKUPS
+==================================================== */
+async function deleteStorageFolder(prefix: string) {
+  const bucket = admin.storage().bucket();
+  const [files] = await bucket.getFiles({ prefix });
+
+  await Promise.all(
+    files.map(async (file) => {
+      try {
+        await file.delete();
+      } catch (_) {}
+    })
+  );
+}
+
+async function deleteChatById(
+  db: FirebaseFirestore.Firestore,
+  chatId: string
+): Promise<boolean> {
+  const chatRef = db.collection("chats").doc(chatId);
+  const chatSnap = await chatRef.get();
+
+  if (!chatSnap.exists) {
+    return false;
+  }
+
+  while (true) {
+    const msgSnap = await chatRef.collection("messages").limit(400).get();
+    if (msgSnap.empty) break;
+
+    const batch = db.batch();
+    for (const doc of msgSnap.docs) {
+      batch.delete(doc.ref);
+    }
+    await batch.commit();
+  }
+
+  await deleteStorageFolder(`chat_images/${chatId}/`);
+
+  try {
+    await chatRef.delete();
+  } catch (_) {}
+
+  return true;
+}
+
+function isTerminalPickupState(data: any): boolean {
+  if (!data) return false;
+
+  const status = String(data.status || "").toLowerCase();
+  const active = data.active === true;
+
+  return active === false && (
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "rejected" ||
+    status === "declined"
+  );
+}
+
+export const cleanupChatsOnRequestCompleted = onDocumentUpdated(
+  {
+    document: "requests/{requestId}",
+    region: "asia-southeast1",
+  },
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    const requestId = String(event.params.requestId || "").trim();
+
+    if (!before || !after || !requestId) return;
+
+    const wasTerminal = isTerminalPickupState(before);
+    const isTerminal = isTerminalPickupState(after);
+
+    // run only on transition into terminal state
+    if (wasTerminal || !isTerminal) return;
+
+    const db = admin.firestore();
+
+    await deleteChatById(db, `pickup_${requestId}`);
+    await deleteChatById(db, `junkshop_pickup_${requestId}`);
+
+    logger.info("cleanupChatsOnRequestCompleted finished", { requestId });
+  }
+);
+
+export const cleanupExistingCompletedChats = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required.");
+    }
+
+    const isAdminUser = request.auth.token?.admin === true;
+    const uid = request.auth.uid;
+    const primaryJunkshopUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
+
+    if (!isAdminUser && uid !== primaryJunkshopUid) {
+      throw new HttpsError(
+        "permission-denied",
+        "Only admin or primary junkshop can run cleanup."
+      );
+    }
+
+    const db = admin.firestore();
+
+    const completedReqSnap = await db
+      .collection("requests")
+      .where("type", "==", "pickup")
+      .where("active", "==", false)
+      .get();
+
+    let deletedChats = 0;
+
+    for (const reqDoc of completedReqSnap.docs) {
+      const req = reqDoc.data() as any;
+      const status = String(req.status || "").toLowerCase();
+
+      if (
+        status !== "completed" &&
+        status !== "cancelled" &&
+        status !== "rejected" &&
+        status !== "declined"
+      ) {
+        continue;
+      }
+
+      const requestId = reqDoc.id;
+
+      const pickupChatId = `pickup_${requestId}`;
+      const junkshopChatId = `junkshop_pickup_${requestId}`;
+
+      const pickupDeleted = await deleteChatById(db, pickupChatId);
+      const junkshopDeleted = await deleteChatById(db, junkshopChatId);
+
+      if (pickupDeleted) deletedChats++;
+      if (junkshopDeleted) deletedChats++;
+    }
+
+    return {
+      ok: true,
+      completedRequests: completedReqSnap.size,
+      deletedChats,
+    };
+  }
+);
+
+/* ====================================================
   RESTRICT ACCOUNT (admin)
 ==================================================== */
 export const adminSetUserRestricted = onCall(

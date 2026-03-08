@@ -10,12 +10,15 @@ import 'admin_overview_tab.dart';
 import 'collectors/admin_collector_requests.dart';
 import 'residence/admin_residence_request.dart';
 import 'users/admin_users_management_tab.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class AdminHomePage extends StatefulWidget {
   const AdminHomePage({super.key});
 
   @override
   State<AdminHomePage> createState() => _AdminHomePageState();
+
+  
 }
 
 class _AdminHomePageState extends State<AdminHomePage> {
@@ -208,6 +211,20 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
+  Future<void> runChatCleanup() async {
+  try {
+    final callable = FirebaseFunctions.instanceFor(
+      region: 'asia-southeast1',
+    ).httpsCallable('cleanupExistingCompletedChats');
+
+    final result = await callable();
+
+    print("Cleanup result: ${result.data}");
+  } catch (e) {
+    print("Cleanup failed: $e");
+  }
+}
+
   // ✅ updated to support optional badge
   Widget _navItem(int index, IconData icon, String label, {bool badge = false}) {
     final isActive = _index == index;
@@ -370,6 +387,11 @@ class _AdminHomePageState extends State<AdminHomePage> {
               ],
             ),
           ),
+
+          ElevatedButton(
+  onPressed: runChatCleanup,
+  child: const Text("Clean old chats"),
+),
           const SizedBox(height: 22),
           SizedBox(
             width: double.infinity,
