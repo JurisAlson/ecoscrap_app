@@ -3,10 +3,10 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../receipt_screen.dart';
+import '../receipt_screen.dart' as receipt;
 import '../analytics_home_tab.dart';
 import '../inventory_screen.dart';
-import '../transaction_screen.dart';
+import '../transaction_screen.dart' as transaction;
 import '../../chat/screens/chat_list_page.dart';
 
 class JunkshopDashboardPage extends StatefulWidget {
@@ -76,9 +76,9 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           InventoryScreen(shopID: shopId),
           const ChatListPage(
             type: "junkshop",
-            title: "Collectors",
+            title: "",
           ),
-          TransactionScreen(shopID: shopId),
+          transaction.TransactionScreen(shopID: shopId),
         ];
 
         return GestureDetector(
@@ -419,14 +419,12 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => ReceiptScreen(
+                              builder: (_) => receipt.ReceiptScreen(
                                 shopID: user.uid,
                                 prefillCollectorName:
                                     collectorName.isEmpty ? null : collectorName,
                                 prefillCollectorId:
                                     collectorId.isEmpty ? null : collectorId,
-
-                                // add these to ReceiptScreen if not yet present
                                 prefillKg: kg,
                                 sellRequestId: d.id,
                               ),
