@@ -1,292 +1,265 @@
-  import 'dart:ui';
-  import 'package:cloud_firestore/cloud_firestore.dart';
-  import 'package:flutter/material.dart';
-  import '../constants/categories.dart';
+import 'dart:ui';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import '../constants/categories.dart';
 
-  class ReceiptScreen extends StatefulWidget {
+class ReceiptScreen extends StatefulWidget {
   final String shopID;
 
-  final String? prefillCollectorName; // ✅
-  final String? prefillCollectorId;   // ✅
+  final String? prefillCollectorName;
+  final String? prefillCollectorId;
   final double? prefillKg;
   final String? sellRequestId;
 
-    const ReceiptScreen({
-      super.key,
-      required this.shopID,
-      this.prefillCollectorName,
-      this.prefillCollectorId,
-      this.prefillKg,
-      this.sellRequestId,
-    });
+  final String? initialTransactionType; // "sell" or "buy"
 
-    @override
-    State<ReceiptScreen> createState() => _ReceiptScreenState();
+  const ReceiptScreen({
+    super.key,
+    required this.shopID,
+    this.prefillCollectorName,
+    this.prefillCollectorId,
+    this.prefillKg,
+    this.sellRequestId,
+    this.initialTransactionType,
+  });
+
+  @override
+  State<ReceiptScreen> createState() => _ReceiptScreenState();
+}
+
+class _ReceiptScreenState extends State<ReceiptScreen> {
+  final Color primaryColor = const Color(0xFF1FA9A7);
+  final Color bgColor = const Color(0xFF0F172A);
+
+  final TextEditingController _walkInNameCtrl = TextEditingController();
+  final TextEditingController _sourceNameCtrl = TextEditingController();
+  final TextEditingController _customerCtrl = TextEditingController();
+
+  bool _saving = false;
+  String _txType = "sell"; // sell | buy
+
+  static const List<String> _sellBranches = [
+    "JMC Plastic Corporation Valenzuela City",
+    "JMC Plastic Corporation Cabuyao City",
+  ];
+  String? _selectedSellBranch;
+
+  String? _sourceUserId;
+
+  final List<_ReceiptItem> _items = [];
+
+  double get _totalAmount => _items.fold(0.0, (sum, it) => sum + it.subtotal);
+
+  double get _totalWeightKg {
+    return _items.fold(
+      0.0,
+      (sum, it) => sum + (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0),
+    );
   }
 
-  class _ReceiptScreenState extends State<ReceiptScreen> {
-    
-    final Color primaryColor = const Color(0xFF1FA9A7);
-    final Color bgColor = const Color(0xFF0F172A);
-    final TextEditingController _walkInNameCtrl = TextEditingController();
+  bool get _openedFromCollectorSellRequest =>
+      (widget.sellRequestId?.trim().isNotEmpty ?? false);
 
-    bool _isSellItemOverStock(_ReceiptItem item) {
-      if (_txType != "sell") return false;
-      final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
-      if (item.inventoryDocId == null) return false;
-      return enteredKg > item.availableKg;
+  bool _isLockedSellRequestItem(int index) =>
+      _openedFromCollectorSellRequest &&
+      index == 0 &&
+      widget.prefillKg != null;
+
+  bool _isSellItemOverStock(_ReceiptItem item) {
+    if (_txType != "sell") return false;
+    final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
+    if (item.inventoryDocId == null) return false;
+    return enteredKg > item.availableKg;
+  }
+
+  double _remainingSellKg(_ReceiptItem item) {
+    final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
+    final remaining = item.availableKg - enteredKg;
+    return remaining < 0 ? 0.0 : remaining;
+  }
+
+  bool get _hasInvalidSellWeight {
+    if (_txType != "sell") return false;
+    for (final item in _items) {
+      if (_isSellItemOverStock(item)) return true;
+    }
+    return false;
+  }
+
+  void _recalcBuyItem(_ReceiptItem it) {
+    if (_txType != "buy") return;
+
+    final cat = normalizeCategoryKey(it.categoryValue ?? kMajorCategories.first);
+    final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+
+    final costPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+    it.buyCostPerKg = costPerKg;
+
+    final totalCost = kg * costPerKg;
+    it.subtotalCtrl.text = totalCost.toStringAsFixed(2);
+  }
+
+  void _recalcSellItem(_ReceiptItem it) {
+    if (_txType != "sell") return;
+
+    final cat = normalizeCategoryKey(it.categoryValue ?? kMajorCategories.first);
+    final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+
+    final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
+    it.sellPricePerKg = sellPerKg;
+
+    if (it.inventoryDocId != null && kg > it.availableKg) {
+      it.subtotalCtrl.text = "0.00";
+      return;
     }
 
-    double _remainingSellKg(_ReceiptItem item) {
-      final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
-      final remaining = item.availableKg - enteredKg;
-      return remaining < 0 ? 0.0 : remaining;
-    }
+    final sellTotal = kg * sellPerKg;
+    it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
+  }
 
-    bool get _hasInvalidSellWeight {
-      if (_txType != "sell") return false;
-      for (final item in _items) {
-        if (_isSellItemOverStock(item)) return true;
-      }
-      return false;
-    }
-
-    // ✅ prevents double-save/double-deduct
-    bool _saving = false;
-
-    // ✅ consistent lower-case everywhere
-    String _txType = "sell"; // "sell" | "buy"
-
-    // ✅ SELL branch dropdown values
-    static const List<String> _sellBranches = [
-      "JMC Plastic Corporation Valenzuela City",
-      "JMC Plastic Corporation Cabuyao City",
-    ];
-    String? _selectedSellBranch;
-
-    // ✅ BUY source dropdown values (UPDATED: added Walk-in)
-    static const List<String> _buySources = [
-      "Drop-off",
-    ];
-    String _selectedBuySource = _buySources.first;
-
-    // ✅ BUY source name (resident/collector, optional for walk-in)
-    final TextEditingController _sourceNameCtrl = TextEditingController();
-
-    // ✅ Selected user document id (Resident/Collector) from Users collection
-    String? _sourceUserId;
-
-    // (kept) for older uses, but BUY now uses _sourceNameCtrl for the label/name
-    final TextEditingController _customerCtrl = TextEditingController();
-
-    final List<_ReceiptItem> _items = [];
-
-    double get _totalAmount => _items.fold(0.0, (sum, it) => sum + it.subtotal);
-
-    bool get _openedFromCollectorSellRequest =>
-    (widget.sellRequestId?.trim().isNotEmpty ?? false);
-    bool _isLockedSellRequestItem(int index) =>
-    _openedFromCollectorSellRequest && index == 0 && widget.prefillKg != null;
-
-    // ✅ robust walk-in check (handles "walk in", "walk-in", "walkin", etc.)
-    bool get _isWalkInBuy {
-      final v = _selectedBuySource.trim().toLowerCase();
-      return v == "walkin" || v == "walk-in" || v == "walk in" || v == "walk_in";
-    }
-
-    // ===================== PRICE HELPERS =====================
-    void _recalcBuyItem(_ReceiptItem it) {
-      if (_txType != "buy") return;
-
-      final cat = (it.categoryValue ?? kMajorCategories.first).trim();
-      final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-
-      final costPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
-      it.buyCostPerKg = costPerKg;
-
-      final totalCost = kg * costPerKg;
-      it.subtotalCtrl.text = totalCost.toStringAsFixed(2);
-    }
-
-    void _recalcSellItem(_ReceiptItem it) {
-      if (_txType != "sell") return;
-
-      final cat = (it.categoryValue ?? kMajorCategories.first).trim();
-      final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-
-      final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
-      it.sellPricePerKg = sellPerKg;
-
-      if (it.inventoryDocId != null && kg > it.availableKg) {
-        it.subtotalCtrl.text = "0.00";
-        return;
-      }
-
-      final sellTotal = kg * sellPerKg;
-      it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
-    }
-
-    void _addItem() => setState(() {
-          final it = _ReceiptItem();
-
-          if (_txType == "buy") {
-            it.categoryValue = kMajorCategories.first;
-            it.subCategoryValue = kBuySubCategories.first;
-            _recalcBuyItem(it);
-          }
-
-          _items.add(it);
-        });
-
-    void _removeItem(int index) => setState(() {
-          _items[index].dispose();
-          _items.removeAt(index);
-        });
-
-    @override
-    void initState() {
-      super.initState();
-
-      _selectedSellBranch = _sellBranches.first;
-
-      final name = widget.prefillCollectorName?.trim() ?? "";
-      final id = widget.prefillCollectorId?.trim();
-      final kg = widget.prefillKg;
-
-      if (name.isNotEmpty) {
-        _txType = "buy";
-        _selectedBuySource = "Collector";
-
-        _sourceNameCtrl.text = name;
-        _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
-
+  void _addItem() => setState(() {
         final it = _ReceiptItem();
+
+        if (_txType == "buy") {
+          it.categoryValue = kMajorCategories.first;
+          it.subCategoryValue = kBuySubCategories.first;
+          _recalcBuyItem(it);
+        }
+
+        _items.add(it);
+      });
+
+  void _removeItem(int index) => setState(() {
+        _items[index].dispose();
+        _items.removeAt(index);
+      });
+
+  @override
+  void initState() {
+    super.initState();
+
+    _selectedSellBranch = _sellBranches.first;
+
+    if (widget.initialTransactionType == "buy" ||
+        widget.initialTransactionType == "sell") {
+      _txType = widget.initialTransactionType!;
+    }
+
+    final name = widget.prefillCollectorName?.trim() ?? "";
+    final id = widget.prefillCollectorId?.trim();
+    final kg = widget.prefillKg;
+
+    if (name.isNotEmpty) {
+      _txType = "buy";
+
+      _sourceNameCtrl.text = name;
+      _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
+
+      final it = _ReceiptItem();
+      it.categoryValue = kMajorCategories.first;
+      it.subCategoryValue = kBuySubCategories.first;
+
+      if (kg != null && kg > 0) {
+        it.weightCtrl.text = kg.toStringAsFixed(2);
+      }
+
+      _recalcBuyItem(it);
+      _items.add(it);
+    }
+
+    if (_items.isEmpty) {
+      final it = _ReceiptItem();
+
+      if (_txType == "buy") {
         it.categoryValue = kMajorCategories.first;
         it.subCategoryValue = kBuySubCategories.first;
-
-        if (kg != null && kg > 0) {
-          it.weightCtrl.text = kg.toStringAsFixed(2);
-        }
-
         _recalcBuyItem(it);
-        _items.add(it);
       }
+
+      _items.add(it);
+    }
+  }
+
+  @override
+  void dispose() {
+    _customerCtrl.dispose();
+    _sourceNameCtrl.dispose();
+    _walkInNameCtrl.dispose();
+
+    for (final i in _items) {
+      i.dispose();
     }
 
-    @override
-    void dispose() {
-      _customerCtrl.dispose();
-      _sourceNameCtrl.dispose();
-      _walkInNameCtrl.dispose();
-      for (final i in _items) {
-        i.dispose();
-      }
-      super.dispose();
-    }
+    super.dispose();
+  }
 
-    Future<void> _pickInventoryItem(_ReceiptItem item) async {
-      final picked = await showModalBottomSheet<Map<String, dynamic>>(
-        context: context,
-        backgroundColor: Colors.transparent,
-        isScrollControlled: true,
-        builder: (_) => _InventoryPickerSheet(shopID: widget.shopID),
-      );
+  Future<void> _pickInventoryItem(_ReceiptItem item) async {
+    final picked = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _InventoryPickerSheet(shopID: widget.shopID),
+    );
 
-      if (picked == null) return;
+    if (picked == null) return;
 
-      setState(() {
-        item.inventoryDocId = picked['id'] as String;
-        item.sellPickedName = (picked['name'] ?? '').toString();
-        item.categoryValue = (picked['category'] ?? '').toString();
-        item.subCategoryValue = (picked['subCategory'] ?? '').toString();
-        item.availableKg = (picked['unitsKg'] as num?)?.toDouble() ?? 0.0; // ✅ add this
+    setState(() {
+      item.inventoryDocId = picked['id'] as String;
+      item.sellPickedName = (picked['name'] ?? '').toString();
+      item.categoryValue = (picked['category'] ?? '').toString();
+      item.subCategoryValue = (picked['subCategory'] ?? '').toString();
+      item.availableKg = (picked['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
-        _recalcSellItem(item);
-      });
-    }
+      _recalcSellItem(item);
+    });
+  }
 
-    void _switchType(String next) {
-      if (_txType == next) return;
-      setState(() {
-        _txType = next;
-
-        // ✅ reset party field depending on type
-        if (_txType == "sell") {
-          _selectedSellBranch = _sellBranches.first;
-          _customerCtrl.clear();
-
-          _selectedBuySource = _buySources.first;
-          _sourceNameCtrl.clear();
-          _sourceUserId = null;
-        } else {
-          _customerCtrl.clear();
-
-          _selectedBuySource = _buySources.first;
-          _sourceNameCtrl.clear();
-          _sourceUserId = null;
-        }
-
-        for (final i in _items) {
-          i.dispose();
-        }
-        _items.clear();
-      });
-    }
-
-    Widget _buildTypeButton(String label, String value) {
-      final isSelected = _txType == value;
-
-      return Expanded(
-        child: GestureDetector(
-          onTap: () => _switchType(value),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              color: isSelected ? primaryColor.withOpacity(0.25) : Colors.transparent,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? primaryColor : Colors.white70,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1,
-              ),
-            ),
+  Widget _glassCard({
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.all(14),
+  }) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.055),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
           ),
+          child: child,
         ),
-      );
-    }
+      ),
+    );
+  }
 
-    // ✅ find existing inventory doc for BUY (query OUTSIDE transaction)
-    Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
-      final snap = await FirebaseFirestore.instance
-          .collection('Users')
-          .doc(widget.shopID)
-          .collection('inventory')
-          .where('category', isEqualTo: cat)
-          .where('subCategory', isEqualTo: sub)
-          .limit(1)
-          .get();
+  Future<String?> _findInventoryDocIdForBuy(String cat, String sub) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(widget.shopID)
+        .collection('inventory')
+        .where('category', isEqualTo: cat)
+        .where('subCategory', isEqualTo: sub)
+        .limit(1)
+        .get();
 
-      if (snap.docs.isEmpty) return null;
-      return snap.docs.first.id;
-    }
+    if (snap.docs.isEmpty) return null;
+    return snap.docs.first.id;
+  }
 
-    // ===================== SAVE (SELL deduct, BUY add) =====================
   Future<void> _saveReceipt() async {
     if (_saving) return;
     setState(() => _saving = true);
 
     final isSell = _txType == "sell";
     final fromCollectorSellRequest = _openedFromCollectorSellRequest;
-
-    // Manual BUY = drop-off
-    final isDropOff = !isSell && !fromCollectorSellRequest;
+    final isWalkInBuy = !isSell && !fromCollectorSellRequest;
 
     final collectorName = _sourceNameCtrl.text.trim();
     final walkInName = _walkInNameCtrl.text.trim();
+
     try {
       if (_items.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -296,7 +269,7 @@
       }
 
       if (!isSell) {
-        if (isDropOff) {
+        if (isWalkInBuy) {
           if (walkInName.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("Enter walk-in name.")),
@@ -304,7 +277,6 @@
             return;
           }
         } else {
-          // collector notification flow only
           if (collectorName.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("Collector info is missing.")),
@@ -314,38 +286,47 @@
         }
       }
 
-      final sourceType = isSell ? "" : (isDropOff ? "walkin" : "collector");
-      final sourceName = isSell ? "" : (isDropOff ? walkInName : collectorName);
+      final sourceType = isSell ? "" : (isWalkInBuy ? "walkin" : "collector");
+      final sourceName = isSell ? "" : (isWalkInBuy ? walkInName : collectorName);
 
-      final partyName = isSell
-          ? _selectedSellBranch
-          : (isDropOff ? walkInName : collectorName);
+      final partyName =
+          isSell ? _selectedSellBranch : (isWalkInBuy ? walkInName : collectorName);
 
       double totalWeightKg = 0.0;
 
       for (final it in _items) {
         final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+
         if (kg <= 0) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Weight must be greater than 0.")),
           );
           return;
         }
+
         totalWeightKg += kg;
 
         if (isSell && it.inventoryDocId == null) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Select an inventory item for each SELL line.")),
+            const SnackBar(
+              content: Text("Select an inventory item for each SELL line."),
+            ),
           );
           return;
         }
       }
 
       if (isSell) {
-        final ids = _items.map((it) => it.inventoryDocId).whereType<String>().toList();
+        final ids =
+            _items.map((it) => it.inventoryDocId).whereType<String>().toList();
+
         if (ids.toSet().length != ids.length) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("You selected the same inventory item more than once.")),
+            const SnackBar(
+              content: Text(
+                "You selected the same inventory item more than once.",
+              ),
+            ),
           );
           return;
         }
@@ -356,12 +337,31 @@
       final txCol = shopRef.collection('transaction');
       final invCol = shopRef.collection('inventory');
 
-      final Map<_ReceiptItem, String?> buyTargets = {};
+      final Map<String, _BuyInventoryGroup> buyGroups = {};
+      final Map<String, String?> buyTargetIds = {};
+
       if (!isSell) {
         for (final it in _items) {
-          final cat = (it.categoryValue ?? "").trim();
+          final cat = normalizeCategoryKey(it.categoryValue ?? "");
           final sub = (it.subCategoryValue ?? "").trim();
-          buyTargets[it] = await _findInventoryDocIdForBuy(cat, sub);
+          final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+          final key = "$cat|$sub";
+
+          if (buyGroups.containsKey(key)) {
+            buyGroups[key]!.totalKg += kg;
+          } else {
+            buyGroups[key] = _BuyInventoryGroup(
+              category: cat,
+              subCategory: sub,
+              totalKg: kg,
+            );
+          }
+        }
+
+        for (final entry in buyGroups.entries) {
+          final group = entry.value;
+          buyTargetIds[entry.key] =
+              await _findInventoryDocIdForBuy(group.category, group.subCategory);
         }
       }
 
@@ -409,14 +409,16 @@
 
         for (final it in _items) {
           final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-          final cat = (it.categoryValue ?? "").trim();
+          final cat = normalizeCategoryKey(it.categoryValue ?? "");
           final sub = (it.subCategoryValue ?? "").trim();
 
           if (isSell) {
             final invRef = invCol.doc(it.inventoryDocId);
             final invSnap = await trx.get(invRef);
 
-            if (!invSnap.exists) throw Exception("Inventory item not found.");
+            if (!invSnap.exists) {
+              throw Exception("Inventory item not found.");
+            }
 
             final invData = invSnap.data() as Map<String, dynamic>;
             final currentKg = (invData['unitsKg'] as num?)?.toDouble() ?? 0.0;
@@ -456,26 +458,6 @@
               'subtotal': sellTotal,
             });
           } else {
-            final targetId = buyTargets[it];
-
-            if (targetId != null) {
-              final existingRef = invCol.doc(targetId);
-              trx.update(existingRef, {
-                'unitsKg': FieldValue.increment(weightKg),
-                'updatedAt': FieldValue.serverTimestamp(),
-              });
-            } else {
-              final newInvRef = invCol.doc();
-              trx.set(newInvRef, {
-                'name': "$cat • $sub",
-                'category': cat,
-                'subCategory': sub,
-                'unitsKg': weightKg,
-                'createdAt': FieldValue.serverTimestamp(),
-                'updatedAt': FieldValue.serverTimestamp(),
-              });
-            }
-
             final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
             final costTotal = weightKg * buyCostPerKg;
 
@@ -488,6 +470,32 @@
               'costTotal': costTotal,
               'subtotal': costTotal,
             });
+          }
+        }
+
+        if (!isSell) {
+          for (final entry in buyGroups.entries) {
+            final key = entry.key;
+            final group = entry.value;
+            final targetId = buyTargetIds[key];
+
+            if (targetId != null) {
+              final existingRef = invCol.doc(targetId);
+              trx.update(existingRef, {
+                'unitsKg': FieldValue.increment(group.totalKg),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+            } else {
+              final newInvRef = invCol.doc();
+              trx.set(newInvRef, {
+                'name': "${group.category} • ${group.subCategory}",
+                'category': group.category,
+                'subCategory': group.subCategory,
+                'unitsKg': group.totalKg,
+                'createdAt': FieldValue.serverTimestamp(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+            }
           }
         }
 
@@ -504,9 +512,11 @@
         if (!isSell) {
           payload['sourceType'] = sourceType;
           payload['sourceName'] = sourceName;
-          if (!isDropOff && _sourceUserId != null) {
+
+          if (!isWalkInBuy && _sourceUserId != null) {
             payload['sourceUserId'] = _sourceUserId;
           }
+        }
 
         if (fromCollectorSellRequest && widget.sellRequestId != null) {
           payload['sellRequestId'] = widget.sellRequestId;
@@ -515,7 +525,9 @@
 
         trx.set(txRef, payload);
 
-        if (fromCollectorSellRequest && widget.sellRequestId != null && sellReqRef != null) {
+        if (fromCollectorSellRequest &&
+            widget.sellRequestId != null &&
+            sellReqRef != null) {
           trx.set(
             sellReqRef,
             {
@@ -529,9 +541,8 @@
             SetOptions(merge: true),
           );
         }
-      }
-    });
-      
+      });
+
       if (!mounted) return;
       Navigator.pop(context);
     } catch (e) {
@@ -543,385 +554,393 @@
     }
   }
 
-    @override
-    Widget build(BuildContext context) {
-      final isSell = _txType == "sell";
+  @override
+  Widget build(BuildContext context) {
+    final isSell = _txType == "sell";
 
-      return Scaffold(
+    return Scaffold(
+      backgroundColor: bgColor,
+      appBar: AppBar(
         backgroundColor: bgColor,
-        appBar: AppBar(
-          backgroundColor: bgColor,
-          elevation: 0,
-          foregroundColor: Colors.white,
-          title: Text(isSell ? "Transaction" : "Transaction"),
-        ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _glassCard(
-                child: Container(
-                  height: 48,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    color: Colors.black.withOpacity(0.25),
-                  ),
-                  child: Row(
-                    children: [
-                      if (_openedFromCollectorSellRequest) ...[
-                        Expanded(
-                          child: Container(
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(14),
-                              color: primaryColor.withOpacity(0.25),
-                            ),
-                            child: const Text(
-                              "BUY",
-                              style: TextStyle(
-                                color: Color(0xFF1FA9A7),
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ] else ...[
-                        _buildTypeButton("SELL", "sell"),
-                        _buildTypeButton("BUY", "buy"),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _glassCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _label(isSell ? "Client" : "Source"),
-                    const SizedBox(height: 8),
-
-                    if (isSell) ...[
-                      DropdownButtonFormField<String>(
-                        value: _sellBranches.contains(_selectedSellBranch)
-                            ? _selectedSellBranch
-                            : _sellBranches.first,
-                        items: _sellBranches
-                            .map((b) => DropdownMenuItem(
-                                  value: b,
-                                  child: Text(b, overflow: TextOverflow.ellipsis),
-                                ))
-                            .toList(),
-                        onChanged: (v) {
-                          if (v == null) return;
-                          setState(() => _selectedSellBranch = v);
-                        },
-                        dropdownColor: const Color(0xFF0F172A),
-                        style: const TextStyle(color: Colors.white),
-                        decoration: _dropdownDecoration(""),
-                      ),
-                    ] else if (_openedFromCollectorSellRequest) ...[
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.white.withOpacity(0.2)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              "Collector",
-                              style: TextStyle(color: Colors.white70, fontSize: 12),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              _sourceNameCtrl.text.isEmpty
-                                  ? "Unknown Collector"
-                                  : _sourceNameCtrl.text,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ] else ...[
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedBuySource,
-                        items: _buySources
-                            .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                            .toList(),
-                        onChanged: (v) {
-                          if (v == null) return;
-                          setState(() {
-                            _selectedBuySource = v;
-                            _walkInNameCtrl.clear();
-                          });
-                        },
-                        dropdownColor: const Color(0xFF0F172A),
-                        style: const TextStyle(color: Colors.white),
-                        decoration: _dropdownDecoration(""),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _walkInNameCtrl,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: _inputDecoration("Enter walk-in name"),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        elevation: 0,
+        foregroundColor: Colors.white,
+        title: Text(isSell ? "Selling Receipt" : "Buying Receipt"),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _glassCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "Items",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                  _label(isSell ? "Client" : "Walk-in"),
+                  const SizedBox(height: 8),
+                  if (isSell) ...[
+                    DropdownButtonFormField<String>(
+                      value: _sellBranches.contains(_selectedSellBranch)
+                          ? _selectedSellBranch
+                          : _sellBranches.first,
+                      items: _sellBranches
+                          .map(
+                            (b) => DropdownMenuItem(
+                              value: b,
+                              child: Text(b, overflow: TextOverflow.ellipsis),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _selectedSellBranch = v);
+                      },
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: _dropdownDecoration(""),
                     ),
-                  ),
-                  if (!_openedFromCollectorSellRequest)
-                  TextButton.icon(
-                    onPressed: _addItem,
-                    icon: const Icon(Icons.add, color: Colors.green),
-                    label: const Text("Add Item", style: TextStyle(color: Colors.green)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-
-              ..._items.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final item = entry.value;
-
-                  final pickedLabel = item.inventoryDocId == null
-                      ? "Select Item"
-                      : "${item.sellPickedName ?? ''} • ${item.categoryValue ?? ''}";
-
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _glassCard(
+                  ] else if (_openedFromCollectorSellRequest) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 14,
+                        horizontal: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.2),
+                        ),
+                      ),
                       child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    _label(isSell ? "Item" : "Category"),
-                                    const SizedBox(height: 6),
-
-                                    if (isSell) ...[
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: OutlinedButton.icon(
-                                          onPressed: () => _pickInventoryItem(item),
-                                          icon: const Icon(Icons.inventory_2, color: Colors.white),
-                                          label: Text(
-                                            pickedLabel,
-                                            style: const TextStyle(color: Colors.white),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          style: OutlinedButton.styleFrom(
-                                            side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(14),
-                                            ),
-                                            backgroundColor: Colors.black.withOpacity(0.2),
-                                            padding: const EdgeInsets.symmetric(
-                                              vertical: 14,
-                                              horizontal: 12,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-
-                                      if (item.inventoryDocId != null) ...[
-                                        const SizedBox(height: 8),
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Text(
-                                              "Available: ${item.availableKg.toStringAsFixed(2)} kg",
-                                              style: const TextStyle(
-                                                color: Color(0xFF94A3B8),
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                            Text(
-                                              "Remaining: ${_remainingSellKg(item).toStringAsFixed(2)} kg",
-                                              style: TextStyle(
-                                                color: _isSellItemOverStock(item)
-                                                    ? Colors.redAccent
-                                                    : const Color(0xFF1FA9A7),
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        if (_isSellItemOverStock(item)) ...[
-                                          const SizedBox(height: 6),
-                                          const Align(
-                                            alignment: Alignment.centerLeft,
-                                            child: Text(
-                                              "Entered weight exceeds available stock",
-                                              style: TextStyle(
-                                                color: Colors.redAccent,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ],
-
-                                    if (!isSell) ...[
-                                      DropdownButtonFormField<String>(
-                                        initialValue: item.categoryValue ?? kMajorCategories.first,
-                                        items: kMajorCategories
-                                            .map(
-                                              (c) => DropdownMenuItem(
-                                                value: c,
-                                                child: Text(c, overflow: TextOverflow.ellipsis),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (v) => setState(() {
-                                          item.categoryValue = v;
-                                          _recalcBuyItem(item);
-                                        }),
-                                        dropdownColor: const Color(0xFF0F172A),
-                                        style: const TextStyle(color: Colors.white),
-                                        decoration: _dropdownDecoration(""),
-                                      ),
-
-                                      const SizedBox(height: 10),
-
-                                      _label("Sub-category"),
-                                      const SizedBox(height: 6),
-
-                                      DropdownButtonFormField<String>(
-                                        initialValue:
-                                            item.subCategoryValue ?? kBuySubCategories.first,
-                                        items: kBuySubCategories
-                                            .map(
-                                              (c) => DropdownMenuItem(
-                                                value: c,
-                                                child: Text(c, overflow: TextOverflow.ellipsis),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (v) => setState(() {
-                                          item.subCategoryValue = v;
-                                          _recalcBuyItem(item);
-                                        }),
-                                        dropdownColor: const Color(0xFF0F172A),
-                                        style: const TextStyle(color: Colors.white),
-                                        decoration: _dropdownDecoration(""),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: _isLockedSellRequestItem(index)
-                                    ? null
-                                    : () => _removeItem(index),
-                                icon: Icon(
-                                  Icons.close,
-                                  color: _isLockedSellRequestItem(index)
-                                      ? Colors.white24
-                                      : Colors.red,
-                                ),
-                              ),
-                            ],
+                          const Text(
+                            "Collector",
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
                           ),
-                          const SizedBox(height: 12),
-
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _textField(
-                                  controller: item.weightCtrl,
-                                  label: "Weight (kg)",
-                                  hint: "0.0",
-                                  readOnly: _isLockedSellRequestItem(index),
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(decimal: true),
-                                  onChanged: (_) => setState(() {
-                                    if (isSell) {
-                                      _recalcSellItem(item);
-                                    } else {
-                                      _recalcBuyItem(item);
-                                    }
-                                  }),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _textField(
-                                  controller: item.subtotalCtrl,
-                                  label: isSell ? "Subtotal (₱)" : "Cost (₱)",
-                                  hint: "0.00",
-                                  readOnly: true,
-                                ),
-                              ),
-                            ],
+                          const SizedBox(height: 6),
+                          Text(
+                            _sourceNameCtrl.text.isEmpty
+                                ? "Unknown Collector"
+                                : _sourceNameCtrl.text,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  );
-                }),
-
+                  ] else ...[
+                    TextField(
+                      controller: _walkInNameCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: _inputDecoration("Enter walk-in name"),
+                    ),
+                  ],
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
-
-            _glassCard(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    isSell ? "Total Amount" : "Total Cost",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  "Items",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
                   ),
-                  Text(
-                    "₱${_totalAmount.toStringAsFixed(2)}",
-                    style: TextStyle(
-                      color: primaryColor,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
+                ),
+                TextButton.icon(
+                  onPressed: _addItem,
+                  icon: const Icon(Icons.add, color: Colors.green),
+                  label: Text(
+                    isSell ? "Add Sell Item" : "Add Buy Item",
+                    style: const TextStyle(color: Colors.green),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ..._items.asMap().entries.map((entry) {
+              final index = entry.key;
+              final item = entry.value;
+
+              final pickedLabel = item.inventoryDocId == null
+                  ? "Select Item"
+                  : "${item.sellPickedName ?? ''} • ${item.categoryValue ?? ''}";
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _glassCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: primaryColor.withOpacity(0.14),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          "Item ${index + 1}",
+                          style: TextStyle(
+                            color: primaryColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _label(isSell ? "Item" : "Category"),
+                                const SizedBox(height: 6),
+                                if (isSell) ...[
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: OutlinedButton.icon(
+                                      onPressed: () => _pickInventoryItem(item),
+                                      icon: const Icon(
+                                        Icons.inventory_2,
+                                        color: Colors.white,
+                                      ),
+                                      label: Text(
+                                        pickedLabel,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        side: BorderSide(
+                                          color: Colors.white.withOpacity(0.2),
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(14),
+                                        ),
+                                        backgroundColor:
+                                            Colors.black.withOpacity(0.2),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 14,
+                                          horizontal: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  if (item.inventoryDocId != null) ...[
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          "Available: ${item.availableKg.toStringAsFixed(2)} kg",
+                                          style: const TextStyle(
+                                            color: Color(0xFF94A3B8),
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        Text(
+                                          "Remaining: ${_remainingSellKg(item).toStringAsFixed(2)} kg",
+                                          style: TextStyle(
+                                            color: _isSellItemOverStock(item)
+                                                ? Colors.redAccent
+                                                : const Color(0xFF1FA9A7),
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (_isSellItemOverStock(item)) ...[
+                                      const SizedBox(height: 6),
+                                      const Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          "Entered weight exceeds available stock",
+                                          style: TextStyle(
+                                            color: Colors.redAccent,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ],
+                                if (!isSell) ...[
+                                  DropdownButtonFormField<String>(
+                                    value: item.categoryValue ??
+                                        kMajorCategories.first,
+                                    items: kMajorCategories
+                                        .map(
+                                          (c) => DropdownMenuItem(
+                                            value: c,
+                                            child: Text(
+                                              c,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (v) => setState(() {
+                                      item.categoryValue = v;
+                                      _recalcBuyItem(item);
+                                    }),
+                                    dropdownColor: const Color(0xFF0F172A),
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: _dropdownDecoration(""),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  _label("Sub-category"),
+                                  const SizedBox(height: 6),
+                                  DropdownButtonFormField<String>(
+                                    value: item.subCategoryValue ??
+                                        kBuySubCategories.first,
+                                    items: kBuySubCategories
+                                        .map(
+                                          (c) => DropdownMenuItem(
+                                            value: c,
+                                            child: Text(
+                                              c,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (v) => setState(() {
+                                      item.subCategoryValue = v;
+                                      _recalcBuyItem(item);
+                                    }),
+                                    dropdownColor: const Color(0xFF0F172A),
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: _dropdownDecoration(""),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: _isLockedSellRequestItem(index)
+                                ? null
+                                : () => _removeItem(index),
+                            icon: Icon(
+                              Icons.close,
+                              color: _isLockedSellRequestItem(index)
+                                  ? Colors.white24
+                                  : Colors.red,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _textField(
+                              controller: item.weightCtrl,
+                              label: "Weight (kg)",
+                              hint: "0.0",
+                              readOnly: _isLockedSellRequestItem(index),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                              onChanged: (_) => setState(() {
+                                if (isSell) {
+                                  _recalcSellItem(item);
+                                } else {
+                                  _recalcBuyItem(item);
+                                }
+                              }),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _textField(
+                              controller: item.subtotalCtrl,
+                              label: isSell ? "Subtotal (₱)" : "Cost (₱)",
+                              hint: "0.00",
+                              readOnly: true,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: 16),
+            _glassCard(
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        isSell ? "Total Amount" : "Total Cost",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        "₱${_totalAmount.toStringAsFixed(2)}",
+                        style: TextStyle(
+                          color: primaryColor,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "Total Weight",
+                        style: TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        "${_totalWeightKg.toStringAsFixed(2)} kg",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
-
             const SizedBox(height: 24),
-
             SizedBox(
               width: double.infinity,
               height: 56,
               child: ElevatedButton(
-                onPressed: (_saving || _hasInvalidSellWeight) ? null : _saveReceipt,
+                onPressed:
+                    (_saving || _hasInvalidSellWeight) ? null : _saveReceipt,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primaryColor,
                   shape: RoundedRectangleBorder(
@@ -938,137 +957,127 @@
                 ),
               ),
             ),
-              
-
-              const SizedBox(height: 12),
-              const Center(
-                child: Text(
-                  "Transaction Date is saved automatically",
-                  style: TextStyle(color: Colors.grey, fontSize: 11),
-                ),
+            const SizedBox(height: 12),
+            const Center(
+              child: Text(
+                "Transaction Date is saved automatically",
+                style: TextStyle(color: Colors.grey, fontSize: 11),
               ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // ===== UI HELPERS =====
-    Widget _glassCard({required Widget child}) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
             ),
-            child: child,
-          ),
+          ],
         ),
-      );
-    }
-
-    Widget _label(String text) {
-      return Text(
-        text.toUpperCase(),
-        style: const TextStyle(
-          color: Color(0xFF94A3B8),
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-        ),
-      );
-    }
-
-    Widget _textField({
-      required TextEditingController controller,
-      required String label,
-      required String hint,
-      bool readOnly = false,
-      TextInputType keyboardType = TextInputType.text,
-      Function(String)? onChanged,
-    }) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _label(label),
-          const SizedBox(height: 6),
-          TextField(
-            controller: controller,
-            readOnly: readOnly,
-            keyboardType: keyboardType,
-            onChanged: onChanged,
-            style: const TextStyle(color: Colors.white),
-            decoration: _inputDecoration(hint),
-          ),
-        ],
-      );
-    }
-
-    InputDecoration _inputDecoration(String hint) {
-      return InputDecoration(
-        hintText: hint,
-        hintStyle: const TextStyle(color: Color(0xFF64748B)),
-        filled: true,
-        fillColor: Colors.black.withOpacity(0.2),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
-        ),
-      );
-    }
-
-    InputDecoration _dropdownDecoration(String label) {
-      return InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
-        filled: true,
-        fillColor: Colors.black.withOpacity(0.2),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
-        ),
-      );
-    }
+      ),
+    );
   }
 
-  class _ReceiptItem {
-    final TextEditingController weightCtrl = TextEditingController();
-    final TextEditingController subtotalCtrl = TextEditingController();
-
-    String? inventoryDocId; // sell only
-    String? sellPickedName;
-
-    String? categoryValue;
-    String? subCategoryValue;
-
-    double? buyCostPerKg;
-    double? sellPricePerKg;
-
-    double availableKg = 0.0; // ✅ add this
-
-    double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
-
-    void dispose() {
-      weightCtrl.dispose();
-      subtotalCtrl.dispose();
-    }
+  Widget _label(String text) {
+    return Text(
+      text.toUpperCase(),
+      style: const TextStyle(
+        color: Color(0xFF94A3B8),
+        fontSize: 10,
+        fontWeight: FontWeight.bold,
+      ),
+    );
   }
 
-  // ===================== USER PICKER (Resident/Collector) =====================
-  class _UserPickerSheet extends StatefulWidget {
-    final String role; // "resident" | "collector"
-    const _UserPickerSheet({required this.role});
-
-    @override
-    State<_UserPickerSheet> createState() => _UserPickerSheetState();
+  Widget _textField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    bool readOnly = false,
+    TextInputType keyboardType = TextInputType.text,
+    Function(String)? onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _label(label),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          readOnly: readOnly,
+          keyboardType: keyboardType,
+          onChanged: onChanged,
+          style: const TextStyle(color: Colors.white),
+          decoration: _inputDecoration(hint),
+        ),
+      ],
+    );
   }
 
-  class _UserPickerSheetState extends State<_UserPickerSheet> {
-    String q = "";
+  InputDecoration _inputDecoration(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: Color(0xFF64748B)),
+      filled: true,
+      fillColor: Colors.black.withOpacity(0.2),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+    );
+  }
+
+  InputDecoration _dropdownDecoration(String label) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
+      filled: true,
+      fillColor: Colors.black.withOpacity(0.2),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+    );
+  }
+}
+
+class _ReceiptItem {
+  final TextEditingController weightCtrl = TextEditingController();
+  final TextEditingController subtotalCtrl = TextEditingController();
+
+  String? inventoryDocId;
+  String? sellPickedName;
+
+  String? categoryValue;
+  String? subCategoryValue;
+
+  double? buyCostPerKg;
+  double? sellPricePerKg;
+
+  double availableKg = 0.0;
+
+  double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
+
+  void dispose() {
+    weightCtrl.dispose();
+    subtotalCtrl.dispose();
+  }
+}
+
+class _BuyInventoryGroup {
+  final String category;
+  final String subCategory;
+  double totalKg;
+
+  _BuyInventoryGroup({
+    required this.category,
+    required this.subCategory,
+    required this.totalKg,
+  });
+}
+
+class _UserPickerSheet extends StatefulWidget {
+  final String role;
+  const _UserPickerSheet({required this.role});
+
+  @override
+  State<_UserPickerSheet> createState() => _UserPickerSheetState();
+}
+
+class _UserPickerSheetState extends State<_UserPickerSheet> {
+  String q = "";
 
   @override
   Widget build(BuildContext context) {
@@ -1094,19 +1103,20 @@
             ),
           ),
           const SizedBox(height: 12),
-
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
                 title,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
           const SizedBox(height: 10),
-
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: TextField(
@@ -1125,15 +1135,12 @@
               onChanged: (v) => setState(() => q = v.trim().toLowerCase()),
             ),
           ),
-
           const SizedBox(height: 12),
-
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('Users')
                   .where('role', isEqualTo: roleValue)
-                  // ✅ Name field in your Firestore
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.hasError) {
@@ -1161,7 +1168,10 @@
 
                 if (filtered.isEmpty) {
                   return const Center(
-                    child: Text("No matching users", style: TextStyle(color: Colors.grey)),
+                    child: Text(
+                      "No matching users",
+                      style: TextStyle(color: Colors.grey),
+                    ),
                   );
                 }
 
@@ -1172,13 +1182,23 @@
                   itemBuilder: (context, i) {
                     final d = filtered[i];
                     final m = d.data() as Map<String, dynamic>;
-                    final name = (m['Name'] ?? m['displayName'] ?? m['name'] ?? '').toString();
+                    final name =
+                        (m['Name'] ?? m['displayName'] ?? m['name'] ?? '')
+                            .toString();
 
                     return ListTile(
                       tileColor: Colors.white.withOpacity(0.06),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      title: Text(name, style: const TextStyle(color: Colors.white)),
-                      subtitle: Text(roleValue, style: const TextStyle(color: Colors.grey)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      title: Text(
+                        name,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        roleValue,
+                        style: const TextStyle(color: Colors.grey),
+                      ),
                       onTap: () {
                         Navigator.pop(context, {
                           'id': d.id,
@@ -1197,17 +1217,16 @@
   }
 }
 
-  // ===================== INVENTORY PICKER =====================
-  class _InventoryPickerSheet extends StatefulWidget {
-    final String shopID;
-    const _InventoryPickerSheet({required this.shopID});
+class _InventoryPickerSheet extends StatefulWidget {
+  final String shopID;
+  const _InventoryPickerSheet({required this.shopID});
 
-    @override
-    State<_InventoryPickerSheet> createState() => _InventoryPickerSheetState();
-  }
+  @override
+  State<_InventoryPickerSheet> createState() => _InventoryPickerSheetState();
+}
 
-  class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
-    String q = "";
+class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
+  String q = "";
 
   @override
   Widget build(BuildContext context) {
@@ -1252,10 +1271,10 @@
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
-                  .collection('Users') // ✅ FIXED (was Junkshop)
-                  .doc(widget.shopID) // ✅ FIXED
+                  .collection('Users')
+                  .doc(widget.shopID)
                   .collection('inventory')
-                  .orderBy('updatedAt', descending: true) // ✅ safer than createdAt
+                  .orderBy('updatedAt', descending: true)
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
@@ -1269,7 +1288,6 @@
                   final unitsKg = (m['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
                   if (unitsKg <= 0) return false;
-
                   if (q.isEmpty) return true;
 
                   final hay = [
@@ -1283,7 +1301,10 @@
 
                 if (filtered.isEmpty) {
                   return const Center(
-                    child: Text("No matching items", style: TextStyle(color: Colors.grey)),
+                    child: Text(
+                      "No matching items",
+                      style: TextStyle(color: Colors.grey),
+                    ),
                   );
                 }
 
@@ -1295,15 +1316,22 @@
                     final d = filtered[i];
                     final m = d.data() as Map<String, dynamic>;
 
-                    final name = (m['Name'] ?? m['displayName'] ?? m['name'] ?? '').toString();
+                    final name =
+                        (m['Name'] ?? m['displayName'] ?? m['name'] ?? '')
+                            .toString();
                     final category = (m['category'] ?? '').toString();
                     final subCategory = (m['subCategory'] ?? '').toString();
                     final unitsKg = (m['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
                     return ListTile(
                       tileColor: Colors.white.withOpacity(0.06),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      title: Text(name, style: const TextStyle(color: Colors.white)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      title: Text(
+                        name,
+                        style: const TextStyle(color: Colors.white),
+                      ),
                       subtitle: Text(
                         "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
                         style: const TextStyle(color: Colors.grey),
