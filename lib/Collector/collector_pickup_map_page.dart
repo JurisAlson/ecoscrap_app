@@ -210,6 +210,21 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return "$date • ${hm(s)}–${hm(e)}";
   }
 
+  Future<void> _markChatRead(String chatId) async {
+  final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+  if (me.isEmpty) return;
+
+  try {
+    await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
+      'lastReadBy': {
+        me: FieldValue.serverTimestamp(),
+      },
+    }, SetOptions(merge: true));
+  } catch (e) {
+    debugPrint("❌ Failed to mark chat read: $e");
+  }
+}
+
   Future<void> _initPage() async {
     await _initLocation();
     await _loadStops();
@@ -532,12 +547,92 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
+Future<void> _openJunkshopChat() async {
+  final stop = _currentStop;
+  if (stop == null) return;
+
+  final s = stop.status.toLowerCase();
+  final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
+
+  if (!canChat) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Junkshop chat is available once pickup is accepted."),
+      ),
+    );
+    return;
+  }
+
+  final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+  var collectorUid = stop.collectorId.trim();
+
+  if (me.isEmpty) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Collector ID not loaded yet.")),
+    );
+    return;
+  }
+
+  if (collectorUid.isEmpty) {
+    collectorUid = me;
+    try {
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(stop.requestId)
+          .update({
+        'collectorId': me,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
+      if (idx != -1 && mounted) {
+        setState(() {
+          _stops[idx] = _stops[idx].copyWith(collectorId: me);
+        });
+      }
+    } catch (e) {
+      debugPrint("❌ Failed to write collectorId for junkshop chat: $e");
+    }
+  }
+
+  try {
+    await _chat.ensureJunkshopChatForRequest(
+      requestId: stop.requestId,
+      junkshopUid: _junkshopUid,
+      collectorUid: collectorUid,
+    );
+
+    final chatId = "junkshop_pickup_${stop.requestId}";
+    await _markChatRead(chatId);
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatPage(
+          chatId: chatId,
+          title: _junkshopName,
+          otherUserId: _junkshopUid,
+        ),
+      ),
+    );
+  } catch (e) {
+    debugPrint("❌ Failed to open junkshop chat: $e");
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Failed to open junkshop chat: $e")),
+    );
+  }
+}
+
   Future<void> _openPickupChat() async {
     final stop = _currentStop;
     if (stop == null) return;
 
     final s = stop.status.toLowerCase();
-    final canChat = s == "accepted" || s == "arrived";
+    final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
 
     if (!canChat) {
       if (!mounted) return;
@@ -607,6 +702,50 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       ),
     );
   }
+
+  Future<void> _openStopChat(PickupStop stop) async {
+  final s = stop.status.toLowerCase();
+  final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
+
+  if (!canChat) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Chat is available once pickup is accepted.")),
+    );
+    return;
+  }
+
+  final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+  final householdUid = stop.householdId.trim();
+  var collectorUid = stop.collectorId.trim();
+
+  if (me.isEmpty || householdUid.isEmpty) return;
+
+  if (collectorUid.isEmpty) {
+    collectorUid = me;
+  }
+
+  final chatId = await _chat.ensurePickupChat(
+    requestId: stop.requestId,
+    householdUid: householdUid,
+    collectorUid: collectorUid,
+  );
+
+  await _markChatRead(chatId);
+
+  if (!mounted) return;
+
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatPage(
+        chatId: chatId,
+        title: stop.householdName.isEmpty ? "Household" : stop.householdName,
+        otherUserId: householdUid,
+      ),
+    ),
+  );
+}
 
   Future<void> _openCollectorReceipt() async {
     final stop = _currentStop;
@@ -1065,14 +1204,14 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                             children: [
                               Expanded(
                                 child: _actionWide(
-                                  icon: Icons.chat_bubble_outline,
-                                  title: "CHAT",
-                                  subtitle: "Message household",
-                                  bg: Colors.white.withOpacity(0.10),
-                                  fg: Colors.white,
-                                  border: Colors.white.withOpacity(0.14),
-                                  onTap: _openPickupChat,
-                                ),
+                                          icon: Icons.chat_bubble_outline,
+                                          title: "CHAT",
+                                          subtitle: "Message junkshop",
+                                          bg: Colors.white.withOpacity(0.10),
+                                          fg: Colors.white,
+                                          border: Colors.white.withOpacity(0.14),
+                                          onTap: _openJunkshopChat,
+                                        ),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
@@ -1140,79 +1279,169 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Widget _stopTile(int index, PickupStop stop) {
-    final isCurrent = index == _currentStopIndex;
+  final isCurrent = index == _currentStopIndex;
 
-    return InkWell(
-      onTap: () => _goToStop(index),
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isCurrent ? _accent.withOpacity(0.16) : Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isCurrent
-                ? _accent.withOpacity(0.70)
-                : Colors.white.withOpacity(0.08),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 24,
-              height: 24,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: isCurrent ? _accent : Colors.white.withOpacity(0.10),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                "${index + 1}",
-                style: TextStyle(
-                  color: isCurrent ? Colors.black : Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    stop.householdName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    stop.pickupAddress,
-                    style: TextStyle(
-                      color: Colors.grey.shade400,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    "Status: ${stop.status.toUpperCase()}",
-                    style: TextStyle(
-                      color: isCurrent ? Colors.white : Colors.white70,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+  return InkWell(
+    onTap: () => _goToStop(index),
+    borderRadius: BorderRadius.circular(14),
+    child: Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isCurrent ? _accent.withOpacity(0.16) : Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isCurrent
+              ? _accent.withOpacity(0.70)
+              : Colors.white.withOpacity(0.08),
         ),
       ),
-    );
-  }
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+
+          /// STOP NUMBER
+          Container(
+            width: 24,
+            height: 24,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isCurrent ? _accent : Colors.white.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              "${index + 1}",
+              style: TextStyle(
+                color: isCurrent ? Colors.black : Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 10),
+
+          /// STOP INFO
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  stop.householdName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  stop.pickupAddress,
+                  style: TextStyle(
+                    color: Colors.grey.shade400,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "Status: ${stop.status.toUpperCase()}",
+                  style: TextStyle(
+                    color: isCurrent ? Colors.white : Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          /// CHAT ICON
+          Builder(
+            builder: (context) {
+              final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+              final chatId = "pickup_${stop.requestId}";
+
+              return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('chats')
+                    .doc(chatId)
+                    .snapshots(),
+                builder: (context, snap) {
+                  bool hasUnread = false;
+
+                  final chat = snap.data?.data();
+                  if (chat != null && me.isNotEmpty) {
+                    final lastMessageAt = chat['lastMessageAt'];
+                    final lastMessageSenderId =
+                        (chat['lastMessageSenderId'] ?? '').toString();
+
+                    final lastReadBy = chat['lastReadBy'];
+                    Timestamp? myLastRead;
+
+                    if (lastReadBy is Map && lastReadBy[me] is Timestamp) {
+                      myLastRead = lastReadBy[me] as Timestamp;
+                    }
+
+                    if (lastMessageAt is Timestamp &&
+                        lastMessageSenderId.isNotEmpty &&
+                        lastMessageSenderId != me) {
+                      if (myLastRead == null ||
+                          myLastRead.millisecondsSinceEpoch <
+                              lastMessageAt.millisecondsSinceEpoch) {
+                        hasUnread = true;
+                      }
+                    }
+                  }
+
+                  return InkWell(
+                    onTap: () => _openStopChat(stop),
+                    borderRadius: BorderRadius.circular(999),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.08),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.10),
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.chat_bubble_outline,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                        if (hasUnread)
+                          Positioned(
+                            top: -1,
+                            right: -1,
+                            child: Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: Colors.redAccent,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: const Color(0xFF111928),
+                                  width: 1.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+}
 
   Widget _miniStat(IconData icon, String value) {
     return Row(

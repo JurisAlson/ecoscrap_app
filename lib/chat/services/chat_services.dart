@@ -101,6 +101,7 @@ class ChatService {
     await _db.collection('chats').doc(chatId).update({
       'lastMessage': '📷 Photo',
       'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastMessageSenderId': uid,
     });
   }
 
@@ -152,6 +153,7 @@ class ChatService {
       await _db.collection('chats').doc(chatId).update({
         'lastMessage': '📷 Photo',
         'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastMessageSenderId': uid,
       });
 
       onProgress(1.0);
@@ -194,6 +196,7 @@ class ChatService {
     await _db.collection('chats').doc(chatId).update({
       'lastMessage': text.trim(),
       'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastMessageSenderId': uid,
     });
   }
 
