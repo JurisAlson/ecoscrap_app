@@ -74,13 +74,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             notifBell: _buildJunkshopNotifBell(),
           ),
           InventoryScreen(shopID: shopId),
-          TransactionScreen(shopID: shopId),
-          const Center(
-            child: Text(
-              "Supplier Map Screen",
-              style: TextStyle(color: Colors.white, fontSize: 22),
-            ),
+          const ChatListPage(
+            type: "junkshop",
+            title: "Collectors",
           ),
+          TransactionScreen(shopID: shopId),
         ];
 
         return GestureDetector(
@@ -146,7 +144,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                 children: [
                   _navItem(0, Icons.storefront_outlined, "Home"),
                   _navItem(1, Icons.inventory_2_outlined, "Inventory"),
-                  _navItem(2, Icons.receipt_long_outlined, "Transactions"),
+                  _chatNavItem(2),
+                  _navItem(3, Icons.receipt_long_outlined, "Transactions"),
                 ],
               ),
             ],
@@ -155,6 +154,79 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       ),
     );
   }
+
+  Widget _chatNavItem(int index) {
+    final isActive = _activeTabIndex == index;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+
+    if (uid == null) {
+      return _navItem(index, Icons.chat_bubble_outline, "Chats");
+    }
+
+    final unreadStream = FirebaseFirestore.instance
+        .collection('chat_rooms')
+        .where('junkshopId', isEqualTo: uid)
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: unreadStream,
+      builder: (context, snap) {
+        int unreadCount = 0;
+
+        for (final doc in snap.data?.docs ?? []) {
+          final data = doc.data() as Map<String, dynamic>;
+          final unread = (data['junkshopUnreadCount'] as num?)?.toInt() ?? 0;
+          unreadCount += unread;
+        }
+
+        final hasUnread = unreadCount > 0;
+
+        return GestureDetector(
+          onTap: () => _goToTab(index),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      Icons.chat_bubble_outline,
+                      color: isActive ? primaryColor : Colors.grey.shade500,
+                    ),
+                    if (hasUnread)
+                      Positioned(
+                        right: -2,
+                        top: -2,
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "CHATS",
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: isActive ? primaryColor : Colors.grey.shade500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildJunkshopNotifBell() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
@@ -511,30 +583,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
           const SizedBox(height: 18),
 
-          SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const ChatListPage(
-                      type: "junkshop",
-                      title: "Collectors",
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.chat_bubble_outline),
-              label: const Text("Chats with Collectors"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryColor,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-          ),
+
 
           const SizedBox(height: 22),
 
@@ -550,7 +599,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               icon: const Icon(Icons.logout),
               label: const Text("Logout"),
               style: ElevatedButton.styleFrom(
-                backgroundColor: primaryColor,
+                backgroundColor: Colors.red,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
