@@ -67,14 +67,31 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   bool _isSellItemOverStock(_ReceiptItem item) {
     if (_txType != "sell") return false;
+
     final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
     if (item.inventoryDocId == null) return false;
-    return enteredKg > item.availableKg;
+
+    final totalForSameInventory = _items
+        .where((it) => it.inventoryDocId == item.inventoryDocId)
+        .fold<double>(
+          0.0,
+          (sum, it) => sum + (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0),
+        );
+
+    return totalForSameInventory > item.availableKg;
   }
 
   double _remainingSellKg(_ReceiptItem item) {
-    final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
-    final remaining = item.availableKg - enteredKg;
+    if (item.inventoryDocId == null) return 0.0;
+
+    final totalForSameInventory = _items
+        .where((it) => it.inventoryDocId == item.inventoryDocId)
+        .fold<double>(
+          0.0,
+          (sum, it) => sum + (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0),
+        );
+
+    final remaining = item.availableKg - totalForSameInventory;
     return remaining < 0 ? 0.0 : remaining;
   }
 
@@ -107,11 +124,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
     it.sellPricePerKg = sellPerKg;
-
-    if (it.inventoryDocId != null && kg > it.availableKg) {
-      it.subtotalCtrl.text = "0.00";
-      return;
-    }
 
     final sellTotal = kg * sellPerKg;
     it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
@@ -249,310 +261,353 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     return snap.docs.first.id;
   }
 
-  Future<void> _saveReceipt() async {
-    if (_saving) return;
-    setState(() => _saving = true);
+Future<void> _saveReceipt() async {
+  if (_saving) return;
+  setState(() => _saving = true);
 
-    final isSell = _txType == "sell";
-    final fromCollectorSellRequest = _openedFromCollectorSellRequest;
-    final isWalkInBuy = !isSell && !fromCollectorSellRequest;
+  final isSell = _txType == "sell";
+  final fromCollectorSellRequest = _openedFromCollectorSellRequest;
+  final isWalkInBuy = !isSell && !fromCollectorSellRequest;
 
-    final collectorName = _sourceNameCtrl.text.trim();
-    final walkInName = _walkInNameCtrl.text.trim();
+  final collectorName = _sourceNameCtrl.text.trim();
+  final walkInName = _walkInNameCtrl.text.trim();
 
-    try {
-      if (_items.isEmpty) {
+  try {
+    if (_items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Add at least 1 item.")),
+      );
+      return;
+    }
+
+    if (!isSell) {
+      if (isWalkInBuy) {
+        if (walkInName.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Enter walk-in name.")),
+          );
+          return;
+        }
+      } else {
+        if (collectorName.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Collector info is missing.")),
+          );
+          return;
+        }
+      }
+    }
+
+    final sourceType = isSell ? "" : (isWalkInBuy ? "walkin" : "collector");
+    final sourceName = isSell ? "" : (isWalkInBuy ? walkInName : collectorName);
+
+    final partyName =
+        isSell ? _selectedSellBranch : (isWalkInBuy ? walkInName : collectorName);
+
+    double totalWeightKg = 0.0;
+
+    for (final it in _items) {
+      final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+
+      if (kg <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Add at least 1 item.")),
+          const SnackBar(content: Text("Weight must be greater than 0.")),
         );
         return;
       }
 
-      if (!isSell) {
-        if (isWalkInBuy) {
-          if (walkInName.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Enter walk-in name.")),
-            );
-            return;
-          }
+      totalWeightKg += kg;
+
+      if (isSell && it.inventoryDocId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Select an inventory item for each SELL line."),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (_hasInvalidSellWeight) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("One or more sell items exceed available stock."),
+        ),
+      );
+      return;
+    }
+
+    final db = FirebaseFirestore.instance;
+    final shopRef = db.collection('Users').doc(widget.shopID);
+    final txCol = shopRef.collection('transaction');
+    final invCol = shopRef.collection('inventory');
+
+    final Map<String, _BuyInventoryGroup> buyGroups = {};
+    final Map<String, String?> buyTargetIds = {};
+    final Map<String, _SellInventoryGroup> sellGroups = {};
+
+    if (!isSell) {
+      for (final it in _items) {
+        final cat = normalizeCategoryKey(it.categoryValue ?? "");
+        final sub = (it.subCategoryValue ?? "").trim();
+        final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+        final key = "$cat|$sub";
+
+        if (buyGroups.containsKey(key)) {
+          buyGroups[key]!.totalKg += kg;
         } else {
-          if (collectorName.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Collector info is missing.")),
-            );
-            return;
-          }
+          buyGroups[key] = _BuyInventoryGroup(
+            category: cat,
+            subCategory: sub,
+            totalKg: kg,
+          );
         }
       }
 
-      final sourceType = isSell ? "" : (isWalkInBuy ? "walkin" : "collector");
-      final sourceName = isSell ? "" : (isWalkInBuy ? walkInName : collectorName);
-
-      final partyName =
-          isSell ? _selectedSellBranch : (isWalkInBuy ? walkInName : collectorName);
-
-      double totalWeightKg = 0.0;
-
+      for (final entry in buyGroups.entries) {
+        final group = entry.value;
+        buyTargetIds[entry.key] =
+            await _findInventoryDocIdForBuy(group.category, group.subCategory);
+      }
+    } else {
       for (final it in _items) {
+        final id = it.inventoryDocId!;
         final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+        final cat = normalizeCategoryKey(it.categoryValue ?? "");
+        final sub = (it.subCategoryValue ?? "").trim();
+        final name = (it.sellPickedName ?? "").trim();
 
-        if (kg <= 0) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Weight must be greater than 0.")),
+        if (sellGroups.containsKey(id)) {
+          sellGroups[id]!.totalKg += kg;
+        } else {
+          sellGroups[id] = _SellInventoryGroup(
+            inventoryDocId: id,
+            itemName: name,
+            category: cat,
+            subCategory: sub,
+            totalKg: kg,
           );
-          return;
+        }
+      }
+    }
+
+    await db.runTransaction((trx) async {
+      final txRef = txCol.doc();
+      final itemsPayload = <Map<String, dynamic>>[];
+
+      DocumentReference<Map<String, dynamic>>? sellReqRef;
+      DocumentSnapshot<Map<String, dynamic>>? sellReqSnap;
+
+      // READS FIRST
+      if (fromCollectorSellRequest && widget.sellRequestId != null) {
+        sellReqRef = db
+            .collection('Users')
+            .doc(widget.shopID)
+            .collection('sell_requests')
+            .doc(widget.sellRequestId);
+
+        sellReqSnap = await trx.get(sellReqRef);
+      }
+
+      final Map<String, DocumentSnapshot<Map<String, dynamic>>> sellInventorySnaps =
+          {};
+
+      if (isSell) {
+        for (final entry in sellGroups.entries) {
+          final invRef = invCol.doc(entry.key);
+          sellInventorySnaps[entry.key] = await trx.get(invRef);
+        }
+      }
+
+      // VALIDATION AFTER ALL READS
+      if (fromCollectorSellRequest &&
+          widget.sellRequestId != null &&
+          sellReqRef != null) {
+        if (sellReqSnap == null || !sellReqSnap.exists) {
+          throw Exception("Sell request not found.");
         }
 
-        totalWeightKg += kg;
+        final sellReqData = sellReqSnap.data() ?? {};
+        final status = (sellReqData['status'] ?? '').toString();
 
-        if (isSell && it.inventoryDocId == null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Select an inventory item for each SELL line."),
-            ),
+        if (status == 'completed' || status == 'processed') {
+          throw Exception("This sell request was already processed.");
+        }
+
+        final collectorIdFromSellRequest =
+            (sellReqData['collectorId'] ?? '').toString().trim();
+
+        final requestedKg = ((sellReqData['kg'] as num?) ?? 0).toDouble();
+
+        if ((requestedKg - totalWeightKg).abs() > 0.001) {
+          throw Exception(
+            "Receipt weight must match the collector sell request (${requestedKg.toStringAsFixed(2)} kg).",
           );
-          return;
+        }
+
+        if (collectorIdFromSellRequest.isEmpty) {
+          throw Exception("Missing collectorId in sell request.");
         }
       }
 
       if (isSell) {
-        final ids =
-            _items.map((it) => it.inventoryDocId).whereType<String>().toList();
+        for (final entry in sellGroups.entries) {
+          final group = entry.value;
+          final invSnap = sellInventorySnaps[group.inventoryDocId];
 
-        if (ids.toSet().length != ids.length) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                "You selected the same inventory item more than once.",
-              ),
-            ),
-          );
-          return;
+          if (invSnap == null || !invSnap.exists) {
+            throw Exception("Inventory item not found.");
+          }
+
+          final invData = invSnap.data() as Map<String, dynamic>;
+          final currentKg = (invData['unitsKg'] as num?)?.toDouble() ?? 0.0;
+
+          if (currentKg < group.totalKg) {
+            final itemName = (invData['name'] ?? group.itemName).toString();
+            throw Exception(
+              "Not enough stock for $itemName. Available: ${currentKg.toStringAsFixed(2)} kg",
+            );
+          }
         }
       }
 
-      final db = FirebaseFirestore.instance;
-      final shopRef = db.collection('Users').doc(widget.shopID);
-      final txCol = shopRef.collection('transaction');
-      final invCol = shopRef.collection('inventory');
+      // BUILD RECEIPT ITEMS
+      for (final it in _items) {
+        final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+        final cat = normalizeCategoryKey(it.categoryValue ?? "");
+        final sub = (it.subCategoryValue ?? "").trim();
 
-      final Map<String, _BuyInventoryGroup> buyGroups = {};
-      final Map<String, String?> buyTargetIds = {};
+        if (isSell) {
+          final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
+          final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+
+          final sellTotal = weightKg * sellPerKg;
+          final costTotal = weightKg * buyCostPerKg;
+          final profit = sellTotal - costTotal;
+
+          itemsPayload.add({
+            'inventoryDocId': it.inventoryDocId,
+            'itemName': (it.sellPickedName ?? "").trim(),
+            'category': cat,
+            'subCategory': sub,
+            'weightKg': weightKg,
+            'sellPricePerKg': sellPerKg,
+            'sellTotal': sellTotal,
+            'costPerKg': buyCostPerKg,
+            'costTotal': costTotal,
+            'profit': profit,
+            'subtotal': sellTotal,
+          });
+        } else {
+          final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+          final costTotal = weightKg * buyCostPerKg;
+
+          itemsPayload.add({
+            'itemName': "$cat • $sub",
+            'category': cat,
+            'subCategory': sub,
+            'weightKg': weightKg,
+            'costPerKg': buyCostPerKg,
+            'costTotal': costTotal,
+            'subtotal': costTotal,
+          });
+        }
+      }
+
+      // WRITES ONLY FROM HERE
+      if (!isSell) {
+        for (final entry in buyGroups.entries) {
+          final key = entry.key;
+          final group = entry.value;
+          final targetId = buyTargetIds[key];
+
+          if (targetId != null) {
+            final existingRef = invCol.doc(targetId);
+            trx.update(existingRef, {
+              'unitsKg': FieldValue.increment(group.totalKg),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+          } else {
+            final newInvRef = invCol.doc();
+            trx.set(newInvRef, {
+              'name': "${group.category} • ${group.subCategory}",
+              'category': group.category,
+              'subCategory': group.subCategory,
+              'unitsKg': group.totalKg,
+              'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      } else {
+        for (final entry in sellGroups.entries) {
+          final group = entry.value;
+          final invSnap = sellInventorySnaps[group.inventoryDocId]!;
+          final invData = invSnap.data() as Map<String, dynamic>;
+          final currentKg = (invData['unitsKg'] as num?)?.toDouble() ?? 0.0;
+          final newKg = currentKg - group.totalKg;
+
+          trx.update(invCol.doc(group.inventoryDocId), {
+            'unitsKg': newKg,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      final payload = <String, dynamic>{
+        'transactionType': _txType,
+        'customerName': partyName,
+        'items': itemsPayload,
+        'totalAmount': _totalAmount,
+        'totalWeightKg': totalWeightKg,
+        'transactionDate': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      };
 
       if (!isSell) {
-        for (final it in _items) {
-          final cat = normalizeCategoryKey(it.categoryValue ?? "");
-          final sub = (it.subCategoryValue ?? "").trim();
-          final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-          final key = "$cat|$sub";
+        payload['sourceType'] = sourceType;
+        payload['sourceName'] = sourceName;
 
-          if (buyGroups.containsKey(key)) {
-            buyGroups[key]!.totalKg += kg;
-          } else {
-            buyGroups[key] = _BuyInventoryGroup(
-              category: cat,
-              subCategory: sub,
-              totalKg: kg,
-            );
-          }
-        }
-
-        for (final entry in buyGroups.entries) {
-          final group = entry.value;
-          buyTargetIds[entry.key] =
-              await _findInventoryDocIdForBuy(group.category, group.subCategory);
+        if (!isWalkInBuy && _sourceUserId != null) {
+          payload['sourceUserId'] = _sourceUserId;
         }
       }
 
-      await db.runTransaction((trx) async {
-        final txRef = txCol.doc();
-        final itemsPayload = <Map<String, dynamic>>[];
+      if (fromCollectorSellRequest && widget.sellRequestId != null) {
+        payload['sellRequestId'] = widget.sellRequestId;
+        payload['receiptOrigin'] = 'collector_sell_request';
+      }
 
-        DocumentReference<Map<String, dynamic>>? sellReqRef;
+      trx.set(txRef, payload);
 
-        if (fromCollectorSellRequest && widget.sellRequestId != null) {
-          sellReqRef = db
-              .collection('Users')
-              .doc(widget.shopID)
-              .collection('sell_requests')
-              .doc(widget.sellRequestId);
+      if (fromCollectorSellRequest &&
+          widget.sellRequestId != null &&
+          sellReqRef != null) {
+        trx.set(
+          sellReqRef,
+          {
+            'status': 'completed',
+            'seen': true,
+            'receiptSaved': true,
+            'receiptTransactionId': txRef.id,
+            'processedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+    });
 
-          final sellReqSnap = await trx.get(sellReqRef);
-
-          if (!sellReqSnap.exists) {
-            throw Exception("Sell request not found.");
-          }
-
-          final sellReqData = sellReqSnap.data() ?? {};
-          final status = (sellReqData['status'] ?? '').toString();
-
-          if (status == 'completed' || status == 'processed') {
-            throw Exception("This sell request was already processed.");
-          }
-
-          final collectorIdFromSellRequest =
-              (sellReqData['collectorId'] ?? '').toString().trim();
-
-          final requestedKg = ((sellReqData['kg'] as num?) ?? 0).toDouble();
-
-          if ((requestedKg - totalWeightKg).abs() > 0.001) {
-            throw Exception(
-              "Receipt weight must match the collector sell request (${requestedKg.toStringAsFixed(2)} kg).",
-            );
-          }
-
-          if (collectorIdFromSellRequest.isEmpty) {
-            throw Exception("Missing collectorId in sell request.");
-          }
-        }
-
-        for (final it in _items) {
-          final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
-          final cat = normalizeCategoryKey(it.categoryValue ?? "");
-          final sub = (it.subCategoryValue ?? "").trim();
-
-          if (isSell) {
-            final invRef = invCol.doc(it.inventoryDocId);
-            final invSnap = await trx.get(invRef);
-
-            if (!invSnap.exists) {
-              throw Exception("Inventory item not found.");
-            }
-
-            final invData = invSnap.data() as Map<String, dynamic>;
-            final currentKg = (invData['unitsKg'] as num?)?.toDouble() ?? 0.0;
-
-            if (currentKg < weightKg) {
-              final itemName = (invData['name'] ?? "Item").toString();
-              throw Exception(
-                "Not enough stock for $itemName. Available: ${currentKg.toStringAsFixed(2)} kg",
-              );
-            }
-
-            final newKg = currentKg - weightKg;
-
-            trx.update(invRef, {
-              'unitsKg': newKg,
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
-
-            final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
-            final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
-
-            final sellTotal = weightKg * sellPerKg;
-            final costTotal = weightKg * buyCostPerKg;
-            final profit = sellTotal - costTotal;
-
-            itemsPayload.add({
-              'inventoryDocId': it.inventoryDocId,
-              'itemName': (it.sellPickedName ?? "").trim(),
-              'category': cat,
-              'subCategory': sub,
-              'weightKg': weightKg,
-              'sellPricePerKg': sellPerKg,
-              'sellTotal': sellTotal,
-              'costPerKg': buyCostPerKg,
-              'costTotal': costTotal,
-              'profit': profit,
-              'subtotal': sellTotal,
-            });
-          } else {
-            final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
-            final costTotal = weightKg * buyCostPerKg;
-
-            itemsPayload.add({
-              'itemName': "$cat • $sub",
-              'category': cat,
-              'subCategory': sub,
-              'weightKg': weightKg,
-              'costPerKg': buyCostPerKg,
-              'costTotal': costTotal,
-              'subtotal': costTotal,
-            });
-          }
-        }
-
-        if (!isSell) {
-          for (final entry in buyGroups.entries) {
-            final key = entry.key;
-            final group = entry.value;
-            final targetId = buyTargetIds[key];
-
-            if (targetId != null) {
-              final existingRef = invCol.doc(targetId);
-              trx.update(existingRef, {
-                'unitsKg': FieldValue.increment(group.totalKg),
-                'updatedAt': FieldValue.serverTimestamp(),
-              });
-            } else {
-              final newInvRef = invCol.doc();
-              trx.set(newInvRef, {
-                'name': "${group.category} • ${group.subCategory}",
-                'category': group.category,
-                'subCategory': group.subCategory,
-                'unitsKg': group.totalKg,
-                'createdAt': FieldValue.serverTimestamp(),
-                'updatedAt': FieldValue.serverTimestamp(),
-              });
-            }
-          }
-        }
-
-        final payload = <String, dynamic>{
-          'transactionType': _txType,
-          'customerName': partyName,
-          'items': itemsPayload,
-          'totalAmount': _totalAmount,
-          'totalWeightKg': totalWeightKg,
-          'transactionDate': FieldValue.serverTimestamp(),
-          'createdAt': FieldValue.serverTimestamp(),
-        };
-
-        if (!isSell) {
-          payload['sourceType'] = sourceType;
-          payload['sourceName'] = sourceName;
-
-          if (!isWalkInBuy && _sourceUserId != null) {
-            payload['sourceUserId'] = _sourceUserId;
-          }
-        }
-
-        if (fromCollectorSellRequest && widget.sellRequestId != null) {
-          payload['sellRequestId'] = widget.sellRequestId;
-          payload['receiptOrigin'] = 'collector_sell_request';
-        }
-
-        trx.set(txRef, payload);
-
-        if (fromCollectorSellRequest &&
-            widget.sellRequestId != null &&
-            sellReqRef != null) {
-          trx.set(
-            sellReqRef,
-            {
-              'status': 'completed',
-              'seen': true,
-              'receiptSaved': true,
-              'receiptTransactionId': txRef.id,
-              'processedAt': FieldValue.serverTimestamp(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          );
-        }
-      });
-
-      if (!mounted) return;
-      Navigator.pop(context);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Save failed: $e")),
-      );
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
+    if (!mounted) return;
+    Navigator.pop(context);
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Save failed: $e")),
+    );
+  } finally {
+    if (mounted) setState(() => _saving = false);
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -1068,153 +1123,20 @@ class _BuyInventoryGroup {
   });
 }
 
-class _UserPickerSheet extends StatefulWidget {
-  final String role;
-  const _UserPickerSheet({required this.role});
+class _SellInventoryGroup {
+  final String inventoryDocId;
+  final String itemName;
+  final String category;
+  final String subCategory;
+  double totalKg;
 
-  @override
-  State<_UserPickerSheet> createState() => _UserPickerSheetState();
-}
-
-class _UserPickerSheetState extends State<_UserPickerSheet> {
-  String q = "";
-
-  @override
-  Widget build(BuildContext context) {
-    final title = "Select Collector";
-    final roleValue = "collector";
-
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.85,
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 10),
-          Container(
-            width: 40,
-            height: 5,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(20),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextField(
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: "Search name...",
-                hintStyle: const TextStyle(color: Color(0xFF64748B)),
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white.withOpacity(0.06),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              onChanged: (v) => setState(() => q = v.trim().toLowerCase()),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('Users')
-                  .where('role', isEqualTo: roleValue)
-                  .snapshots(),
-              builder: (context, snap) {
-                if (snap.hasError) {
-                  return Center(
-                    child: Text(
-                      "Error: ${snap.error}",
-                      style: const TextStyle(color: Colors.redAccent),
-                      textAlign: TextAlign.center,
-                    ),
-                  );
-                }
-
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final docs = snap.data?.docs ?? [];
-
-                final filtered = docs.where((d) {
-                  if (q.isEmpty) return true;
-                  final m = d.data() as Map<String, dynamic>;
-                  final name = (m['Name'] ?? '').toString().toLowerCase();
-                  return name.contains(q);
-                }).toList();
-
-                if (filtered.isEmpty) {
-                  return const Center(
-                    child: Text(
-                      "No matching users",
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  );
-                }
-
-                return ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: filtered.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, i) {
-                    final d = filtered[i];
-                    final m = d.data() as Map<String, dynamic>;
-                    final name =
-                        (m['Name'] ?? m['displayName'] ?? m['name'] ?? '')
-                            .toString();
-
-                    return ListTile(
-                      tileColor: Colors.white.withOpacity(0.06),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      title: Text(
-                        name,
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                      subtitle: Text(
-                        roleValue,
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                      onTap: () {
-                        Navigator.pop(context, {
-                          'id': d.id,
-                          'name': name,
-                        });
-                      },
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  _SellInventoryGroup({
+    required this.inventoryDocId,
+    required this.itemName,
+    required this.category,
+    required this.subCategory,
+    required this.totalKg,
+  });
 }
 
 class _InventoryPickerSheet extends StatefulWidget {
@@ -1279,6 +1201,15 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
+                }
+
+                if (snap.hasError) {
+                  return Center(
+                    child: Text(
+                      "Error: ${snap.error}",
+                      style: const TextStyle(color: Colors.redAccent),
+                    ),
+                  );
                 }
 
                 final docs = snap.data?.docs ?? [];
