@@ -20,6 +20,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
   String _txType = "sell";
   String _q = "";
   DateTimeRange? _dateRange;
+  String _collectedFilter = "all"; // all | walkin | collector
 
   void _switchType(String next) {
     if (_txType == next) return;
@@ -104,6 +105,45 @@ class _TransactionScreenState extends State<TransactionScreen> {
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCollectedSourceButton({
+    required IconData icon,
+    required String value,
+    required String tooltip,
+  }) {
+    final isSelected = _collectedFilter == value;
+
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: () {
+          setState(() => _collectedFilter = value);
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: isSelected
+                ? primaryColor.withOpacity(0.22)
+                : Colors.white.withOpacity(0.04),
+            border: Border.all(
+              color: isSelected
+                  ? primaryColor.withOpacity(0.45)
+                  : Colors.white.withOpacity(0.06),
+            ),
+          ),
+          child: Icon(
+            icon,
+            color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+            size: 15,
           ),
         ),
       ),
@@ -331,34 +371,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _dateFilterLabel(),
-                          style: const TextStyle(
-                            color: Color(0xFF94A3B8),
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (_dateRange != null)
-                        TextButton(
-                          onPressed: () => setState(() => _dateRange = null),
-                          child: const Text(
-                            "Clear filter",
-                            style: TextStyle(
-                              color: Color(0xFF1FA9A7),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   Expanded(
                     child: StreamBuilder<QuerySnapshot>(
                       stream: txStream,
@@ -376,6 +389,12 @@ class _TransactionScreenState extends State<TransactionScreen> {
                               .toString()
                               .toLowerCase();
                           if (type != _txType) return false;
+
+                          if (_txType == "buy" && _collectedFilter != "all") {
+                            final sourceType =
+                                (data['sourceType'] ?? '').toString().toLowerCase();
+                            if (sourceType != _collectedFilter) return false;
+                          }
 
                           if (_dateRange != null) {
                             final ts = data['transactionDate'] as Timestamp?;
@@ -409,41 +428,115 @@ class _TransactionScreenState extends State<TransactionScreen> {
                         }).toList();
 
                         if (docs.isEmpty) {
-                          return Center(
-                            child: Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 24),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(
-                                    Icons.receipt_long_outlined,
-                                    size: 64,
-                                    color: Color(0xFF64748B),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Text(
-                                    _txType == "sell"
-                                        ? "No sold transactions found"
-                                        : "No collected transactions found",
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
+                          return Column(
+                            children: [
+                              Padding(
+  padding: const EdgeInsets.only(bottom: 4),
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              _dateFilterLabel(),
+              style: const TextStyle(
+                color: Color(0xFF94A3B8),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+
+          if (_txType == "buy") ...[
+            _buildCollectedSourceButton(
+              icon: Icons.filter_list_rounded,
+              value: "all",
+              tooltip: "All collected",
+            ),
+            const SizedBox(width: 4),
+            _buildCollectedSourceButton(
+              icon: Icons.person_rounded,
+              value: "walkin",
+              tooltip: "Walk-in only",
+            ),
+            const SizedBox(width: 4),
+            _buildCollectedSourceButton(
+              icon: Icons.local_shipping_rounded,
+              value: "collector",
+              tooltip: "Collector only",
+            ),
+          ],
+
+          if (_dateRange != null) ...[
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () => setState(() => _dateRange = null),
+              child: const Text(
+                "Clear",
+                style: TextStyle(
+                  color: Color(0xFF1FA9A7),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+
+      const SizedBox(height: 2),
+
+      Text(
+        "${docs.length} transaction${docs.length == 1 ? '' : 's'}",
+        style: const TextStyle(
+          color: Color(0xFF94A3B8),
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    ],
+  ),
+),
+                              Expanded(
+                                child: Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        const Icon(
+                                          Icons.receipt_long_outlined,
+                                          size: 64,
+                                          color: Color(0xFF64748B),
+                                        ),
+                                        const SizedBox(height: 14),
+                                        Text(
+                                          _txType == "sell"
+                                              ? "No sold transactions found"
+                                              : "No collected transactions found",
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        const Text(
+                                          "Try changing the search or date filter.",
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            color: Color(0xFF94A3B8),
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    "Try changing the search or date filter.",
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: Color(0xFF94A3B8),
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ],
+                                ),
                               ),
-                            ),
+                            ],
                           );
                         }
 
@@ -451,16 +544,70 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Text(
-                                "${docs.length} transaction${docs.length == 1 ? '' : 's'}",
-                                style: const TextStyle(
-                                  color: Color(0xFF94A3B8),
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
+  padding: const EdgeInsets.only(bottom: 4),
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              _dateFilterLabel(),
+              style: const TextStyle(
+                color: Color(0xFF94A3B8),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (_txType == "buy") ...[
+            _buildCollectedSourceButton(
+              icon: Icons.filter_list_rounded,
+              value: "all",
+              tooltip: "All collected",
+            ),
+            const SizedBox(width: 4),
+            _buildCollectedSourceButton(
+              icon: Icons.person_rounded,
+              value: "walkin",
+              tooltip: "Walk-in only",
+            ),
+            const SizedBox(width: 4),
+            _buildCollectedSourceButton(
+              icon: Icons.local_shipping_rounded,
+              value: "collector",
+              tooltip: "Collector only",
+            ),
+          ],
+          if (_dateRange != null) ...[
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () => setState(() => _dateRange = null),
+              child: const Text(
+                "Clear",
+                style: TextStyle(
+                  color: Color(0xFF1FA9A7),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+      const SizedBox(height: 2),
+      Text(
+        "${docs.length} transaction${docs.length == 1 ? '' : 's'}",
+        style: const TextStyle(
+          color: Color(0xFF94A3B8),
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    ],
+  ),
+),
                             Expanded(
                               child: ListView.separated(
                                 padding: const EdgeInsets.only(bottom: 100),
@@ -484,8 +631,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
 
                                   final name = _displayPartyName(data);
                                   final total =
-                                      (data['totalAmount'] as num?)?.toDouble() ??
-                                          0.0;
+                                      (data['totalAmount'] as num?)?.toDouble() ?? 0.0;
                                   final ts = data['transactionDate'] as Timestamp?;
                                   final date = ts?.toDate();
 
@@ -525,8 +671,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                               : isCollector
                                                   ? Colors.orange.withOpacity(0.14)
                                                   : Colors.blue.withOpacity(0.14),
-                                          borderRadius:
-                                              BorderRadius.circular(14),
+                                          borderRadius: BorderRadius.circular(14),
                                         ),
                                         child: Icon(
                                           isSale
@@ -562,10 +707,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                         ),
                                       ),
                                       trailing: Column(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.end,
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        crossAxisAlignment: CrossAxisAlignment.end,
                                         children: [
                                           Container(
                                             padding: const EdgeInsets.symmetric(
