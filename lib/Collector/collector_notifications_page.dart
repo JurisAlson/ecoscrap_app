@@ -72,27 +72,6 @@ class _CollectorNotificationsPageState
           throw "Already assigned";
         }
 
-        final existing = await db
-            .collection('requests')
-            .where('type', isEqualTo: 'pickup')
-            .where('collectorId', isEqualTo: user.uid)
-            .where('active', isEqualTo: true)
-            .get();
-
-        final hasAnotherActivePickup = existing.docs.any((d) {
-          if (d.id == requestId) return false;
-          final data = d.data();
-          final status = (data['status'] ?? '').toString().toLowerCase();
-
-          return status == 'pending' ||
-              status == 'scheduled' ||
-              status == 'accepted' ||
-              status == 'arrived';
-        });
-
-        if (hasAnotherActivePickup) {
-          throw "You already have an active pickup. Complete it first.";
-        }
 
         final update = <String, dynamic>{
           'collectorId': user.uid,
