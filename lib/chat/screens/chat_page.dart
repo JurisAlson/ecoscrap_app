@@ -54,6 +54,7 @@ class _ChatPageState extends State<ChatPage> {
 
   // uploads currently being sent
   final List<PendingUploadItem> _uploadingImages = [];
+  
 
   String? get _me => FirebaseAuth.instance.currentUser?.uid;
 
