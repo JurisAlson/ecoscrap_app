@@ -9,7 +9,9 @@ import {
   onDocumentWritten,
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { defineSecret } from "firebase-functions/params";
 import * as crypto from "crypto";
+const GOOGLE_MAPS_API_KEY = defineSecret("GOOGLE_MAPS_API_KEY");
 
 admin.initializeApp();
 setGlobalOptions({ maxInstances: 10 });
@@ -1649,3 +1651,51 @@ export const adminSetUserRestricted = onCall(
     return { ok: true, uid, restricted, reasonCode, reasonText };
   }
 );
+/* ====================================================
+   GET DIRECTIONS
+==================================================== */
+exports.getDirections = onCall(
+  {
+    region: "asia-southeast1",
+    secrets: [GOOGLE_MAPS_API_KEY],
+  },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+
+    const origin = String(request.data?.origin || "").trim();       // "lat,lng"
+    const destination = String(request.data?.destination || "").trim(); // "lat,lng"
+    const mode = String(request.data?.mode || "driving").trim();
+
+    if (!origin || !destination) {
+      throw new HttpsError("invalid-argument", "origin and destination are required");
+    }
+
+    const apiKey = GOOGLE_MAPS_API_KEY.value();
+
+    const url =
+      "https://maps.googleapis.com/maps/api/directions/json" +
+      `?origin=${encodeURIComponent(origin)}` +
+      `&destination=${encodeURIComponent(destination)}` +
+      `&mode=${encodeURIComponent(mode)}` +
+      `&key=${apiKey}`;
+
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    if (data.status && data.status !== "OK") {
+      throw new HttpsError("failed-precondition", `Directions failed: ${data.status}`);
+    }
+
+    const route0 = data.routes?.[0];
+    const points = route0?.overview_polyline?.points || null;
+
+    const leg0 = route0?.legs?.[0];
+    const distanceText = leg0?.distance?.text || "";
+    const durationText = leg0?.duration?.text || "";
+    const durationValueSec = typeof leg0?.duration?.value === "number" ? leg0.duration.value : null;
+
+    if (!points) throw new HttpsError("not-found", "No route/polyline found");
+
+    return { points, distanceText, durationText, durationValueSec };
+  }
+);	
