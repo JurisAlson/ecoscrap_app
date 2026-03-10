@@ -700,7 +700,7 @@ if (isSell) {
         backgroundColor: bgColor,
         elevation: 0,
         foregroundColor: Colors.white,
-        title: Text(isSell ? "Selling Receipt" : "Buying Receipt"),
+        title: Text(isSell ? "Selling Transaction" : "Buying Transaction"),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
