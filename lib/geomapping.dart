@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'pickup_request_page.dart';
+import 'package:firebase_core/firebase_core.dart';
+
 
 extension OpacityFix on Color {
   Color o(double opacity) =>
@@ -33,6 +35,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   static const Color _accent = Color(0xFF10B981);
   static const Color _teal = Color(0xFF1FA9A7);
   static const Color _blue = Color(0xFF60A5FA);
+  
 
   // Text colors
   static const Color _textPrimary = Color(0xFFE2E8F0);
@@ -55,6 +58,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   final LatLng _moresLatLng = const LatLng(14.198630, 121.117270);
   final String _moresName = "Mores Scrap Trading";
   final String _moresSubtitle = "brgy palo alto, Calamba";
+  final String _moresJunkshopUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
 
   // Location
   bool _locationReady = false;
@@ -63,11 +67,21 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   // Route polyline
   List<LatLng> _routePoints = [];
-  final String _dirDistanceText = "";
-  final String _dirDurationText = "";
+  String _dirDistanceText = "";
+  String _dirDurationText = "";
   int? _dirDurationValueSec;
 
   String? _activeDropoffRequestId;
+
+    // ===== Collector live tracking =====
+  String? _activePickupRequestId;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _pickupReqSub;
+  
+
+  LatLng? _collectorLatLng;
+  String? _collectorName;
+
+  List<LatLng> _collectorRoutePoints = [];
 
   // Trip stage
   TripStage _tripStage = TripStage.planning;
@@ -133,6 +147,17 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   LatLng? _pinnedPickupLatLng; // null => use GPS
   String _pickupSource = "gps"; // "gps" | "pin"
 
+  static const List<String> _dropoffCancelReasons = [
+    "Changed my mind",
+    "Going later instead",
+    "Wrong destination selected",
+    "Travel issue",
+    "Too far right now",
+    "Other",
+  ];
+
+  String _dropoffStatus = ""; // en_route | arrived | cancelled | completed
+
   LatLng get _effectivePickupLatLng => _pinnedPickupLatLng ?? _originLatLng;
 
   final FirebaseFunctions _functions =
@@ -145,6 +170,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     }
 
     final origin = _originLatLng;
+    debugPrint("projectId=${Firebase.app().options.projectId}");
 
     try {
       final callable = _functions.httpsCallable('getDirections');
@@ -173,6 +199,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       if (!mounted) return;
       setState(() {
         _routePoints = decoded;
+        _dirDistanceText = distText;
+        _dirDurationText = durText;
         _dirDurationValueSec = durVal is int
             ? durVal
             : (durVal is num ? durVal.toInt() : _dirDurationValueSec);
@@ -188,10 +216,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       if (!mounted) return;
       setState(() => _routePoints = []);
     }
-  }
-
-  Future<void> _buildRoute() async {
-    await _buildRouteTo(_moresLatLng);
   }
 
   @override
@@ -213,6 +237,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   void dispose() {
     _timer.cancel();
     _posSub?.cancel();
+    _pickupReqSub?.cancel();
     super.dispose();
   }
 
@@ -243,26 +268,25 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       _locationReady = true;
     });
 
-    _posSub?.cancel();
-    _posSub = Geolocator.getPositionStream(
+      _posSub?.cancel();
+      _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 5,
+      accuracy: LocationAccuracy.best,
+      distanceFilter: 5,
       ),
     ).listen((p) async {
       if (!mounted) return;
       setState(() => _currentPosition = p);
 
-      if (_isPickup || _isDelivering) {
-        await _buildRoute();
+      if (_isDelivering) {
+        await _buildRouteTo(_moresLatLng);
       }
     });
-
-    await _buildRoute();
 
     _mapController?.animateCamera(
       CameraUpdate.newLatLngZoom(LatLng(pos.latitude, pos.longitude), 15),
     );
+    await _restoreActiveDropoffIfAny();
   }
 
   Widget _glass({
@@ -363,6 +387,46 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     });
   }
 
+    void _listenToActivePickupRequest(String requestId) {
+    _pickupReqSub?.cancel();
+
+    _pickupReqSub = FirebaseFirestore.instance
+        .collection('requests')
+        .doc(requestId)
+        .snapshots()
+        .listen((doc) async {
+      if (!doc.exists) return;
+
+      final data = doc.data() ?? {};
+      final collectorName = (data['collectorName'] ?? 'Collector').toString();
+
+      final gp = data['collectorLocation'];
+      LatLng? liveCollector;
+
+      if (gp is GeoPoint) {
+        liveCollector = LatLng(gp.latitude, gp.longitude);
+      }
+
+      if (!mounted) return;
+
+      final shouldFit = _collectorLatLng == null && liveCollector != null;
+
+      setState(() {
+        _collectorName = collectorName;
+        _collectorLatLng = liveCollector;
+      });
+
+      if (liveCollector != null) {
+        await _buildCollectorRouteToPickup(liveCollector);
+      }
+
+      if (shouldFit) {
+        await _fitCollectorAndPickup();
+      }
+    });
+  }
+  
+
   void _onMapTap(LatLng tapped) {
     if (!_pinMode) return;
 
@@ -419,33 +483,175 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         ),
       );
     }
+        // ✅ Collector live location marker
+    if (_collectorLatLng != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId("collector_live"),
+          position: _collectorLatLng!,
+          infoWindow: InfoWindow(
+            title: _collectorName ?? "Collector",
+            snippet: "Approaching pickup location",
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueViolet,
+          ),
+        ),
+      );
+    }
 
     return markers;
   }
 
   Set<Polyline> _buildPolylines() {
-    if (_routePoints.isEmpty) return {};
-    return {
-      Polyline(
-        polylineId: const PolylineId("route"),
-        points: _routePoints,
-        width: 6,
-        color: _teal,
-      ),
-    };
+    final polylines = <Polyline>{};
+
+    if (_routePoints.isNotEmpty) {
+      polylines.add(
+        Polyline(
+          polylineId: const PolylineId("route"),
+          points: _routePoints,
+          width: 6,
+          color: _teal,
+        ),
+      );
+    }
+
+    if (_collectorRoutePoints.isNotEmpty) {
+      polylines.add(
+        Polyline(
+          polylineId: const PolylineId("collector_route"),
+          points: _collectorRoutePoints,
+          width: 5,
+          color: _blue,
+        ),
+      );
+    }
+
+    return polylines;
+  }
+
+  Future<void> _restoreActiveDropoffIfAny() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'drop-off')
+        .where('householdId', isEqualTo: user.uid)
+        .where('active', isEqualTo: true)
+        .limit(5)
+        .get();
+
+    if (snap.docs.isEmpty) return;
+
+    final docs = snap.docs.where((d) {
+      final status = (d.data()['status'] ?? '').toString().trim().toLowerCase();
+      return status == 'en_route';
+    }).toList();
+
+    if (docs.isEmpty) return;
+
+    final doc = docs.first;
+    final data = doc.data();
+
+    final status = (data['status'] ?? '').toString().trim().toLowerCase();
+
+    if (!mounted) return;
+
+    setState(() {
+      _activeDropoffRequestId = doc.id;
+      _tripStage = TripStage.delivering;
+      _dropoffStatus = status;
+      _activePickupRequestId = null;
+      _collectorLatLng = null;
+      _collectorName = null;
+      _collectorRoutePoints = [];
+    });
+
+    await _buildRouteTo(_moresLatLng);
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(_moresLatLng, 16),
+    );
   }
 
   Future<void> _startDirectionsToMores() async {
-    setState(() => _tripStage = TripStage.delivering);
+    _pickupReqSub?.cancel();
 
-    if (_activeDropoffRequestId == null) {
-      final id = await _createDropoffRequest();
-      if (id != null && mounted) setState(() => _activeDropoffRequestId = id);
-    }
+    setState(() {
+      _pinMode = false;
+      _tripStage = TripStage.delivering;
+      _collectorLatLng = null;
+      _collectorName = null;
+      _collectorRoutePoints = [];
+      _activePickupRequestId = null;
+      _dropoffStatus = "en_route";
+    });
+
+    final dropoffId = await _createDropoffRequest();
+
+    if (!mounted) return;
+
+    setState(() {
+      _activeDropoffRequestId = dropoffId;
+    });
 
     await _buildRouteTo(_moresLatLng);
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_moresLatLng, 16));
     _snack("Showing directions to $_moresName.", bg: _surface);
+  }
+
+  Future<String?> _findExistingActiveDropoffRequest() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'drop-off')
+        .where('householdId', isEqualTo: user.uid)
+        .where('active', isEqualTo: true)
+        .limit(5)
+        .get();
+
+    for (final doc in snap.docs) {
+      final status = (doc.data()['status'] ?? '').toString().trim().toLowerCase();
+      if (status == 'en_route') return doc.id;
+    }
+
+    return null;
+  }
+
+  Future<void> _buildCollectorRouteToPickup(LatLng collectorLatLng) async {
+    try {
+      final callable = _functions.httpsCallable('getDirections');
+      final result = await callable.call({
+        'origin': '${collectorLatLng.latitude},${collectorLatLng.longitude}',
+        'destination':
+            '${_effectivePickupLatLng.latitude},${_effectivePickupLatLng.longitude}',
+        'mode': 'driving',
+      });
+
+      final data = result.data;
+      if (data is! Map) return;
+
+      final points = data['points'] as String?;
+      if (points == null || points.isEmpty) {
+        if (!mounted) return;
+        setState(() => _collectorRoutePoints = []);
+        return;
+      }
+
+      final decoded = _decodePolyline(points);
+
+      if (!mounted) return;
+      setState(() {
+        _collectorRoutePoints = decoded;
+      });
+    } catch (e) {
+      debugPrint("❌ collector route failed: $e");
+      if (!mounted) return;
+      setState(() => _collectorRoutePoints = []);
+    }
   }
 
   // =========================
@@ -456,15 +662,18 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return null;
 
-    final actorName = await _getUserName(user.uid, fallback: user.email ?? "User");
+    final actorName =
+        await _getUserName(user.uid, fallback: user.email ?? "User");
 
     final doc = await FirebaseFirestore.instance.collection('requests').add({
-      'type': 'dropoff',
+      'type': 'drop-off',
       'active': true,
       'status': 'en_route',
       'actorId': user.uid,
       'actorName': actorName,
-      'junkshopId': 'mores',
+      'householdId': user.uid,
+      'householdName': actorName,
+      'junkshopId': _moresJunkshopUid,
       'junkshopName': _moresName,
       'destinationLocation':
           GeoPoint(_moresLatLng.latitude, _moresLatLng.longitude),
@@ -474,12 +683,149 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       'etaMinutes': _etaMinutes,
       'arrived': false,
       'arrivedAt': null,
+      'completedAt': null,
       'cancelledAt': null,
+      'cancelReason': null,
+      'receiptFilled': false,
+      'readByJunkshop': false,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
     return doc.id;
+  }
+
+  Future<void> _markDropoffArrived() async {
+    final requestId = _activeDropoffRequestId;
+    if (requestId == null) return;
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(requestId)
+          .get();
+      
+      debugPrint("ARRIVED requestId=$requestId");
+      debugPrint("ARRIVED doc exists=${snap.exists}");
+      debugPrint("ARRIVED doc data=${snap.data()}");
+      debugPrint("ARRIVED uid=${FirebaseAuth.instance.currentUser?.uid}");
+
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(requestId)
+          .update({
+        'status': 'arrived',
+        'arrived': true,
+        'arrivedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'readByJunkshop': false,
+        'testPing': true,
+        'debugTouch': FieldValue.serverTimestamp(),
+      });
+      
+      if (!mounted) return;
+      setState(() => _dropoffStatus = "arrived");
+      _snack("Marked as arrived at $_moresName.", bg: _accent);
+    } catch (e) {
+      debugPrint("❌ mark arrived failed: $e");
+      if (!mounted) return;
+      _snack("Failed to mark arrival.", bg: Colors.redAccent);
+    }
+  }
+
+  Future<void> _focusDropoffRoute() async {
+    if (_mapController == null) return;
+
+    if (_currentPosition == null) {
+      await _mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(_moresLatLng, 16),
+      );
+      return;
+    }
+
+    final me = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+
+    final south = me.latitude < _moresLatLng.latitude ? me.latitude : _moresLatLng.latitude;
+    final north = me.latitude > _moresLatLng.latitude ? me.latitude : _moresLatLng.latitude;
+    final west = me.longitude < _moresLatLng.longitude ? me.longitude : _moresLatLng.longitude;
+    final east = me.longitude > _moresLatLng.longitude ? me.longitude : _moresLatLng.longitude;
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(south, west),
+      northeast: LatLng(north, east),
+    );
+
+    await _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(bounds, 90),
+    );
+  }
+
+  Future<String?> _pickDropoffCancelReason() async {
+    String selected = _dropoffCancelReasons.first;
+
+    return showDialog<String>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setD) {
+            return AlertDialog(
+              backgroundColor: _sheet,
+              title: const Text(
+                "Why do you want to cancel this transaction?",
+                style: TextStyle(color: _textPrimary),
+              ),
+              content: DropdownButtonFormField<String>(
+                value: selected,
+                dropdownColor: _surface,
+                style: const TextStyle(color: _textPrimary),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: _surface,
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: _border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: _accent),
+                  ),
+                ),
+                items: _dropoffCancelReasons
+                    .map(
+                      (r) => DropdownMenuItem<String>(
+                        value: r,
+                        child: Text(
+                          r,
+                          style: const TextStyle(color: _textPrimary),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) setD(() => selected = v);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text(
+                    "Back",
+                    style: TextStyle(color: _textSecondary),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, selected),
+                  child: const Text(
+                    "Submit",
+                    style: TextStyle(color: _accent),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _openPickupFlowPage() async {
@@ -508,9 +854,49 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       ),
     );
 
-    if (result == true && mounted) {
-      _snack("Pickup request sent!", bg: _accent);
+    if (result is String && result.isNotEmpty && mounted) {
+      setState(() {
+        _activePickupRequestId = result;
+        _tripStage = TripStage.pickup;
+        _activeDropoffRequestId = null;
+        _dropoffStatus = "";
+        _routePoints = [];
+        _dirDistanceText = "";
+        _dirDurationText = "";
+        _dirDurationValueSec = null;
+      });
+
+      _listenToActivePickupRequest(result);
+      _snack("Pickup request sent! Tracking collector...", bg: _accent);
     }
+  }
+  Future<void> _fitCollectorAndPickup() async {
+    if (_collectorLatLng == null || _mapController == null) return;
+
+    final pickup = _effectivePickupLatLng;
+    final collector = _collectorLatLng!;
+
+    final south = collector.latitude < pickup.latitude
+        ? collector.latitude
+        : pickup.latitude;
+    final north = collector.latitude > pickup.latitude
+        ? collector.latitude
+        : pickup.latitude;
+    final west = collector.longitude < pickup.longitude
+        ? collector.longitude
+        : pickup.longitude;
+    final east = collector.longitude > pickup.longitude
+        ? collector.longitude
+        : pickup.longitude;
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(south, west),
+      northeast: LatLng(north, east),
+    );
+
+    await _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(bounds, 80),
+    );
   }
 
   Future<String> _getUserName(String uid, {String fallback = "Unknown"}) async {
@@ -559,6 +945,46 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       points.add(LatLng(lat / 1e5, lng / 1e5));
     }
     return points;
+  }
+  
+  Future<void> _cancelDropoff() async {
+    final requestId = _activeDropoffRequestId;
+    if (requestId == null) return;
+
+    final reason = await _pickDropoffCancelReason();
+    if (reason == null || reason.trim().isEmpty) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(requestId)
+          .update({
+        'active': false,
+        'status': 'cancelled',
+        'cancelReason': reason.trim(),
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'readByJunkshop': false,
+      });
+      debugPrint("cancel requestId: $requestId");
+
+      if (!mounted) return;
+      setState(() {
+        _tripStage = TripStage.planning;
+        _activeDropoffRequestId = null;
+        _dropoffStatus = "cancelled";
+        _routePoints = [];
+        _dirDistanceText = "";
+        _dirDurationText = "";
+        _dirDurationValueSec = null;
+      });
+
+      _snack("Drop-off cancelled.", bg: _surface);
+    } catch (e) {
+      debugPrint("❌ cancel dropoff failed: $e");
+      if (!mounted) return;
+      _snack("Failed to cancel drop-off.", bg: Colors.redAccent);
+    }
   }
 
   @override
@@ -909,51 +1335,149 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                           ),
                         ),
 
-                        const SizedBox(height: 18),
-
-                        Row(
-                          children: [
-                            Expanded(
-                              child: SizedBox(
-                                height: 56,
-                                child: ElevatedButton.icon(
-                                  onPressed: _startDirectionsToMores,
-                                  icon: const Icon(Icons.directions),
-                                  label: const Text("DROP-OFF"),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: _surfaceAlt,
-                                    foregroundColor: _textPrimary,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
-                                      side:
-                                          const BorderSide(color: _border),
+                        if (_isDelivering) ...[
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: _surface,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: _border),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _dropoffStatus == "arrived"
+                                      ? Icons.check_circle_outline
+                                      : Icons.local_shipping_outlined,
+                                  color: _dropoffStatus == "arrived"
+                                      ? _accent
+                                      : _blue,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    _dropoffStatus == "arrived"
+                                        ? "You have arrived at $_moresName"
+                                        : "You are on the way to $_moresName",
+                                    style: const TextStyle(
+                                      color: _textPrimary,
+                                      fontWeight: FontWeight.w800,
                                     ),
-                                    elevation: 0,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: SizedBox(
+                                  height: 54,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _focusDropoffRoute,
+                                    icon: const Icon(Icons.center_focus_strong),
+                                    label: const Text("FOCUS"),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _surfaceAlt,
+                                      foregroundColor: _textPrimary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                        side: const BorderSide(color: _border),
+                                      ),
+                                      elevation: 0,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: SizedBox(
-                                height: 56,
-                                child: ElevatedButton.icon(
-                                  onPressed: _openPickupFlowPage,
-                                  icon: const Icon(Icons.local_shipping),
-                                  label: const Text("PICKUP"),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: _accent,
-                                    foregroundColor: _textPrimary,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: SizedBox(
+                                  height: 54,
+                                  
+                                  child: ElevatedButton.icon(
+                                    
+                                    onPressed: _dropoffStatus == "arrived"
+                                        ? null
+                                        : _markDropoffArrived,
+                                    icon: const Icon(Icons.check_circle_outline),
+                                    label: const Text("ARRIVED"),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _accent,
+                                      foregroundColor: _textPrimary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      elevation: 0,
                                     ),
-                                    elevation: 0,
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: SizedBox(
+                                  height: 54,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _cancelDropoff,
+                                    icon: const Icon(Icons.cancel_outlined),
+                                    label: const Text("CANCEL"),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.redAccent,
+                                      foregroundColor: _textPrimary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      elevation: 0,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ] else ...[
+                          Row(
+                            children: [
+                              Expanded(
+                                child: SizedBox(
+                                  height: 52,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _startDirectionsToMores,
+                                    icon: const Icon(Icons.directions),
+                                    label: const Text("DROP-OFF"),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _surfaceAlt,
+                                      foregroundColor: _textPrimary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(18),
+                                        side: const BorderSide(color: _border),
+                                      ),
+                                      elevation: 0,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: SizedBox(
+                                  height: 52,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _openPickupFlowPage,
+                                    icon: const Icon(Icons.local_shipping),
+                                    label: const Text("PICKUP"),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _accent,
+                                      foregroundColor: _textPrimary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(18),
+                                      ),
+                                      elevation: 0,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
 
                         const SizedBox(height: 10),
 
