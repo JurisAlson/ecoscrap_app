@@ -40,13 +40,31 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   static const List<String> _sellBranches = [
     "JMC Plastic Corporation Valenzuela City",
-    "JMC Plastic Corporation Cabuyao City",
+    "ECO fortunes Cabuyao City",
   ];
   String? _selectedSellBranch;
 
   String? _sourceUserId;
 
   final List<_ReceiptItem> _items = [];
+  double get _transportCost {
+  if (_txType != "sell") return 0.0;
+
+  final kg = _totalWeightKg;
+
+  if (kg >= 4000 && kg <= 8000) return 10000.0;
+  if (kg > 8000 && kg <= 12000) return 15000.0;
+  if (kg > 12000 && kg <= 18000) return 18000.0;
+
+  return 0.0;
+}
+
+double get _netSellAmount {
+  if (_txType != "sell") return _totalAmount;
+
+  final net = _totalAmount - _transportCost;
+  return net < 0 ? 0.0 : net;
+}
 
   double get _totalAmount => _items.fold(0.0, (sum, it) => sum + it.subtotal);
 
@@ -121,18 +139,22 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     it.subtotalCtrl.text = totalCost.toStringAsFixed(2);
   }
 
-  void _recalcSellItem(_ReceiptItem it) {
-    if (_txType != "sell") return;
+void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
+  if (_txType != "sell") return;
 
-    final cat = normalizeCategoryKey(it.categoryValue ?? kMajorCategories.first);
-    final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+  final cat = normalizeCategoryKey(it.categoryValue ?? kMajorCategories.first);
+  final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
 
-    final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
-    it.sellPricePerKg = sellPerKg;
+  final defaultSellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
 
-    final sellTotal = kg * sellPerKg;
-    it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
+  if (!keepManualPrice || it.sellPricePerKg == null || it.sellPricePerKg! <= 0) {
+    it.sellPricePerKg = defaultSellPerKg;
   }
+
+  final sellPerKg = it.sellPricePerKg ?? defaultSellPerKg;
+  final sellTotal = kg * sellPerKg;
+  it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
+}
 
   void _addItem() => setState(() {
         final it = _ReceiptItem();
@@ -252,7 +274,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       item.subCategoryValue = (picked['subCategory'] ?? '').toString();
       item.availableKg = (picked['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
-      _recalcSellItem(item);
+      item.sellPricePerKg = kFixedSellPricePerKg[
+      normalizeCategoryKey(item.categoryValue ?? "")
+    ] ?? 0.0;
+    _recalcSellItem(item, keepManualPrice: true);
+
     });
   }
 
@@ -359,6 +385,25 @@ Future<void> _saveReceipt() async {
         return;
       }
     }
+    if (isSell) {
+  if (totalWeightKg < 4000) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Minimum sell weight is 4,000 kg."),
+      ),
+    );
+    return;
+  }
+
+  if (totalWeightKg > 18000) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Maximum sell weight is 18,000 kg."),
+      ),
+    );
+    return;
+  }
+}
 
     if (_hasInvalidSellWeight) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -504,26 +549,26 @@ Future<void> _saveReceipt() async {
         final sub = (it.subCategoryValue ?? "").trim();
 
         if (isSell) {
-          final sellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
-          final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+            final sellPerKg = it.sellPricePerKg ?? (kFixedSellPricePerKg[cat] ?? 0.0);
+            final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
 
-          final sellTotal = weightKg * sellPerKg;
-          final costTotal = weightKg * buyCostPerKg;
-          final profit = sellTotal - costTotal;
+            final sellTotal = weightKg * sellPerKg;
+            final costTotal = weightKg * buyCostPerKg;
+            final profit = sellTotal - costTotal;
 
-          itemsPayload.add({
-            'inventoryDocId': it.inventoryDocId,
-            'itemName': (it.sellPickedName ?? "").trim(),
-            'category': cat,
-            'subCategory': sub,
-            'weightKg': weightKg,
-            'sellPricePerKg': sellPerKg,
-            'sellTotal': sellTotal,
-            'costPerKg': buyCostPerKg,
-            'costTotal': costTotal,
-            'profit': profit,
-            'subtotal': sellTotal,
-          });
+            itemsPayload.add({
+              'inventoryDocId': it.inventoryDocId,
+              'itemName': (it.sellPickedName ?? "").trim(),
+              'category': cat,
+              'subCategory': sub,
+              'weightKg': weightKg,
+              'sellPricePerKg': sellPerKg,
+              'sellTotal': sellTotal,
+              'costPerKg': buyCostPerKg,
+              'costTotal': costTotal,
+              'profit': profit,
+              'subtotal': sellTotal,
+            });
         } else {
           final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
           final costTotal = weightKg * buyCostPerKg;
@@ -580,15 +625,25 @@ Future<void> _saveReceipt() async {
         }
       }
 
-      final payload = <String, dynamic>{
-        'transactionType': _txType,
-        'customerName': partyName,
-        'items': itemsPayload,
-        'totalAmount': _totalAmount,
-        'totalWeightKg': totalWeightKg,
-        'transactionDate': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
-      };
+final grossAmount = _totalAmount;
+final transportCost = isSell ? _transportCost : 0.0;
+final netAmount = isSell ? _netSellAmount : _totalAmount;
+
+final payload = <String, dynamic>{
+  'transactionType': _txType,
+  'customerName': partyName,
+  'items': itemsPayload,
+  'totalAmount': grossAmount,
+  'totalWeightKg': totalWeightKg,
+  'transactionDate': FieldValue.serverTimestamp(),
+  'createdAt': FieldValue.serverTimestamp(),
+};
+
+if (isSell) {
+  payload['grossAmount'] = grossAmount;
+  payload['transportCost'] = transportCost;
+  payload['netAmount'] = netAmount;
+}
 
       if (!isSell) {
         payload['sourceType'] = sourceType;
@@ -968,90 +1023,203 @@ Future<void> _saveReceipt() async {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _textField(
-                              controller: item.weightCtrl,
-                              label: "Weight (kg)",
-                              hint: "0.0",
-                              readOnly: _isLockedSellRequestItem(index),
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
-                              onChanged: (_) => setState(() {
-                                if (isSell) {
-                                  _recalcSellItem(item);
-                                } else {
-                                  _recalcBuyItem(item);
-                                }
-                              }),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _textField(
-                              controller: item.subtotalCtrl,
-                              label: isSell ? "Subtotal (₱)" : "Cost (₱)",
-                              hint: "0.00",
-                              readOnly: true,
-                            ),
-                          ),
-                        ],
-                      ),
+                    Column(
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    Row(
+      children: [
+        Expanded(
+          child: _textField(
+            controller: item.weightCtrl,
+            label: "Weight (kg)",
+            hint: "0.0",
+            readOnly: _isLockedSellRequestItem(index),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => setState(() {
+              if (isSell) {
+                _recalcSellItem(item, keepManualPrice: true);
+              } else {
+                _recalcBuyItem(item);
+              }
+            }),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _textField(
+            controller: item.subtotalCtrl,
+            label: isSell ? "Subtotal (₱)" : "Cost (₱)",
+            hint: "0.00",
+            readOnly: true,
+          ),
+        ),
+      ],
+    ),
+    if (isSell) ...[
+      const SizedBox(height: 10),
+      _label("Sell Price Per Kg"),
+      const SizedBox(height: 6),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withOpacity(0.08)),
+        ),
+        child: Row(
+          children: [
+            IconButton(
+              onPressed: () {
+                setState(() {
+                  final current = item.sellPricePerKg ??
+                      (kFixedSellPricePerKg[
+                            normalizeCategoryKey(item.categoryValue ?? "")
+                          ] ??
+                          0.0);
+
+                  final next = current - 1;
+                  item.sellPricePerKg = next < 0 ? 0 : next;
+                  _recalcSellItem(item, keepManualPrice: true);
+                });
+              },
+              icon: const Icon(
+                Icons.keyboard_arrow_down_rounded,
+                color: Colors.redAccent,
+                size: 30,
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: Text(
+                  "₱${(item.sellPricePerKg ?? 0).toStringAsFixed(2)} / kg",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: () {
+                setState(() {
+                  final current = item.sellPricePerKg ??
+                      (kFixedSellPricePerKg[
+                            normalizeCategoryKey(item.categoryValue ?? "")
+                          ] ??
+                          0.0);
+
+                  item.sellPricePerKg = current + 1;
+                  _recalcSellItem(item, keepManualPrice: true);
+                });
+              },
+              icon: const Icon(
+                Icons.keyboard_arrow_up_rounded,
+                color: Colors.greenAccent,
+                size: 30,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  ],
+),
                     ],
                   ),
                 ),
               );
             }),
             const SizedBox(height: 16),
-            _glassCard(
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        isSell ? "Total Amount" : "Total Cost",
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        "₱${_totalAmount.toStringAsFixed(2)}",
-                        style: TextStyle(
-                          color: primaryColor,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Total Weight",
-                        style: TextStyle(
-                          color: Color(0xFF94A3B8),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      Text(
-                        "${_totalWeightKg.toStringAsFixed(2)} kg",
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+_glassCard(
+  child: Column(
+    children: [
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            isSell ? "Gross Amount" : "Total Cost",
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
+            "₱${_totalAmount.toStringAsFixed(2)}",
+            style: TextStyle(
+              color: primaryColor,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text(
+            "Total Weight",
+            style: TextStyle(
+              color: Color(0xFF94A3B8),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Text(
+            "${_totalWeightKg.toStringAsFixed(2)} kg",
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+      if (isSell) ...[
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              "Transport Deduction",
+              style: TextStyle(
+                color: Color(0xFF94A3B8),
+                fontWeight: FontWeight.w600,
               ),
             ),
+            Text(
+              "- ₱${_transportCost.toStringAsFixed(2)}",
+              style: const TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              "Net Amount",
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              "₱${_netSellAmount.toStringAsFixed(2)}",
+              style: const TextStyle(
+                color: Colors.greenAccent,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ],
+    ],
+  ),
+),
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
