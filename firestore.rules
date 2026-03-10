@@ -1,9 +1,893 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    // -------------------------
+    // Helpers
+    // -------------------------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // ✅ Role string helpers (tolerant of casing & plurals)
+    function _roleOf(uid) {
+      return exists(/databases/$(database)/documents/Users/$(uid))
+        ? (
+            (get(/databases/$(database)/documents/Users/$(uid)).data.Roles != null)
+              ? get(/databases/$(database)/documents/Users/$(uid)).data.Roles
+              : get(/databases/$(database)/documents/Users/$(uid)).data.role
+          )
+        : "";
+    }
+
+    // ==========================================================
+    // ✅ ADD: single hardcoded junkshop UID (new system)
+    // ==========================================================
+    function primaryJunkshopUid() {
+      return "07Wi7N8fALh2yqNdt1CQgIYVGE43";
+    }
+
+    function isPrimaryJunkshop() {
+      return signedIn() && request.auth.uid == primaryJunkshopUid();
+    }
+
+    function isJunkshop() {
+      return signedIn() && (
+        isPrimaryJunkshop()
+        ||
+        exists(/databases/$(database)/documents/Junkshop/$(request.auth.uid))
+        ||
+        (
+          exists(/databases/$(database)/documents/Users/$(request.auth.uid))
+          && (
+            _roleOf(request.auth.uid) == "junkshop"
+            || _roleOf(request.auth.uid) == "junkshops"
+            || _roleOf(request.auth.uid) == "Junkshop"
+            || _roleOf(request.auth.uid) == "Junkshops"
+          )
+        )
+      );
+    }
+
+    function isCollector() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/Users/$(request.auth.uid))
+        && (
+          _roleOf(request.auth.uid) == "collector"
+          || _roleOf(request.auth.uid) == "collectors"
+          || _roleOf(request.auth.uid) == "Collector"
+          || _roleOf(request.auth.uid) == "Collectors"
+        );
+    }
+
+    // -------------------------
+    // Legacy collectorApplications helpers (KEEP)
+    // -------------------------
+    function appDoc(collectorUid) {
+      return get(/databases/$(database)/documents/collectorApplications/$(collectorUid)).data;
+    }
+
+    function appAssignedToMe(collectorUid) {
+      return isJunkshop()
+        && exists(/databases/$(database)/documents/collectorApplications/$(collectorUid))
+        && appDoc(collectorUid).preferredJunkshopId == request.auth.uid;
+    }
+
+    function adminApprovedApp(collectorUid) {
+      return exists(/databases/$(database)/documents/collectorApplications/$(collectorUid))
+        && appDoc(collectorUid).adminVerified == true
+        && appDoc(collectorUid).adminStatus == "approved";
+    }
+
+    // ==========================================================
+    // 💬 CHATS (TIED TO REQUEST STATUS)
+    // ==========================================================
+    function reqExistsById(requestId) {
+      return exists(/databases/$(database)/documents/requests/$(requestId));
+    }
+
+    function reqById(requestId) {
+      return get(/databases/$(database)/documents/requests/$(requestId)).data;
+    }
+
+    function reqAllowsChat(requestId) {
+      return reqExistsById(requestId)
+        && reqById(requestId).type == "pickup"
+        && reqById(requestId).active == true
+        && (
+          reqById(requestId).status == "pending"
+          || reqById(requestId).status == "accepted"
+          || reqById(requestId).status == "arrived"
+          || reqById(requestId).status == "scheduled"
+        );
+    }
+
+    function reqIsCompleted(requestId) {
+      return reqExistsById(requestId)
+        && reqById(requestId).type == "pickup"
+        && reqById(requestId).active == false
+        && reqById(requestId).status == "completed";
+    }
+
+    function reqIsCancelled(requestId) {
+      return reqExistsById(requestId)
+        && reqById(requestId).type == "pickup"
+        && reqById(requestId).active == false
+        && reqById(requestId).status == "cancelled";
+    }
+
+    function reqIsRejected(requestId) {
+      return reqExistsById(requestId)
+        && reqById(requestId).type == "pickup"
+        && reqById(requestId).active == false
+        && reqById(requestId).status == "rejected";
+    }
+
+    function reqIsDeclined(requestId) {
+      return reqExistsById(requestId)
+        && reqById(requestId).type == "pickup"
+        && reqById(requestId).active == false
+        && reqById(requestId).status == "declined";
+    }
+
+    function reqIsTerminated(requestId) {
+      return reqIsCompleted(requestId)
+        || reqIsCancelled(requestId)
+        || reqIsRejected(requestId)
+        || reqIsDeclined(requestId);
+    }
+
+    function messageHasOnlyAllowedKeys() {
+      return request.resource.data.keys().hasOnly([
+        "senderId",
+        "text",
+        "type",
+        "imageUrl",
+        "createdAt"
+      ]);
+    }
+
+    // ==========================================================
+    // ✅ ADD: junkshop_support chat helpers
+    // ==========================================================
+    function isSupportChatId(chatId) {
+      return chatId.matches("^junkshop_support_[A-Za-z0-9]+$");
+    }
+
+    function supportCollectorUid(chatId) {
+      return chatId.split("_")[2];
+    }
+
+    function isSupportParticipant(chatId) {
+      let c = supportCollectorUid(chatId);
+      return signedIn() && (request.auth.uid == primaryJunkshopUid() || request.auth.uid == c);
+    }
+
+    function supportParticipantsValid(chatId, participants) {
+      let c = supportCollectorUid(chatId);
+      return participants is list
+        && participants.size() == 2
+        && participants.hasAll([primaryJunkshopUid(), c]);
+    }
+
+    match /chats/{chatId} {
+
+      allow list: if signedIn();
+      
+      allow get: if signedIn()
+        && (
+          !exists(/databases/$(database)/documents/chats/$(chatId))
+          || request.auth.uid in resource.data.participants
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.participants is list
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants.size() == 2
+        && (
+          (
+            request.resource.data.requestId is string
+            && (
+              (
+                request.resource.data.type == "pickup"
+                && chatId == ("pickup_" + request.resource.data.requestId)
+                && reqAllowsChat(request.resource.data.requestId)
+              )
+              ||
+              (
+                request.resource.data.type == "junkshop"
+                && chatId == ("junkshop_pickup_" + request.resource.data.requestId)
+                && reqAllowsChat(request.resource.data.requestId)
+              )
+            )
+          )
+          ||
+          (
+            request.resource.data.type == "junkshop_support"
+            && isSupportChatId(chatId)
+            && supportParticipantsValid(chatId, request.resource.data.participants)
+            && exists(/databases/$(database)/documents/Users/$(supportCollectorUid(chatId)))
+          )
+        );
+
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.participants
+        && (
+          (resource.data.type != "junkshop_support" && reqAllowsChat(resource.data.requestId))
+          ||
+          (resource.data.type == "junkshop_support" && isSupportParticipant(chatId))
+        )
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["lastMessage","lastMessageAt","lastMessageSenderId","lastReadBy"]);
+
+      allow delete: if signedIn()
+        && request.auth.uid in resource.data.participants
+        && (
+          (resource.data.type != "junkshop_support" && reqIsTerminated(resource.data.requestId))
+          ||
+          (resource.data.type == "junkshop_support" && isPrimaryJunkshop())
+        );
+
+      match /messages/{messageId} {
+
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+
+        allow create: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          && (
+            (
+              get(/databases/$(database)/documents/chats/$(chatId)).data.type != "junkshop_support"
+              && reqAllowsChat(get(/databases/$(database)/documents/chats/$(chatId)).data.requestId)
+            )
+            ||
+            (
+              get(/databases/$(database)/documents/chats/$(chatId)).data.type == "junkshop_support"
+              && isSupportParticipant(chatId)
+            )
+          )
+          && request.resource.data.senderId == request.auth.uid
+          && messageHasOnlyAllowedKeys()
+          && (
+            (request.resource.data.text is string)
+            ||
+            (request.resource.data.type == "image" && request.resource.data.imageUrl is string)
+          )
+          && (
+            !(request.resource.data.keys().hasAny(["createdAt"]))
+            || request.resource.data.createdAt is timestamp
+            || request.resource.data.createdAt == request.time
+          );
+
+        allow delete: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          && (
+            (
+              get(/databases/$(database)/documents/chats/$(chatId)).data.type != "junkshop_support"
+              && reqIsTerminated(get(/databases/$(database)/documents/chats/$(chatId)).data.requestId)
+            )
+            ||
+            (
+              get(/databases/$(database)/documents/chats/$(chatId)).data.type == "junkshop_support"
+              && isPrimaryJunkshop()
+            )
+          );
+
+        allow update: if false;
+      }
+    }
+
+    // ----------------------------------------------------
+    // CHAT IMAGES (Firestore path: chat_images/{chatId}/{fileName})
+    // ----------------------------------------------------
+    function isChatParticipant(chatId) {
+      return signedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    }
+
+    function isSupportChatDoc(chatId) {
+      return exists(/databases/$(database)/documents/chats/$(chatId))
+        && get(/databases/$(database)/documents/chats/$(chatId)).data.type == "junkshop_support";
+    }
+
+    function chatAllowsUploads(chatId) {
+      return isChatParticipant(chatId)
+        && (
+          (
+            !isSupportChatDoc(chatId)
+            && reqAllowsChat(
+              get(/databases/$(database)/documents/chats/$(chatId)).data.requestId
+            )
+          )
+          ||
+          (
+            isSupportChatDoc(chatId)
+          )
+        );
+    }
+
+    function chatAllowsDeleteUploadsAfterComplete(chatId) {
+      return isChatParticipant(chatId)
+        && reqIsTerminated(
+          get(/databases/$(database)/documents/chats/$(chatId)).data.requestId
+        );
+    }
+
+    match /chat_images/{chatId}/{fileName} {
+      allow read, write: if chatAllowsUploads(chatId);
+      allow delete: if chatAllowsDeleteUploadsAfterComplete(chatId)
+        || (isSupportChatDoc(chatId) && isPrimaryJunkshop());
+    }
+    
+    // ==========================================================
+    // USER NOTIFICATIONS
+    // ==========================================================
+    match /userNotifications/{uid} {
+
+      allow get, list: if isOwner(uid) || isAdmin();
+
+      allow create, update: if isOwner(uid) || isAdmin();
+      allow delete: if isAdmin();
+
+      match /items/{notificationId} {
+        
+        allow create: if signedIn()
+          && request.resource.data.type == "collector_declined_pickup"
+          && request.resource.data.requestId is string
+          && reqExistsById(request.resource.data.requestId)
+          && reqById(request.resource.data.requestId).type == "pickup"
+          && reqById(request.resource.data.requestId).householdId == uid
+          && isCollector()
+          && request.resource.data.status == "unread";
+
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.type == "collector_declined_pickup"
+          && request.resource.data.requestId is string
+          && reqExistsById(request.resource.data.requestId)
+          && reqById(request.resource.data.requestId).type == "pickup"
+          && reqById(request.resource.data.requestId).householdId == uid
+          && request.resource.data.status == "unread";
+
+        allow read: if isOwner(uid) || isAdmin();
+
+        allow create: if signedIn()
+          && request.resource.data.type == "resident_rejected_pickup"
+          && request.resource.data.requestId is string
+          && reqExistsById(request.resource.data.requestId)
+          && reqById(request.resource.data.requestId).type == "pickup"
+          && reqById(request.resource.data.requestId).householdId == request.auth.uid
+          && reqById(request.resource.data.requestId).collectorId == uid
+          && request.resource.data.status == "unread";
+
+        allow update: if (isOwner(uid) || isAdmin())
+          && request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(["status", "readAt"])
+          && request.resource.data.status == "read";
+
+        allow delete: if isOwner(uid) || isAdmin();
+      }
+    }
+
+    // ==========================================================
+    // ✅ collectorRequests helpers (NEW FLOW)
+    // ==========================================================
+    function reqExists(collectorUid) {
+      return exists(/databases/$(database)/documents/collectorRequests/$(collectorUid));
+    }
+
+    function reqDoc(collectorUid) {
+      return get(/databases/$(database)/documents/collectorRequests/$(collectorUid)).data;
+    }
+
+    function adminApprovedReq(collectorUid) {
+      return reqExists(collectorUid) && reqDoc(collectorUid).status == "adminApproved";
+    }
+
+    function safeForJunkshop() {
+      return !resource.data.keys().hasAny([
+        "permitPath",
+        "storagePath",
+        "kycFileName",
+        "nonce",
+        "mac",
+        "salt",
+        "ephemeralPubKey",
+        "ephPubKey",
+        "cipherText",
+        "ciphertext"
+      ]);
+    }
+
+    // -------------------------
+    // USERS
+    // -------------------------
+    match /Users/{uid} {
+
+      allow get: if isOwner(uid) || isAdmin();
+
+      allow read: if isOwner(uid) || isAdmin()
+      || (
+        signedIn()
+        && (
+          (resource.data.role == "collector" || resource.data.Roles == "collector")
+          && resource.data.isOnline == true
+        )
+      );
+
+      allow list: if signedIn();
+
+      allow create: if isOwner(uid);
+
+      allow update: if (
+        (
+          isAdmin()
+          && request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly([
+              "adminVerified","adminStatus","adminReviewedAt","adminRejectedAt",
+              "collectorStatus","collectorUpdatedAt","collectorActive",
+              "role","Roles",
+              "junkshopId","junkshopName",
+              "assignedJunkshopUid","assignedJunkshopName",
+              "updatedAt"
+            ])
+        )
+        || (
+          appAssignedToMe(uid)
+          && adminApprovedApp(uid)
+          && request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(["junkshopVerified","junkshopStatus","collectorActive","updatedAt"])
+        )
+        || (
+          isJunkshop()
+          && adminApprovedReq(uid)
+          && request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly([
+              "role","Roles",
+              "junkshopVerified","junkshopStatus",
+              "collectorStatus",
+              "assignedJunkshopUid",
+              "assignedJunkshopName",
+              "junkshopId",
+              "junkshopName",
+              "updatedAt"
+            ])
+          && (
+            request.resource.data.role == "collector"
+            || request.resource.data.Roles == "collector"
+          )
+          && (
+            !(request.resource.data.keys().hasAny(["collectorStatus"]))
+            || request.resource.data.collectorStatus == resource.data.collectorStatus
+          )
+        )
+        || (
+          isOwner(uid)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "isOnline",
+            "lastSeen",
+            "updatedAt"
+          ])
+        )
+        || (
+          isOwner(uid)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "uid",
+            "emailDisplay",
+            "name",
+            "collectorStatus",
+            "collectorSubmittedAt",
+            "collectorUpdatedAt",
+            "collectorKyc",
+            "updatedAt",
+            "createdAt"
+          ])
+          && request.resource.data.collectorStatus == "pending"
+          && ( !(resource.data.keys().hasAny(["role"]))  || request.resource.data.role  == resource.data.role )
+          && ( !(resource.data.keys().hasAny(["Roles"])) || request.resource.data.Roles == resource.data.Roles )
+        )
+        || (
+          isOwner(uid)
+          && (
+            request.resource.data.Roles == resource.data.Roles
+            || (
+              resource.data.Roles != "collector"
+              && request.resource.data.Roles == "collector"
+              && request.resource.data.adminVerified == false
+              && request.resource.data.junkshopVerified == false
+              && request.resource.data.adminStatus == "pending"
+              && request.resource.data.junkshopStatus == "pending"
+              && request.resource.data.collectorActive == false
+            )
+          )
+          && (resource.data.adminVerified == null || request.resource.data.adminVerified == resource.data.adminVerified)
+          && (resource.data.junkshopVerified == null || request.resource.data.junkshopVerified == resource.data.junkshopVerified)
+          && (resource.data.adminStatus == null || request.resource.data.adminStatus == resource.data.adminStatus)
+          && (resource.data.junkshopStatus == null || request.resource.data.junkshopStatus == resource.data.junkshopStatus)
+          && (resource.data.collectorActive == null || request.resource.data.collectorActive == resource.data.collectorActive)
+        )
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /Users/{uid}/{subpath=**} {
+      allow read, write: if isOwner(uid) || isAdmin();
+    }
+
+    // ==========================================================
+    // ✅ COLLECTOR KYC
+    // ==========================================================
+    match /collectorKYC/{collectorUid} {
+
+      allow get, list: if isAdmin();
+
+      allow create: if isOwner(collectorUid)
+        && request.resource.data.keys().hasOnly([
+          "uid",
+          "hasKycFile",
+          "status",
+          "storagePath",
+          "originalFileName",
+          "ephPubKeyB64",
+          "saltB64",
+          "nonceB64",
+          "macB64",
+          "submittedAt",
+          "updatedAt",
+          "deleteAfter"
+        ]);
+
+      allow update: if isOwner(collectorUid)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "uid",
+          "hasKycFile",
+          "status",
+          "storagePath",
+          "originalFileName",
+          "ephPubKeyB64",
+          "saltB64",
+          "nonceB64",
+          "macB64",
+          "submittedAt",
+          "updatedAt",
+          "deleteAfter"
+        ]);
+
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================================
+    // ✅ RESIDENT KYC (PALO ALTO ONLY)
+    // ==========================================================
+    match /residentKYC/{uid} {
+
+      allow get: if isAdmin() || isOwner(uid);
+      allow list: if isAdmin();
+
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly([
+          "uid",
+          "status",
+          "hasKycFile",
+          "storagePath",
+          "originalFileName",
+          "ephPubKeyB64",
+          "saltB64",
+          "nonceB64",
+          "macB64",
+          "submittedAt",
+          "updatedAt",
+          "deleteAfter",
+          "addressEnc"
+        ]);
+
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "status",
+          "hasKycFile",
+          "storagePath",
+          "originalFileName",
+          "ephPubKeyB64",
+          "saltB64",
+          "nonceB64",
+          "macB64",
+          "submittedAt",
+          "updatedAt",
+          "deleteAfter",
+          "addressEnc"
+        ]);
+
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------
+    // COLLECTOR APPLICATIONS (KEEP)
+    // -------------------------
+    match /collectorApplications/{collectorUid} {
+      allow create: if isOwner(collectorUid);
+      allow get: if isOwner(collectorUid) || isAdmin() || appAssignedToMe(collectorUid);
+      allow list: if isAdmin() || isJunkshop();
+      allow update, delete: if isAdmin();
+
+      allow update: if isOwner(collectorUid)
+        && (resource.data.adminStatus == "pending")
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly([
+            "collectorName",
+            "collectorEmail",
+            "preferredJunkshopId",
+            "preferredJunkshopName",
+            "updatedAt"
+          ]);
+
+      allow update: if appAssignedToMe(collectorUid)
+        && resource.data.adminVerified == true
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly([
+            "junkshopVerified",
+            "junkshopStatus",
+            "reviewedByJunkshopId",
+            "reviewedAt",
+            "updatedAt"
+          ]);
+    }
+
+    // ==========================================================
+    // ✅ COLLECTOR REQUESTS (NEW FLOW)
+    // ==========================================================
+    match /collectorRequests/{collectorUid} {
+
+      allow update: if isOwner(collectorUid)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "publicName",
+          "emailDisplay",
+          "hasKycFile",
+          "status",
+          "submittedAt",
+          "updatedAt",
+          "junkshopId",
+          "junkshopName",
+          "acceptedByJunkshopUid",
+          "acceptedAt",
+          "rejectedByJunkshops"
+        ])
+        && (resource.data.status == "rejected" || resource.data.status == "pending")
+        && request.resource.data.status == "pending"
+        && (
+          !(request.resource.data.keys().hasAny(["acceptedByJunkshopUid"]))
+          || request.resource.data.acceptedByJunkshopUid == ""
+        )
+        && !(request.resource.data.keys().hasAny(["acceptedAt"]));
+
+      allow create: if (
+        isOwner(collectorUid)
+        && request.resource.data.status == "pending"
+        && (
+          !(request.resource.data.keys().hasAny(["acceptedByJunkshopUid"]))
+          || request.resource.data.acceptedByJunkshopUid == ""
+        )
+        && !(request.resource.data.keys().hasAny(["acceptedAt"]))
+        && (
+          !(request.resource.data.keys().hasAny(["rejectedByJunkshops"]))
+          || request.resource.data.rejectedByJunkshops is list
+        )
+        && !request.resource.data.keys().hasAny([
+          "permitPath",
+          "storagePath",
+          "kycFileName",
+          "nonce","mac","salt","ephemeralPubKey","ephPubKey"
+        ])
+      ) || isAdmin();
+
+      allow get: if isOwner(collectorUid) || isAdmin()
+        || (isJunkshop() && safeForJunkshop());
+
+      allow list: if isAdmin()
+        || (isJunkshop() && safeForJunkshop());
+
+      allow update, delete: if isAdmin();
+      
+      allow update: if isJunkshop()
+        && adminApprovedReq(collectorUid)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "status",
+          "acceptedByJunkshopUid",
+          "acceptedAt",
+          "rejectedByJunkshops",
+          "updatedAt"
+        ])
+        && (
+          (
+            request.resource.data.status == "junkshopAccepted"
+            && request.resource.data.acceptedByJunkshopUid == request.auth.uid
+          )
+          ||
+          (
+            request.resource.data.status == resource.data.status
+          )
+        );
+    }
+
+    // ==========================================================
+    // ✅ RESIDENT REQUESTS (PALO ALTO ONLY)
+    // ==========================================================
+    match /residentRequests/{uid} {
+
+      allow create: if isOwner(uid)
+        && request.resource.data.status == "pending"
+        && request.resource.data.keys().hasOnly([
+          "uid",
+          "publicName",
+          "emailDisplay",
+          "hasKycFile",
+          "status",
+          "adminVerified",
+          "adminStatus",
+          "submittedAt",
+          "updatedAt"
+        ]);
+
+      allow update: if isOwner(uid)
+        && (resource.data.status == "pending" || resource.data.status == "rejected")
+        && request.resource.data.status == "pending"
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "publicName",
+          "emailDisplay",
+          "hasKycFile",
+          "status",
+          "submittedAt",
+          "updatedAt"
+        ]);
+
+      allow get: if isOwner(uid) || isAdmin();
+      allow list: if isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    // -------------------------
+    // JUNKSHOP (KEEP)
+    // -------------------------
+    match /Junkshop/{shopId} {
+      allow get: if (signedIn() && resource.data.verified == true)
+        || isOwner(shopId)
+        || isAdmin();
+
+      allow list: if signedIn();
+
+      allow create, update: if isOwner(shopId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /Junkshop/{shopId}/{subpath=**} {
+      allow read, write: if isOwner(shopId) || isAdmin();
+    }
+
+    // -------------------------
+    // PERMIT REQUESTS (KEEP)
+    // -------------------------
+    match /permitRequests/{docId} {
+      allow create: if isOwner(docId)
+        && request.resource.data.status == "pending";
+
+      allow update: if isOwner(docId)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "uid",
+          "shopName",
+          "emailDisplay",
+          "status",
+          "submittedAt",
+          "updatedAt",
+          "permitPath",
+          "originalFileName"
+        ])
+        && (resource.data.status == "rejected" || resource.data.status == "pending")
+        && request.resource.data.status == "pending";
+
+      allow get: if isOwner(docId) || isAdmin();
+      allow list: if isAdmin();
+
+      allow update, delete: if isAdmin();
+    }
+
+    // -------------------------
+    // REQUESTS (NEW) ✅ replaces pickupRequests
+    // -------------------------
+match /requests/{requestId} {
+
+  allow create: if signedIn();
+
+  allow read: if signedIn();
+
+  allow update: if signedIn()
+    && resource.data.householdId == request.auth.uid
+    && resource.data.type == "drop-off";
+
+  allow delete: if false;
+}
+
+    // -------------------------
+    // REQUESTS COLLECTOR_RECEIPTS
+    // -------------------------
+    match /requests/{requestId}/collector_receipts/{receiptId} {
+      allow create: if isCollector()
+        && reqExistsById(requestId)
+        && reqById(requestId).collectorId == request.auth.uid
+        && reqById(requestId).active == true
+        && reqById(requestId).status == "arrived";
+
+      allow read: if signedIn()
+        && reqExistsById(requestId)
+        && (
+          reqById(requestId).householdId == request.auth.uid
+          || reqById(requestId).collectorId == request.auth.uid
+          || (isJunkshop() && reqById(requestId).junkshopId == request.auth.uid)
+          || isAdmin()
+        );
+
+      allow update, delete: if false;
+    }
+
+    // ==========================================================
+    // Collector inventory summary cross-update by primary junkshop
+    // ==========================================================
+    match /Users/{collectorUid}/inventory/{docId} {
+
+      allow read: if isOwner(collectorUid) || isAdmin();
+
+      allow create, update: if isOwner(collectorUid) || isAdmin()
+        || (
+          isPrimaryJunkshop()
+          && docId == "summary"
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "totalKg",
+            "updatedAt"
+          ])
+          && request.resource.data.totalKg is number
+        );
+
+      allow delete: if false;
+    }
+
+    // ==========================================================
+    // SELL REQUESTS sent by collector to junkshop
+    // ==========================================================
+    match /Users/{junkshopUid}/sell_requests/{requestId} {
+
+      allow read: if isOwner(junkshopUid) || isAdmin();
+
+      allow create: if signedIn()
+        && isCollector()
+        && request.resource.data.kind == "collector_sell_to_junkshop"
+        && request.resource.data.type == "sell"
+        && request.resource.data.status == "pending"
+        && request.resource.data.sourceType == "collector"
+        && request.resource.data.collectorId == request.auth.uid
+        && request.resource.data.junkshopUid == junkshopUid
+        && request.resource.data.kg is number
+        && request.resource.data.kg > 0
+        && request.resource.data.seen == false;
+
+      allow update: if isOwner(junkshopUid) || isAdmin();
+
+      allow delete: if false;
+    }
+
+    // -------------------------
+    // SAFE FALLBACK (admin only)
+    // -------------------------
+    match /{col}/{docId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
   }
 }
