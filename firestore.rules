@@ -803,13 +803,48 @@ service cloud.firestore {
     // -------------------------
 match /requests/{requestId} {
 
-  allow create: if signedIn();
+  allow create: if signedIn()
+    && (
+      (
+        request.resource.data.type == "pickup"
+        && request.resource.data.active == true
+        && request.resource.data.householdId == request.auth.uid
+      )
+      ||
+      (
+        request.resource.data.type == "drop-off"
+        && request.resource.data.active == true
+        && request.resource.data.householdId == request.auth.uid
+      )
+    );
 
-  allow read: if signedIn();
+  allow read: if signedIn() && (
+    resource.data.householdId == request.auth.uid
+    || resource.data.junkshopId == request.auth.uid
+    || (isCollector() && resource.data.collectorId == request.auth.uid)
+    || isAdmin()
+  );
 
-  allow update: if signedIn()
-    && resource.data.householdId == request.auth.uid
-    && resource.data.type == "drop-off";
+  allow update: if signedIn() && (
+
+    // household can update own drop-off
+    (
+      resource.data.householdId == request.auth.uid
+      && resource.data.type == "drop-off"
+    )
+
+    // junkshop can mark read state
+    || (
+      resource.data.junkshopId == request.auth.uid
+      && resource.data.type == "drop-off"
+      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        "readByJunkshop",
+        "updatedAt"
+      ])
+    )
+
+    || isAdmin()
+  );
 
   allow delete: if false;
 }
