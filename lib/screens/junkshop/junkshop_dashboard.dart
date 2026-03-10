@@ -245,64 +245,87 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       );
     }
 
-    final unreadQuery = FirebaseFirestore.instance
+    final sellRequestsStream = FirebaseFirestore.instance
         .collection('Users')
         .doc(uid)
         .collection('sell_requests')
         .where('status', isEqualTo: 'pending')
-        .where('seen', isEqualTo: false);
+        .where('seen', isEqualTo: false)
+        .snapshots();
+
+    final dropoffRequestsStream = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'drop-off')
+        .where('junkshopId', isEqualTo: uid)
+        .where('readByJunkshop', isEqualTo: false)
+        .snapshots();
 
     return StreamBuilder<QuerySnapshot>(
-      stream: unreadQuery.snapshots(),
-      builder: (context, snap) {
-        final unreadCount = snap.data?.docs.length ?? 0;
-        final hasUnread = unreadCount > 0;
+      stream: sellRequestsStream,
+      builder: (context, sellSnap) {
+        final sellUnread = sellSnap.data?.docs.length ?? 0;
 
-        return Stack(
-          children: [
-            InkWell(
-              onTap: () => _scaffoldKey.currentState?.openEndDrawer(),
-              borderRadius: BorderRadius.circular(50),
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.notifications_outlined,
-                  color: Colors.grey.shade300,
-                ),
-              ),
-            ),
-            if (hasUnread)
-              Positioned(
-                right: 6,
-                top: 6,
-                child: Container(
-                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                  decoration: const BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text(
-                      unreadCount > 9 ? '9+' : '$unreadCount',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                      ),
+        return StreamBuilder<QuerySnapshot>(
+          stream: dropoffRequestsStream,
+          builder: (context, dropSnap) {
+            final dropUnread = dropSnap.data?.docs.length ?? 0;
+            final unreadCount = sellUnread + dropUnread;
+            final hasUnread = unreadCount > 0;
+
+            return Stack(
+              children: [
+                InkWell(
+                  onTap: () => _scaffoldKey.currentState?.openEndDrawer(),
+                  borderRadius: BorderRadius.circular(50),
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.notifications_outlined,
+                      color: Colors.grey.shade300,
                     ),
                   ),
                 ),
-              ),
-          ],
+                if (hasUnread)
+                  Positioned(
+                    right: 6,
+                    top: 6,
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        minWidth: 16,
+                        minHeight: 16,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 2,
+                      ),
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(
+                          unreadCount > 9 ? '9+' : '$unreadCount',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         );
       },
     );
   }
+
   // ================= DRAWERS =================
   Widget _notificationsDrawer() {
     final user = FirebaseAuth.instance.currentUser;
@@ -312,16 +335,60 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       );
     }
 
-    final query = FirebaseFirestore.instance
+    final sellRequestsStream = FirebaseFirestore.instance
         .collection('Users')
         .doc(user.uid)
         .collection('sell_requests')
-        .where('status', isEqualTo: 'pending')
         .orderBy('createdAt', descending: true)
-        .limit(50);
+        .limit(50)
+        .snapshots();
+
+    final dropoffRequestsStream = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'drop-off')
+        .where('junkshopId', isEqualTo: user.uid)
+        .orderBy('createdAt', descending: true)
+        .limit(50)
+        .snapshots();
 
     String hhmm(DateTime dt) =>
         "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+
+    String dropoffTitleFromStatus(String status) {
+      switch (status) {
+        case 'arrived':
+          return 'Household arrived';
+        case 'cancelled':
+          return 'Drop-off cancelled';
+        case 'completed':
+          return 'Drop-off completed';
+        case 'en_route':
+        default:
+          return 'Incoming drop-off';
+      }
+    }
+
+    String dropoffMessageFromData(Map<String, dynamic> data) {
+      final householdName = (data['householdName'] ?? 'A household').toString();
+      final junkshopName = (data['junkshopName'] ?? 'your junkshop').toString();
+      final status = (data['status'] ?? '').toString();
+      final reason = (data['cancelReason'] ?? '').toString().trim();
+
+      switch (status) {
+        case 'arrived':
+          return '$householdName has arrived at $junkshopName.';
+        case 'cancelled':
+          if (reason.isNotEmpty) {
+            return '$householdName cancelled the drop-off. Reason: $reason';
+          }
+          return '$householdName cancelled the drop-off.';
+        case 'completed':
+          return '$householdName completed the drop-off.';
+        case 'en_route':
+        default:
+          return '$householdName is on the way to $junkshopName.';
+      }
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -348,167 +415,278 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           const SizedBox(height: 10),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
-              stream: query.snapshots(),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+              stream: sellRequestsStream,
+              builder: (context, sellSnap) {
+                return StreamBuilder<QuerySnapshot>(
+                  stream: dropoffRequestsStream,
+                  builder: (context, dropSnap) {
+                    if (sellSnap.connectionState == ConnectionState.waiting ||
+                        dropSnap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
 
-                if (snap.hasError) {
-                  return Center(
-                    child: Text(
-                      "Error: ${snap.error}",
-                      style: const TextStyle(color: Colors.white70),
-                      textAlign: TextAlign.center,
-                    ),
-                  );
-                }
+                    if (sellSnap.hasError) {
+                      return Center(
+                        child: Text(
+                          "Error loading sell requests: ${sellSnap.error}",
+                          style: const TextStyle(color: Colors.white70),
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    }
 
-                final docs = snap.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const Center(
-                    child: Text(
-                      "No sell notifications yet.",
-                      style: TextStyle(color: Colors.white70),
-                    ),
-                  );
-                }
+                    if (dropSnap.hasError) {
+                      return Center(
+                        child: Text(
+                          "Error loading drop-off requests: ${dropSnap.error}",
+                          style: const TextStyle(color: Colors.white70),
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    }
 
-                return ListView.builder(
-                  itemCount: docs.length,
-                  itemBuilder: (_, i) {
-                    final d = docs[i];
-                    final data = d.data() as Map<String, dynamic>;
+                    final List<Map<String, dynamic>> items = [];
 
-                    final collectorName =
-                        (data['collectorName'] ?? '').toString().trim();
-                    final collectorId =
-                        (data['collectorId'] ?? '').toString().trim();
-                    final kg = ((data['kg'] as num?) ?? 0).toDouble();
-                    final seen = data['seen'] == true;
+                    for (final d in sellSnap.data?.docs ?? []) {
+                      final data = d.data() as Map<String, dynamic>;
+                      final ts = data['createdAt'] as Timestamp?;
+                      items.add({
+                        'kind': 'sell_request',
+                        'docId': d.id,
+                        'data': data,
+                        'createdAt': ts,
+                      });
+                    }
 
-                    final Timestamp? ts = (data['createdAt'] is Timestamp)
-                        ? data['createdAt'] as Timestamp
-                        : null;
+                    for (final d in dropSnap.data?.docs ?? []) {
+                      final data = d.data() as Map<String, dynamic>;
+                      final ts = (data['updatedAt'] as Timestamp?) ??
+                          (data['createdAt'] as Timestamp?);
+                      items.add({
+                        'kind': 'dropoff_request',
+                        'docId': d.id,
+                        'data': data,
+                        'createdAt': ts,
+                      });
+                    }
 
-                    final dt = ts?.toDate();
+                    items.sort((a, b) {
+                      final aTs = a['createdAt'] as Timestamp?;
+                      final bTs = b['createdAt'] as Timestamp?;
+                      if (aTs == null && bTs == null) return 0;
+                      if (aTs == null) return 1;
+                      if (bTs == null) return -1;
+                      return bTs.compareTo(aTs);
+                    });
 
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white.withOpacity(0.08)),
-                      ),
-                      child: ListTile(
-                        onTap: () async {
-                          // mark this specific notification as seen
-                          await FirebaseFirestore.instance
-                              .collection('Users')
-                              .doc(user.uid)
-                              .collection('sell_requests')
-                              .doc(d.id)
-                              .set({
-                            'seen': true,
-                            'updatedAt': FieldValue.serverTimestamp(),
-                          }, SetOptions(merge: true));
+                    if (items.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          "No notifications yet.",
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      );
+                    }
 
-                          if (!context.mounted) return;
-                          Navigator.pop(context);
+                    return ListView.builder(
+                      itemCount: items.length,
+                      itemBuilder: (_, i) {
+                        final item = items[i];
+                        final kind = item['kind'] as String;
+                        final docId = item['docId'] as String;
+                        final data = item['data'] as Map<String, dynamic>;
+                        final ts = item['createdAt'] as Timestamp?;
+                        final dt = ts?.toDate();
 
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => receipt.ReceiptScreen(
-                                shopID: user.uid,
-                                prefillCollectorName:
-                                    collectorName.isEmpty ? null : collectorName,
-                                prefillCollectorId:
-                                    collectorId.isEmpty ? null : collectorId,
-                                prefillKg: kg,
-                                sellRequestId: d.id,
+                        if (kind == 'sell_request') {
+                          final collectorName =
+                              (data['collectorName'] ?? '').toString().trim();
+                          final collectorId =
+                              (data['collectorId'] ?? '').toString().trim();
+                          final kg = ((data['kg'] as num?) ?? 0).toDouble();
+                          final seen = data['seen'] == true;
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.06),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.08),
+                              ),
+                            ),
+                            child: ListTile(
+                              onTap: () async {
+                                await FirebaseFirestore.instance
+                                    .collection('Users')
+                                    .doc(user.uid)
+                                    .collection('sell_requests')
+                                    .doc(docId)
+                                    .set({
+                                  'seen': true,
+                                  'updatedAt': FieldValue.serverTimestamp(),
+                                }, SetOptions(merge: true));
+
+                                if (!context.mounted) return;
+                                Navigator.pop(context);
+
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => receipt.ReceiptScreen(
+                                      shopID: user.uid,
+                                      prefillCollectorName: collectorName.isEmpty ? null : collectorName,
+                                      prefillCollectorId: collectorId.isEmpty ? null : collectorId,
+                               
+                                      sellRequestId: docId,
+                                      prefillSourceType: "collector",
+                                    ),
+                                  ),
+                                );
+                              },
+                              leading: Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  color: seen
+                                      ? Colors.white.withOpacity(0.08)
+                                      : Colors.orange.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Icon(
+                                  Icons.local_shipping_outlined,
+                                  color: seen
+                                      ? Colors.white70
+                                      : Colors.orangeAccent,
+                                ),
+                              ),
+                              title: Text(
+                                collectorName.isEmpty
+                                    ? "Collector sell request"
+                                    : "$collectorName wants to sell",
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              subtitle: Text(
+                                "${kg.toStringAsFixed(2)} kg for receipt entry",
+                                style: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              trailing: Text(
+                                dt == null ? "" : hhmm(dt),
+                                style: TextStyle(
+                                  color: Colors.grey.shade500,
+                                  fontSize: 11,
+                                ),
                               ),
                             ),
                           );
-                        },
-                        leading: Container(
-                          width: 44,
-                          height: 44,
+                        }
+
+                        final status = (data['status'] ?? 'en_route').toString();
+                        final title = dropoffTitleFromStatus(status);
+                        final message = dropoffMessageFromData(data);
+                        final householdName =
+                            (data['householdName'] ?? '').toString().trim();
+                        final householdId =
+                            (data['householdId'] ?? '').toString().trim();
+                        final readByJunkshop = data['readByJunkshop'] == true;
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
                           decoration: BoxDecoration(
-                            color: seen
-                                ? Colors.white.withOpacity(0.08)
-                                : Colors.orange.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(14),
+                            color: Colors.white.withOpacity(0.06),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white.withOpacity(0.08)),
                           ),
-                          child: Icon(
-                            Icons.local_shipping_outlined,
-                            color: seen ? Colors.white70 : Colors.orangeAccent,
+                          child: ListTile(
+                            onTap: () async {
+                              await FirebaseFirestore.instance
+                                  .collection('requests')
+                                  .doc(docId)
+                                  .set({
+                                'readByJunkshop': true,
+                                'updatedAt': FieldValue.serverTimestamp(),
+                              }, SetOptions(merge: true));
+
+                              if (!context.mounted) return;
+                              Navigator.pop(context);
+
+                              if (status == 'arrived' || status == 'completed') {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => receipt.ReceiptScreen(
+                                      shopID: user.uid,
+                                      prefillCollectorName: householdName.isEmpty ? null : householdName,
+                                      prefillCollectorId: householdId.isEmpty ? null : householdId,
+                                      prefillSourceType: "household",
+                                      sellRequestId: docId,
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                            leading: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: readByJunkshop
+                                    ? Colors.white.withOpacity(0.08)
+                                    : status == 'cancelled'
+                                        ? Colors.red.withOpacity(0.15)
+                                        : status == 'arrived'
+                                            ? Colors.green.withOpacity(0.15)
+                                            : Colors.blue.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(
+                                status == 'cancelled'
+                                    ? Icons.cancel_outlined
+                                    : status == 'arrived'
+                                        ? Icons.check_circle_outline
+                                        : Icons.store_mall_directory_outlined,
+                                color: readByJunkshop
+                                    ? Colors.white70
+                                    : status == 'cancelled'
+                                        ? Colors.redAccent
+                                        : status == 'arrived'
+                                            ? Colors.greenAccent
+                                            : Colors.lightBlueAccent,
+                              ),
+                            ),
+                            title: Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Text(
+                              message,
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: Text(
+                              dt == null ? "" : hhmm(dt),
+                              style: TextStyle(
+                                color: Colors.grey.shade500,
+                                fontSize: 11,
+                              ),
+                            ),
                           ),
-                        ),
-                        title: Text(
-                          collectorName.isEmpty
-                              ? "Collector sell request"
-                              : "$collectorName wants to sell",
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        subtitle: Text(
-                          "${kg.toStringAsFixed(2)} kg for receipt entry",
-                          style: TextStyle(
-                            color: Colors.grey.shade400,
-                            fontSize: 12,
-                          ),
-                        ),
-                        trailing: Text(
-                          dt == null ? "" : hhmm(dt),
-                          style: TextStyle(
-                            color: Colors.grey.shade500,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
+                        );
+                      },
                     );
                   },
                 );
               },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _notificationTile({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: primaryColor, size: 22),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                Text(subtitle,
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 13)),
-              ],
             ),
           ),
         ],
