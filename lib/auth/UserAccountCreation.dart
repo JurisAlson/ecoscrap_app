@@ -369,7 +369,10 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
-        title: const Text("User Registration"),
+        title: const Text(
+          "User Registration",
+          style: TextStyle(color: Colors.white),
+        ),
         backgroundColor: _bg,
         elevation: 0,
       ),

@@ -18,7 +18,12 @@ class BaseScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
+        title: Text(
+          title,
+          style: const TextStyle(color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF071A2F),
+        iconTheme: const IconThemeData(color: Colors.white),
         automaticallyImplyLeading: showBackButton,
         leading: showBackButton
             ? IconButton(
@@ -28,9 +33,9 @@ class BaseScaffold extends StatelessWidget {
             : null,
       ),
       body: body,
-    );
+      );
+    }
   }
-}
 
 class BellWithDot extends StatelessWidget {
   const BellWithDot({
