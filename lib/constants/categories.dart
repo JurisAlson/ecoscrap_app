@@ -1,8 +1,9 @@
 const List<String> kMajorCategories = [
   "PP WHITE",
-  "HDPE",
-  "BLACK",
-  "PP COLORED",
+  "PP TRANS",
+  "PP COLOR",
+  "PP",
+  "HD",
   "PET",
 ];
 
@@ -15,19 +16,21 @@ const List<String> kBuySubCategories = [
 ];
 
 const Map<String, double> kFixedBuyCostPerKg = {
-  "PP WHITE": 5.0,
-  "HDPE": 8.0,
-  "BLACK": 3.0,
-  "PP COLORED": 6.0,
-  "PET": 4.0,
+  "HD": 13.0,
+  "PP": 13.0,
+  "PP WHITE": 13.0,
+  "PP TRANS": 13.0,
+  "PP COLOR": 13.0,
+  "PET": 7.0,
 };
 
 const Map<String, double> kFixedSellPricePerKg = {
-  "PP WHITE": 10.0,
-  "HDPE": 15.0,
-  "BLACK": 6.0,
-  "PP COLORED": 12.0,
-  "PET": 8.0,
+  "PP WHITE": 33.0,
+  "PP TRANS": 42.0,
+  "PP COLOR": 30.0,
+  "PET": 23.0,
+  "HD": 50.0,
+  "PP": 30.0,
 };
 
 String normalizeCategoryKey(String raw) {
@@ -40,20 +43,31 @@ String normalizeCategoryKey(String raw) {
   const exactAliases = <String, String>{
     'PP WHITE': 'PP WHITE',
     'PPWHITE': 'PP WHITE',
+    'WHITE PP': 'PP WHITE',
 
-    'PP COLORED': 'PP COLORED',
-    'PP COLOR': 'PP COLORED',
-    'PPCOLORED': 'PP COLORED',
-    'COLORED PP': 'PP COLORED',
+    'PP TRANS': 'PP TRANS',
+    'PPTRANs': 'PP TRANS',
+    'PP TRANSPARENT': 'PP TRANS',
+    'PP CLEAR': 'PP TRANS',
+    'TRANS PP': 'PP TRANS',
 
-    'HDPE': 'HDPE',
+    'PP COLOR': 'PP COLOR',
+    'PP COLORED': 'PP COLOR',
+    'PPCOLOR': 'PP COLOR',
+    'PPCOLORED': 'PP COLOR',
+    'COLORED PP': 'PP COLOR',
+    'COLOR PP': 'PP COLOR',
+    'BLACK': 'PP COLOR',
+    'BLACK PLASTIC': 'PP COLOR',
+
+    'PP': 'PP',
+
+    'HD': 'HD',
+    'HDPE': 'HD',
 
     'PET': 'PET',
     'PETE': 'PET',
     'PET BOTTLE': 'PET',
-
-    'BLACK': 'BLACK',
-    'BLACK PLASTIC': 'BLACK',
   };
 
   if (exactAliases.containsKey(v)) {
