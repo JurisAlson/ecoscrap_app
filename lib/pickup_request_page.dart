@@ -470,7 +470,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
       if (!mounted) return;
 
-      await Navigator.push(
+        final waitResult = await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => WaitingCollectorPage(
@@ -482,7 +482,12 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
       );
 
       if (!mounted) return;
-      Navigator.pop(context, true);
+
+      if (waitResult == true) {
+        Navigator.pop(context, docRef.id);
+      } else {
+        Navigator.pop(context, null);
+      }
     } catch (e) {
       if (mounted) _snack("Pickup failed: $e", bg: _danger);
     }
