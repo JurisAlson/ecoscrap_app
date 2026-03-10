@@ -612,6 +612,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
 Future<void> _cancelDropoff() async {
+  debugPrint("PROJECT ID: ${Firebase.app().options.projectId}");
+  debugPrint("AUTH UID: ${FirebaseAuth.instance.currentUser?.uid}");
   final requestId = _activeDropoffRequestId;
   if (requestId == null) return;
 
@@ -619,10 +621,7 @@ Future<void> _cancelDropoff() async {
     context: context,
     builder: (_) => AlertDialog(
       backgroundColor: _sheet,
-      title: const Text(
-        "Cancel ride",
-        style: TextStyle(color: _textPrimary),
-      ),
+      title: const Text("Cancel ride", style: TextStyle(color: _textPrimary)),
       content: const Text(
         "Do you want to cancel this ride?",
         style: TextStyle(color: _textSecondary),
@@ -630,17 +629,11 @@ Future<void> _cancelDropoff() async {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child: const Text(
-            "No",
-            style: TextStyle(color: _textSecondary),
-          ),
+          child: const Text("No", style: TextStyle(color: _textSecondary)),
         ),
         TextButton(
           onPressed: () => Navigator.pop(context, true),
-          child: const Text(
-            "Yes",
-            style: TextStyle(color: Colors.redAccent),
-          ),
+          child: const Text("Yes", style: TextStyle(color: Colors.redAccent)),
         ),
       ],
     ),
@@ -648,18 +641,32 @@ Future<void> _cancelDropoff() async {
 
   if (confirm != true) return;
 
+  final payload = {
+    'active': false,
+    'status': 'cancelled',
+    'cancelReason': 'Cancelled by household',
+    'readByJunkshop': false,
+  };
+
   try {
+    debugPrint("NEW BUILD REQUEST ID: $requestId");
+    debugPrint("NEW BUILD CANCEL PAYLOAD: $payload");
+
+    final user = FirebaseAuth.instance.currentUser;
+    debugPrint("AUTH UID: ${user?.uid}");
+
+    final snap = await FirebaseFirestore.instance
+        .collection('requests')
+        .doc(requestId)
+        .get();
+
+    debugPrint("DOC EXISTS: ${snap.exists}");
+    debugPrint("DOC DATA: ${snap.data()}");
+
     await FirebaseFirestore.instance
         .collection('requests')
         .doc(requestId)
-        .update({
-      'active': false,
-      'status': 'cancelled',
-      'cancelReason': 'Cancelled by household',
-      'cancelledAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-      'readByJunkshop': false,
-    });
+        .update(payload);
 
     if (!mounted) return;
     setState(() {
@@ -674,21 +681,14 @@ Future<void> _cancelDropoff() async {
 
     _snack("Drop-off cancelled.", bg: _surface);
   } on FirebaseException catch (e, st) {
-    debugPrint("❌ cancel dropoff failed");
+    debugPrint("❌ NEW BUILD cancel dropoff failed");
     debugPrint("code: ${e.code}");
     debugPrint("message: ${e.message}");
-    debugPrint("plugin: ${e.plugin}");
     debugPrint("requestId: $requestId");
     debugPrintStack(stackTrace: st);
 
     if (!mounted) return;
-    _snack("Failed to cancel drop-off: ${e.message}", bg: Colors.redAccent);
-  } catch (e, st) {
-    debugPrint("❌ cancel dropoff failed: $e");
-    debugPrintStack(stackTrace: st);
-
-    if (!mounted) return;
-    _snack("Failed to cancel drop-off.", bg: Colors.redAccent);
+    _snack("NEW BUILD cancel failed: ${e.message}", bg: Colors.redAccent);
   }
 }
 
