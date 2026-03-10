@@ -8,8 +8,8 @@ class ReceiptScreen extends StatefulWidget {
 
   final String? prefillCollectorName;
   final String? prefillCollectorId;
-  final double? prefillKg;
   final String? sellRequestId;
+  final String? prefillSourceType; // "collector" | "household" | null
 
   final String? initialTransactionType; // "sell" or "buy"
 
@@ -18,9 +18,9 @@ class ReceiptScreen extends StatefulWidget {
     required this.shopID,
     this.prefillCollectorName,
     this.prefillCollectorId,
-    this.prefillKg,
     this.sellRequestId,
     this.initialTransactionType,
+    this.prefillSourceType,
   });
 
   @override
@@ -56,14 +56,19 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       (sum, it) => sum + (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0),
     );
   }
+  bool get _isPrefilledCollectorBuy =>
+    !(_openedFromCollectorSellRequest) &&
+    (widget.prefillSourceType == "collector");
+
+  bool get _isPrefilledHouseholdWalkIn =>
+      !(_openedFromCollectorSellRequest) &&
+      (widget.prefillSourceType == "household");
 
   bool get _openedFromCollectorSellRequest =>
-      (widget.sellRequestId?.trim().isNotEmpty ?? false);
+    (widget.sellRequestId?.trim().isNotEmpty ?? false) &&
+    widget.prefillSourceType == "collector";
 
-  bool _isLockedSellRequestItem(int index) =>
-      _openedFromCollectorSellRequest &&
-      index == 0 &&
-      widget.prefillKg != null;
+  bool _isLockedSellRequestItem(int index) => false;
 
   bool _isSellItemOverStock(_ReceiptItem item) {
     if (_txType != "sell") return false;
@@ -159,22 +164,47 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
     final name = widget.prefillCollectorName?.trim() ?? "";
     final id = widget.prefillCollectorId?.trim();
-    final kg = widget.prefillKg;
 
-    if (name.isNotEmpty) {
+    if (_openedFromCollectorSellRequest) {
       _txType = "buy";
 
-      _sourceNameCtrl.text = name;
+      if (name.isNotEmpty) {
+        _sourceNameCtrl.text = name;
+      }
+
       _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
 
       final it = _ReceiptItem();
       it.categoryValue = kMajorCategories.first;
       it.subCategoryValue = kBuySubCategories.first;
+      _recalcBuyItem(it);
+      _items.add(it);
+    } else if (_isPrefilledCollectorBuy) {
+      _txType = "buy";
 
-      if (kg != null && kg > 0) {
-        it.weightCtrl.text = kg.toStringAsFixed(2);
+      if (name.isNotEmpty) {
+        _sourceNameCtrl.text = name;
       }
 
+      _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
+
+      final it = _ReceiptItem();
+      it.categoryValue = kMajorCategories.first;
+      it.subCategoryValue = kBuySubCategories.first;
+      _recalcBuyItem(it);
+      _items.add(it);
+    } else if (_isPrefilledHouseholdWalkIn) {
+      _txType = "buy";
+
+      if (name.isNotEmpty) {
+        _walkInNameCtrl.text = name;
+      }
+
+      _sourceUserId = null;
+
+      final it = _ReceiptItem();
+      it.categoryValue = kMajorCategories.first;
+      it.subCategoryValue = kBuySubCategories.first;
       _recalcBuyItem(it);
       _items.add(it);
     }
@@ -267,7 +297,9 @@ Future<void> _saveReceipt() async {
 
   final isSell = _txType == "sell";
   final fromCollectorSellRequest = _openedFromCollectorSellRequest;
-  final isWalkInBuy = !isSell && !fromCollectorSellRequest;
+  final isWalkInBuy = !isSell &&
+    (!_openedFromCollectorSellRequest) &&
+    (_isPrefilledHouseholdWalkIn || _sourceUserId == null);
 
   final collectorName = _sourceNameCtrl.text.trim();
   final walkInName = _walkInNameCtrl.text.trim();
@@ -438,12 +470,6 @@ Future<void> _saveReceipt() async {
             (sellReqData['collectorId'] ?? '').toString().trim();
 
         final requestedKg = ((sellReqData['kg'] as num?) ?? 0).toDouble();
-
-        if ((requestedKg - totalWeightKg).abs() > 0.001) {
-          throw Exception(
-            "Receipt weight must match the collector sell request (${requestedKg.toStringAsFixed(2)} kg).",
-          );
-        }
 
         if (collectorIdFromSellRequest.isEmpty) {
           throw Exception("Missing collectorId in sell request.");
@@ -653,7 +679,7 @@ Future<void> _saveReceipt() async {
                       style: const TextStyle(color: Colors.white),
                       decoration: _dropdownDecoration(""),
                     ),
-                  ] else if (_openedFromCollectorSellRequest) ...[
+                  ] else if (_openedFromCollectorSellRequest || _isPrefilledCollectorBuy) ...[
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
@@ -682,6 +708,43 @@ Future<void> _saveReceipt() async {
                             _sourceNameCtrl.text.isEmpty
                                 ? "Unknown Collector"
                                 : _sourceNameCtrl.text,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else if (_isPrefilledHouseholdWalkIn) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 14,
+                        horizontal: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.2),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Walk-in",
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _walkInNameCtrl.text.isEmpty
+                                ? "Unknown Walk-in"
+                                : _walkInNameCtrl.text,
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,

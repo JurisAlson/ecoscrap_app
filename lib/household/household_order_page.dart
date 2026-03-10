@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../chat/screens/chat_page.dart';
+import '../Collector/collector_tracking_page.dart';
 
 class HouseholdOrderPage extends StatelessWidget {
   const HouseholdOrderPage({super.key});
@@ -290,6 +291,13 @@ class _OrderCard extends StatelessWidget {
         collectorId.isNotEmpty &&
         !['completed', 'cancelled', 'declined', 'rejected'].contains(status);
 
+            final canTrack = [
+              'accepted',
+              'confirmed',
+              'ongoing',
+              'arrived',
+            ].contains(status);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Container(
@@ -344,6 +352,39 @@ class _OrderCard extends StatelessWidget {
                   const SizedBox(height: 14),
                   _buildOrderTimeline(status),
                   const SizedBox(height: 16),
+
+                  if (canTrack) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => CollectorTrackingPage(
+                                    requestId: requestId,
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.location_on_outlined),
+                            label: const Text("Track Collector"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF1FA9A7),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
 
                   if (canReject) ...[
                     Row(
@@ -489,6 +530,7 @@ class _OrderCard extends StatelessWidget {
                 ),
               ),
           ],
+          
         ),
       ),
     );
