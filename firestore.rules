@@ -809,38 +809,173 @@ match /requests/{requestId} {
         request.resource.data.type == "pickup"
         && request.resource.data.active == true
         && request.resource.data.householdId == request.auth.uid
+        && request.resource.data.collectorId is string
+        && request.resource.data.pickupLocation is latlng
+        && request.resource.data.pickupAddress is string
+        && (
+          (request.resource.data.pickupType == "now"
+            && request.resource.data.status == "pending")
+          ||
+          (request.resource.data.pickupType == "window"
+            && request.resource.data.status == "scheduled"
+            && request.resource.data.windowStart is timestamp
+            && request.resource.data.windowEnd is timestamp
+            && request.resource.data.windowEnd > request.resource.data.windowStart)
+        )
       )
       ||
       (
         request.resource.data.type == "drop-off"
         && request.resource.data.active == true
         && request.resource.data.householdId == request.auth.uid
+        && request.resource.data.junkshopId is string
+        && request.resource.data.status == "en_route"
+        && request.resource.data.readByJunkshop == false
       )
     );
 
   allow read: if signedIn() && (
     resource.data.householdId == request.auth.uid
-    || resource.data.junkshopId == request.auth.uid
     || (isCollector() && resource.data.collectorId == request.auth.uid)
+    || (
+      isCollector()
+      && resource.data.type == "pickup"
+      && resource.data.active == true
+      && (resource.data.collectorId == "" || resource.data.collectorId == null)
+      && (resource.data.status == "pending" || resource.data.status == "scheduled")
+    )
+    || resource.data.junkshopId == request.auth.uid
     || isAdmin()
   );
 
   allow update: if signedIn() && (
 
-    // household can update own drop-off
+    // household rejects pickup
     (
       resource.data.householdId == request.auth.uid
-      && resource.data.type == "drop-off"
+      && resource.data.type == "pickup"
+      && resource.data.active == true
+      && (
+        resource.data.status == "pending"
+        || resource.data.status == "scheduled"
+        || resource.data.status == "accepted"
+        || resource.data.status == "arrived"
+      )
+      && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["status","active","updatedAt","reason","rejectedAt"])
+      && request.resource.data.status == "rejected"
+      && request.resource.data.active == false
+      && request.resource.data.reason is string
+      && request.resource.data.reason.size() > 0
     )
 
-    // junkshop can mark read state
+    // collector accepts assigned pickup
+    || (
+      isCollector()
+      && resource.data.collectorId == request.auth.uid
+      && resource.data.type == "pickup"
+      && resource.data.active == true
+      && (resource.data.status == "pending" || resource.data.status == "scheduled")
+      && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["status","acceptedAt","updatedAt"])
+      && request.resource.data.status == "accepted"
+    )
+
+    // collector claims open pickup
+    || (
+      isCollector()
+      && resource.data.type == "pickup"
+      && resource.data.active == true
+      && (resource.data.status == "pending" || resource.data.status == "scheduled")
+      && (resource.data.collectorId == "" || resource.data.collectorId == null)
+      && request.resource.data.collectorId == request.auth.uid
+      && request.resource.data.status == "accepted"
+      && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["status","collectorId","active","acceptedAt","updatedAt"])
+      && request.resource.data.active == true
+    )
+
+    // collector declines pickup
+    || (
+      isCollector()
+      && resource.data.type == "pickup"
+      && resource.data.active == true
+      && (
+        resource.data.status == "pending"
+        || resource.data.status == "scheduled"
+        || resource.data.status == "accepted"
+      )
+      && (
+        resource.data.collectorId == request.auth.uid
+        || resource.data.collectorId == ""
+        || resource.data.collectorId == null
+      )
+      && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly([
+            "status",
+            "active",
+            "declinedBy",
+            "collectorDeclineReason",
+            "collectorDeclinedAt",
+            "updatedAt"
+          ])
+      && request.resource.data.status == "declined"
+      && request.resource.data.active == false
+      && request.resource.data.declinedBy is list
+      && request.auth.uid in request.resource.data.declinedBy
+      && request.resource.data.collectorDeclineReason is string
+    )
+
+    // household marks drop-off arrived
+    || (
+      resource.data.householdId == request.auth.uid
+      && resource.data.type == "drop-off"
+      && resource.data.active == true
+      && resource.data.status == "en_route"
+      && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly([
+            "status",
+            "arrived",
+            "active",
+            "arrivedAt",
+            "updatedAt",
+            "readByJunkshop"
+          ])
+      && request.resource.data.status == "arrived"
+      && request.resource.data.arrived == true
+      && request.resource.data.active == false
+      && request.resource.data.readByJunkshop == false
+    )
+
+    // household cancels drop-off
+    || (
+      resource.data.householdId == request.auth.uid
+      && resource.data.type == "drop-off"
+      && resource.data.active == true
+      && resource.data.status == "en_route"
+      && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly([
+            "active",
+            "status",
+            "cancelReason",
+            "cancelledAt",
+            "updatedAt",
+            "readByJunkshop"
+          ])
+      && request.resource.data.active == false
+      && request.resource.data.status == "cancelled"
+      && request.resource.data.cancelReason is string
+      && request.resource.data.cancelReason.size() > 0
+      && request.resource.data.readByJunkshop == false
+    )
+
+    // junkshop marks drop-off read
     || (
       resource.data.junkshopId == request.auth.uid
       && resource.data.type == "drop-off"
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "readByJunkshop",
-        "updatedAt"
-      ])
+      && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["readByJunkshop","updatedAt"])
+      && request.resource.data.readByJunkshop is bool
     )
 
     || isAdmin()
