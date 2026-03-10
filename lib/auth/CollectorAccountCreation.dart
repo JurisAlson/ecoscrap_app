@@ -305,6 +305,7 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0B1220),
         elevation: 0,
+        foregroundColor: Colors.white,
         title: const Text("Plastic Collector Registration"),
       ),
       body: SafeArea(
