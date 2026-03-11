@@ -84,7 +84,7 @@ class PickupStop {
     final gp = data['pickupLocation'];
     if (gp is! GeoPoint) return null;
 
-    final rawBagKg = data['bagKg'];
+    final rawBagKg = data['bagKg'] ?? data['bagEstimatedKg'];
     int? parsedBagKg;
     if (rawBagKg is int) {
       parsedBagKg = rawBagKg;
@@ -99,7 +99,7 @@ class PickupStop {
       householdId: (data['householdId'] ?? '').toString(),
       collectorId: (data['collectorId'] ?? '').toString(),
       householdName: (data['householdName'] ?? 'Household').toString(),
-      pickupAddress: (data['pickupAddress'] ?? '').toString(),
+      pickupAddress: (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString(),
       pickupLocation: gp,
       status: (data['status'] ?? '').toString(),
       bagLabel: (data['bagLabel'] ?? '').toString(),
@@ -162,6 +162,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   String _durationText = "";
   int? _durationValueSec;
 
+  StreamSubscription<Position>? _liveLocationSub;
+  bool _isSendingLiveLocation = false;
+
   @override
   void initState() {
     super.initState();
@@ -211,20 +214,87 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<void> _markChatRead(String chatId) async {
-  final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-  if (me.isEmpty) return;
+    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    if (me.isEmpty) return;
 
-  try {
-    await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
-      'lastReadBy': {
-        me: FieldValue.serverTimestamp(),
-      },
-    }, SetOptions(merge: true));
-  } catch (e) {
-    debugPrint("❌ Failed to mark chat read: $e");
+    try {
+      await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
+        'lastReadBy': {
+          me: FieldValue.serverTimestamp(),
+        },
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("❌ Failed to mark chat read: $e");
+    }
   }
-}
+    Future<void> _startLiveLocationSharing() async {
+    final stop = _currentStop;
+    if (stop == null) return;
 
+    final status = stop.status.toLowerCase();
+    final shouldShare =
+        status == 'accepted' || status == 'arrived' || status == 'scheduled';
+
+    if (!shouldShare) return;
+    if (_isSendingLiveLocation) return;
+
+    final hasPermission = await _ensureLocationPermission();
+    if (!hasPermission) return;
+
+    _isSendingLiveLocation = true;
+
+    _liveLocationSub?.cancel();
+    _liveLocationSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 10,
+      ),
+    ).listen((position) async {
+      final currentStop = _currentStop;
+      if (currentStop == null) return;
+
+      try {
+        await FirebaseFirestore.instance
+            .collection('requests')
+            .doc(currentStop.requestId)
+            .set({
+          'collectorLiveLocation': GeoPoint(
+            position.latitude,
+            position.longitude,
+          ),
+          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+          'collectorHeading': position.heading,
+          'collectorSpeedMps': position.speed,
+          'sharingLiveLocation': true,
+        }, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('❌ live location update failed: $e');
+      }
+    });
+  }
+  
+  Future<void> _stopLiveLocationSharing({bool clearFirestore = false}) async {
+    await _liveLocationSub?.cancel();
+    _liveLocationSub = null;
+    _isSendingLiveLocation = false;
+
+    if (!clearFirestore) return;
+
+    final stop = _currentStop;
+    if (stop == null) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(stop.requestId)
+          .set({
+        'sharingLiveLocation': false,
+        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('❌ stop live location sharing failed: $e');
+    }
+  }
   Future<void> _initPage() async {
     await _initLocation();
     await _loadStops();
@@ -233,6 +303,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       await _ensureJunkshopChatIfNeeded();
       await _buildMultiStopRoute();
       await _focusCameraOnCurrentStop();
+      await _startLiveLocationSharing();
     }
   }
 
@@ -837,9 +908,10 @@ Future<void> _openJunkshopChat() async {
           'updatedAt': FieldValue.serverTimestamp(),
           'junkshopId': _junkshopUid,
           'junkshopName': _junkshopName,
+          'sharingLiveLocation': false,
         });
 
-        await _chat.cleanupPickupChats(stop.requestId);
+        // await _chat.cleanupPickupChats(stop.requestId);
 
         final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
         if (idx != -1 && mounted) {
@@ -905,6 +977,12 @@ Future<void> _openJunkshopChat() async {
       );
     }
   }
+  
+  @override
+  void dispose() {
+    _liveLocationSub?.cancel();
+    super.dispose();
+  }
 
   Future<void> _goToStop(int index) async {
     if (index < 0 || index >= _stops.length) return;
@@ -916,6 +994,7 @@ Future<void> _openJunkshopChat() async {
     await _ensureJunkshopChatIfNeeded();
     await _buildMultiStopRoute();
     await _focusCameraOnCurrentStop();
+    await _startLiveLocationSharing();
   }
 
   @override

@@ -110,7 +110,7 @@ class _CollectorNotificationsPageState
         final data = snap.data() as Map<String, dynamic>;
         final householdId = (data['householdId'] ?? '').toString().trim();
         final collectorName = (data['collectorName'] ?? 'Collector').toString();
-        final pickupAddress = (data['pickupAddress'] ?? '').toString();
+        final pickupAddress = (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
 
         tx.update(ref, {
           'status': 'declined',
@@ -158,7 +158,8 @@ class _CollectorNotificationsPageState
     required String requestId,
     required Map<String, dynamic> data,
   }) async {
-    final address = (data['pickupAddress'] ?? 'Unknown address').toString();
+    final address = (data['fullAddress'] ?? data['pickupAddress'] ?? 'Unknown address')
+        .toString();
     final household = (data['householdName'] ?? 'Household').toString();
     final bagLabel = (data['bagLabel'] ?? '').toString();
     final bagKgNum =
@@ -690,7 +691,7 @@ class _CollectorNotificationsPageState
                                         (data['householdName'] ?? 'Household')
                                             .toString();
                                     final address =
-                                        (data['pickupAddress'] ?? '').toString();
+                                        (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
 
                                     final bagLabel =
                                         (data['bagLabel'] ?? '').toString();

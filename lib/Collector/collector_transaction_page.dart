@@ -340,7 +340,7 @@ class _BuyFormState extends State<_BuyForm> {
         final data = snap.data!.data() as Map<String, dynamic>? ?? {};
 
         final householdName = (data['householdName'] ?? "Household").toString();
-        final address = (data['pickupAddress'] ?? "").toString();
+        final address = (data['fullAddress'] ?? data['pickupAddress'] ?? "").toString();
         final bagLabel = (data['bagLabel'] ?? "Bag").toString();
         final bagKg = ((data['bagKg'] as num?) ?? 0).toDouble();
         final collectorName =

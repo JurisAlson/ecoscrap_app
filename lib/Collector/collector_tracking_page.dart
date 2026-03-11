@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:ui';
-
+import 'package:geolocator/geolocator.dart';  
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
@@ -65,7 +65,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _requestSub;
 
   LatLng? _pickupLatLng;
-  LatLng? _destinationLatLng;
   LatLng? _collectorLatLng;
 
   String _collectorName = "Collector";
@@ -76,15 +75,22 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   String _landmark = "";
   String _phoneNumber = "";
 
+  Position? _myPosition;
+  LatLng? _myLatLng;
+
   List<LatLng> _collectorRoutePoints = [];
 
   bool _initialFitDone = false;
   bool _loading = true;
 
+  BitmapDescriptor? _collectorIcon;
+
   @override
   void initState() {
     super.initState();
     _listenToRequest();
+    _initMyLocation();
+    BitmapDescriptor? _collectorIcon;
   }
 
   @override
@@ -101,6 +107,13 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
     if (_pickupLatLng != null && !_initialFitDone) {
       await _fitMap();
     }
+  }
+
+  Future<void> _loadCollectorIcon() async {
+    _collectorIcon = await BitmapDescriptor.fromAssetImage(
+      const ImageConfiguration(size: Size(48, 48)),
+      'assets/icons/Rider.png',
+    );
   }
 
   void _listenToRequest() {
@@ -120,18 +133,13 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       final data = doc.data() ?? {};
 
       final pickupGp = data['pickupLocation'];
-      final destinationGp = data['destinationLocation'];
       final collectorGp = data['collectorLocation'];
 
       LatLng? pickup;
-      LatLng? destination;
       LatLng? collector;
 
       if (pickupGp is GeoPoint) {
         pickup = LatLng(pickupGp.latitude, pickupGp.longitude);
-      }
-      if (destinationGp is GeoPoint) {
-        destination = LatLng(destinationGp.latitude, destinationGp.longitude);
       }
       if (collectorGp is GeoPoint) {
         collector = LatLng(collectorGp.latitude, collectorGp.longitude);
@@ -142,7 +150,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       if (!mounted) return;
       setState(() {
         _pickupLatLng = pickup;
-        _destinationLatLng = destination;
         _collectorLatLng = collector;
         _collectorName = (data['collectorName'] ?? 'Collector').toString();
         _status = (data['status'] ?? '').toString().trim().toLowerCase();
@@ -207,6 +214,42 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       debugPrint("collector route failed: $e");
       if (!mounted) return;
       setState(() => _collectorRoutePoints = []);
+    }
+  }
+
+  Future<bool> _ensureLocationPermission() async {
+    final enabled = await Geolocator.isLocationServiceEnabled();
+    if (!enabled) return false;
+
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _initMyLocation() async {
+    final ok = await _ensureLocationPermission();
+    if (!ok) return;
+
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _myPosition = pos;
+        _myLatLng = LatLng(pos.latitude, pos.longitude);
+      });
+    } catch (e) {
+      debugPrint("household current location error: $e");
     }
   }
 
@@ -295,21 +338,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       );
     }
 
-    if (_destinationLatLng != null) {
-      markers.add(
-        Marker(
-          markerId: const MarkerId('junkshop'),
-          position: _destinationLatLng!,
-          infoWindow: const InfoWindow(
-            title: 'Mores Scrap Trading',
-          ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueGreen,
-          ),
-        ),
-      );
-    }
-
     if (_collectorLatLng != null) {
       markers.add(
         Marker(
@@ -319,8 +347,20 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
             title: _collectorName,
             snippet: 'Approaching pickup location',
           ),
+          icon: _collectorIcon ?? BitmapDescriptor.defaultMarker,
+        ),
+      );
+    }
+    if (_myLatLng != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('me'),
+          position: _myLatLng!,
+          infoWindow: const InfoWindow(
+            title: 'Your Location',
+          ),
           icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueViolet,
+            BitmapDescriptor.hueAzure,
           ),
         ),
       );
