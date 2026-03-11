@@ -254,8 +254,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
         .snapshots();
 
     final dropoffRequestsStream = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'drop-off')
+        .collection('dropoff_requests')
         .where('junkshopId', isEqualTo: uid)
         .where('readByJunkshop', isEqualTo: false)
         .snapshots();
@@ -344,8 +343,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
         .snapshots();
 
     final dropoffRequestsStream = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'drop-off')
+        .collection('dropoff_requests')
         .where('junkshopId', isEqualTo: user.uid)
         .orderBy('createdAt', descending: true)
         .limit(50)
@@ -606,7 +604,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                           child: ListTile(
                             onTap: () async {
                               await FirebaseFirestore.instance
-                                  .collection('requests')
+                                  .collection('dropoff_requests')
                                   .doc(docId)
                                   .set({
                                 'readByJunkshop': true,

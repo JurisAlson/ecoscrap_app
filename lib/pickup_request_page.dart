@@ -457,6 +457,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
         'bagMinKg': bagMinKg,
         'bagMaxKg': bagMaxKg,
         'bagEstimatedKg': bagEstimatedKg,
+        'bagKg': bagEstimatedKg,
         'distanceKm': double.parse(widget.distanceKm.toStringAsFixed(2)),
         'etaMinutes': widget.etaMinutes,
         'arrived': false,
