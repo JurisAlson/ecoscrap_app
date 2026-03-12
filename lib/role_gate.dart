@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -184,6 +186,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
         if (docSnap.hasError) {
           return _RoleErrorPage(
+            title: "Profile Error",
             message: "Failed to load Users/{uid}.\n\n${docSnap.error}",
             actionLabel: "Logout",
             onAction: () => _logout(context),
@@ -192,6 +195,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
         if (!docSnap.hasData || !docSnap.data!.exists) {
           return _RoleErrorPage(
+            title: "Profile Missing",
             message:
                 "Profile is missing in Users/{uid}.\n\n"
                 "Please logout and login again. If it persists, contact admin.",
@@ -233,7 +237,9 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
               if (claimSnap.hasError) {
                 return _RoleErrorPage(
-                  message: "Failed to check admin claim.\n\n${claimSnap.error}",
+                  title: "Admin Claim Error",
+                  message:
+                      "Failed to check admin claim.\n\n${claimSnap.error}",
                   actionLabel: "Logout",
                   onAction: () => _logout(context),
                 );
@@ -242,6 +248,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
               final isAdmin = claimSnap.data == true;
               if (!isAdmin) {
                 return _RoleErrorPage(
+                  title: "Admin Claim Missing",
                   message:
                       "This account is marked as Admin in Users/{uid}, but your token has no admin claim.\n\n"
                       "Ask an existing admin to grant your admin claim, then LOGOUT + LOGIN to refresh.",
@@ -261,15 +268,17 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
           if (!ok) {
             final cs =
                 (data['collectorStatus'] ?? "").toString().toLowerCase();
-
-            final msg = cs == "rejected"
-                ? "Your collector request was rejected.\n\nPlease resubmit your application."
-                : "Your collector account is not verified yet.\n\nPlease wait for admin approval.";
+            final isRejected = cs == "rejected";
 
             return _RoleErrorPage(
-              message: msg,
+              title:
+                  isRejected ? "Collector Rejected" : "Collector Pending",
+              message: isRejected
+                  ? "Your collector request was rejected.\nPlease resubmit your application."
+                  : "Your collector account is not verified yet.\nPlease wait for admin approval.",
               actionLabel: "Logout",
               onAction: () => _logout(context),
+              isRejected: isRejected,
             );
           }
 
@@ -293,15 +302,18 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
           if (!ok) {
             final rs = (data['residentStatus'] ?? "").toString().toLowerCase();
-
-            final msg = rs == "rejected"
-                ? "Account verification rejected.\n\nPlease re-submit a valid Government ID."
-                : "Account pending verification.\n\nPlease wait for admin approval.";
+            final isRejected = rs == "rejected";
 
             return _RoleErrorPage(
-              message: msg,
+              title: isRejected
+                  ? "Verification Rejected"
+                  : "Verification Pending",
+              message: isRejected
+                  ? "Your account verification was rejected.\nPlease re-submit a valid Government ID."
+                  : "Your account is still pending verification.\nPlease wait for admin approval.",
               actionLabel: "Logout",
               onAction: () => _logout(context),
+              isRejected: isRejected,
             );
           }
 
@@ -309,6 +321,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
         }
 
         return _RoleErrorPage(
+          title: "Invalid Role",
           message:
               "No valid role found for this account.\n\n"
               "Fix Users/{uid}.Roles to one of: admin, user, collector, junkshop.",
@@ -321,35 +334,208 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 }
 
 class _RoleErrorPage extends StatelessWidget {
+  final String title;
   final String message;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final bool isRejected;
 
   const _RoleErrorPage({
+    required this.title,
     required this.message,
     this.actionLabel,
     this.onAction,
+    this.isRejected = false,
   });
+
+  static const Color _bg = Color(0xFF071A2F);
+  static const Color _accent = Color(0xFF1FA64A);
+  static const Color _accentLight = Color(0xFF9AD93A);
+  static const Color _danger = Color(0xFFE74C3C);
 
   @override
   Widget build(BuildContext context) {
+    final accentColor = isRejected ? _danger : _accent;
+    final iconData =
+    isRejected ? Icons.cancel_rounded : Icons.hourglass_top_rounded;
+
     return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(message, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              if (actionLabel != null && onAction != null)
-                ElevatedButton(
-                  onPressed: onAction,
-                  child: Text(actionLabel!),
+      backgroundColor: _bg,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFF071A2F),
+                    Color(0xFF081A30),
+                    Color(0xFF06172A),
+                  ],
                 ),
-            ],
+              ),
+            ),
           ),
-        ),
+          Positioned(
+            top: -120,
+            right: -90,
+            child: _blurCircle(
+              isRejected
+                  ? _danger.withOpacity(0.10)
+                  : _accentLight.withOpacity(0.12),
+              280,
+            ),
+          ),
+          Positioned(
+            bottom: -140,
+            left: -120,
+            child: _blurCircle(
+              _accent.withOpacity(0.10),
+              320,
+            ),
+          ),
+          SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 28,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.08),
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 104,
+                            height: 104,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.06),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.06),
+                              ),
+                            ),
+                            child: Image.asset(
+                              'assets/icons/logo.png',
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: accentColor.withOpacity(0.14),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: accentColor.withOpacity(0.28),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  iconData,
+                                  size: 18,
+                                  color: accentColor,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  isRejected ? "Rejected" : "Pending Review",
+                                  style: TextStyle(
+                                    color: accentColor,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Text(
+                            title,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            message,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 15,
+                              height: 1.5,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          if (actionLabel != null && onAction != null)
+                            SizedBox(
+                              width: double.infinity,
+                              height: 54,
+                              child: ElevatedButton(
+                                onPressed: onAction,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: accentColor,
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                                child: Text(
+                                  actionLabel!,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Widget _blurCircle(Color color, double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
+      ),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 90, sigmaY: 90),
+        child: Container(color: Colors.transparent),
       ),
     );
   }

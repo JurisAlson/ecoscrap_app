@@ -286,34 +286,14 @@ class _LoginPageState extends State<LoginPage> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const SizedBox(height: 80),
-                  Transform.rotate(
-                    angle: -0.1,
-                    child: Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF1FA9A7), Color(0xFF10B981)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: const Icon(
-                        Icons.recycling,
-                        color: Colors.white,
-                        size: 40,
-                      ),
+                  SizedBox(
+                    height: 140,
+                    child: Image.asset(
+                      'assets/icons/app_icon.png',
+                      fit: BoxFit.contain,
                     ),
                   ),
-                  const SizedBox(height: 25),
-                  const Text(
-                    "EcoScrap",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 34,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
+                  const SizedBox(height: 10),
                   const Text(
                     "Join the green movement",
                     style: TextStyle(color: Color(0xFF94A3B8)),

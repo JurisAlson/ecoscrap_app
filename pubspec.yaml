@@ -71,3 +71,6 @@ flutter:
     - assets/plastic_validation/valid_3/
     - assets/plastic_validation/valid_4/
     - assets/icons/Rider.png
+    - assets/icons/logo.png
+    - assets/icons/app_icon.png
+
