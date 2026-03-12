@@ -242,7 +242,7 @@ void initState() {
         .listen((snap) {
       if (!mounted || snap.docs.isEmpty) return;
 
-      final data = snap.docs.first.data() as Map<String, dynamic>;
+      final data = snap.docs.first.data();
       final status = (data['status'] ?? '').toString().trim().toLowerCase();
 
       final shouldOpenOrder = status == 'accepted' ||

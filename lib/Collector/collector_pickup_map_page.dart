@@ -363,7 +363,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
       final loadedStops = <PickupStop>[];
       for (final doc in docs) {
-        final typedDoc = doc as DocumentSnapshot<Map<String, dynamic>>;
+        final typedDoc = doc;
         final stop = PickupStop.fromDoc(typedDoc);
         if (stop != null) {
           loadedStops.add(stop);
@@ -372,7 +372,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
       if (_originLatLng != null && loadedStops.isNotEmpty) {
         loadedStops
-          ..sort((a, b) {
+          .sort((a, b) {
             final aAccepted = a.acceptedAt?.toDate();
             final bAccepted = b.acceptedAt?.toDate();
             if (aAccepted == null && bAccepted == null) return 0;

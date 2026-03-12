@@ -245,29 +245,47 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       );
     }
 
-    final sellRequestsStream = FirebaseFirestore.instance
-        .collection('Users')
-        .doc(uid)
-        .collection('sell_requests')
-        .where('status', isEqualTo: 'pending')
-        .where('seen', isEqualTo: false)
-        .snapshots();
+final sellRequestsStream = FirebaseFirestore.instance
+    .collection('Users')
+    .doc(uid)
+    .collection('sell_requests')
+    .snapshots();
 
-    final dropoffRequestsStream = FirebaseFirestore.instance
-        .collection('dropoff_requests')
-        .where('junkshopId', isEqualTo: uid)
-        .where('readByJunkshop', isEqualTo: false)
-        .snapshots();
+final dropoffRequestsStream = FirebaseFirestore.instance
+    .collection('dropoff_requests')
+    .where('junkshopId', isEqualTo: uid)
+    .snapshots();
 
     return StreamBuilder<QuerySnapshot>(
       stream: sellRequestsStream,
       builder: (context, sellSnap) {
-        final sellUnread = sellSnap.data?.docs.length ?? 0;
+        final sellUnread = (sellSnap.data?.docs ?? []).where((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        final seen = data['seen'] == true;
+        final receiptSaved = data['receiptSaved'] == true;
+        final status = (data['status'] ?? '').toString();
+
+        return !seen &&
+            !receiptSaved &&
+            status != 'completed' &&
+            status != 'processed';
+      }).length;
 
         return StreamBuilder<QuerySnapshot>(
           stream: dropoffRequestsStream,
           builder: (context, dropSnap) {
-            final dropUnread = dropSnap.data?.docs.length ?? 0;
+            final dropUnread = (dropSnap.data?.docs ?? []).where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            final readByJunkshop = data['readByJunkshop'] == true;
+            final receiptSaved = data['receiptSaved'] == true;
+            final cleared = data['clearedByJunkshop'] == true;
+            final status = (data['status'] ?? '').toString();
+
+            return !readByJunkshop &&
+                !receiptSaved &&
+                !cleared &&
+                status != 'completed';
+          }).length;
             final unreadCount = sellUnread + dropUnread;
             final hasUnread = unreadCount > 0;
 
@@ -325,6 +343,37 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
+  Future<void> _clearAllCancelledDropoffs() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  final snap = await FirebaseFirestore.instance
+      .collection('dropoff_requests')
+      .where('junkshopId', isEqualTo: user.uid)
+      .where('status', isEqualTo: 'cancelled')
+      .get();
+
+  final batch = FirebaseFirestore.instance.batch();
+
+  for (final doc in snap.docs) {
+    final data = doc.data();
+    final cleared = data['clearedByJunkshop'] == true;
+
+    if (!cleared) {
+      batch.set(
+        doc.reference,
+        {
+          'clearedByJunkshop': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+  }
+
+  await batch.commit();
+}
+
   // ================= DRAWERS =================
   Widget _notificationsDrawer() {
     final user = FirebaseAuth.instance.currentUser;
@@ -334,20 +383,21 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       );
     }
 
-    final sellRequestsStream = FirebaseFirestore.instance
-        .collection('Users')
-        .doc(user.uid)
-        .collection('sell_requests')
-        .orderBy('createdAt', descending: true)
-        .limit(50)
-        .snapshots();
+final sellRequestsStream = FirebaseFirestore.instance
+    .collection('Users')
+    .doc(user.uid)
+    .collection('sell_requests')
+    .where('status', isEqualTo: 'pending')
+    .orderBy('createdAt', descending: true)
+    .limit(50)
+    .snapshots();
 
-    final dropoffRequestsStream = FirebaseFirestore.instance
-        .collection('dropoff_requests')
-        .where('junkshopId', isEqualTo: user.uid)
-        .orderBy('createdAt', descending: true)
-        .limit(50)
-        .snapshots();
+final dropoffRequestsStream = FirebaseFirestore.instance
+    .collection('dropoff_requests')
+    .where('junkshopId', isEqualTo: user.uid)
+    .orderBy('createdAt', descending: true)
+    .limit(50)
+    .snapshots();
 
     String hhmm(DateTime dt) =>
         "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
@@ -393,23 +443,37 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                "Notifications",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
+Row(
+  children: [
+    IconButton(
+      icon: const Icon(Icons.close, color: Colors.white),
+      onPressed: () => Navigator.pop(context),
+    ),
+    const SizedBox(width: 8),
+    const Expanded(
+      child: Text(
+        "Notifications",
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    ),
+    TextButton(
+      onPressed: () async {
+        await _clearAllCancelledDropoffs();
+      },
+      child: const Text(
+        "Clear",
+        style: TextStyle(
+          color: Colors.redAccent,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    ),
+  ],
+),
           const SizedBox(height: 10),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
@@ -443,30 +507,48 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                       );
                     }
 
-                    final List<Map<String, dynamic>> items = [];
+final List<Map<String, dynamic>> items = [];
 
-                    for (final d in sellSnap.data?.docs ?? []) {
-                      final data = d.data() as Map<String, dynamic>;
-                      final ts = data['createdAt'] as Timestamp?;
-                      items.add({
-                        'kind': 'sell_request',
-                        'docId': d.id,
-                        'data': data,
-                        'createdAt': ts,
-                      });
-                    }
+// SELL REQUESTS
+for (final d in sellSnap.data?.docs ?? []) {
+  final data = d.data() as Map<String, dynamic>;
+  final status = (data['status'] ?? '').toString();
+  final receiptSaved = data['receiptSaved'] == true;
 
-                    for (final d in dropSnap.data?.docs ?? []) {
-                      final data = d.data() as Map<String, dynamic>;
-                      final ts = (data['updatedAt'] as Timestamp?) ??
-                          (data['createdAt'] as Timestamp?);
-                      items.add({
-                        'kind': 'dropoff_request',
-                        'docId': d.id,
-                        'data': data,
-                        'createdAt': ts,
-                      });
-                    }
+  if (receiptSaved || status == 'completed' || status == 'processed') {
+    continue;
+  }
+
+  final ts = data['createdAt'] as Timestamp?;
+  items.add({
+    'kind': 'sell_request',
+    'docId': d.id,
+    'data': data,
+    'createdAt': ts,
+  });
+}
+
+// DROPOFF REQUESTS
+for (final d in dropSnap.data?.docs ?? []) {
+  final data = d.data() as Map<String, dynamic>;
+  final status = (data['status'] ?? '').toString();
+  final receiptSaved = data['receiptSaved'] == true;
+  final cleared = data['clearedByJunkshop'] == true;
+
+  if (receiptSaved || status == 'completed' || cleared) {
+    continue;
+  }
+
+  final ts = (data['updatedAt'] as Timestamp?) ??
+      (data['createdAt'] as Timestamp?);
+
+  items.add({
+    'kind': 'dropoff_request',
+    'docId': d.id,
+    'data': data,
+    'createdAt': ts,
+  });
+}
 
                     items.sort((a, b) {
                       final aTs = a['createdAt'] as Timestamp?;
@@ -513,77 +595,78 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                 color: Colors.white.withOpacity(0.08),
                               ),
                             ),
-                            child: ListTile(
-                              onTap: () async {
-                                await FirebaseFirestore.instance
-                                    .collection('Users')
-                                    .doc(user.uid)
-                                    .collection('sell_requests')
-                                    .doc(docId)
-                                    .set({
-                                  'seen': true,
-                                  'updatedAt': FieldValue.serverTimestamp(),
-                                }, SetOptions(merge: true));
+child: ListTile(
+  onTap: () async {
+    await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .collection('sell_requests')
+        .doc(docId)
+        .set({
+      'seen': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
 
-                                if (!context.mounted) return;
-                                Navigator.pop(context);
+    if (!context.mounted) return;
+    Navigator.pop(context);
 
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => receipt.ReceiptScreen(
-                                      shopID: user.uid,
-                                      prefillCollectorName: collectorName.isEmpty ? null : collectorName,
-                                      prefillCollectorId: collectorId.isEmpty ? null : collectorId,
-                               
-                                      sellRequestId: docId,
-                                      prefillSourceType: "collector",
-                                    ),
-                                  ),
-                                );
-                              },
-                              leading: Container(
-                                width: 44,
-                                height: 44,
-                                decoration: BoxDecoration(
-                                  color: seen
-                                      ? Colors.white.withOpacity(0.08)
-                                      : Colors.orange.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                child: Icon(
-                                  Icons.local_shipping_outlined,
-                                  color: seen
-                                      ? Colors.white70
-                                      : Colors.orangeAccent,
-                                ),
-                              ),
-                              title: Text(
-                                collectorName.isEmpty
-                                    ? "Collector sell request"
-                                    : "$collectorName wants to sell",
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              subtitle: Text(
-                                "${kg.toStringAsFixed(2)} kg for receipt entry",
-                                style: TextStyle(
-                                  color: Colors.grey.shade400,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              trailing: Text(
-                                dt == null ? "" : hhmm(dt),
-                                style: TextStyle(
-                                  color: Colors.grey.shade500,
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ),
-                          );
-                        }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => receipt.ReceiptScreen(
+          shopID: user.uid,
+          prefillCollectorName:
+              collectorName.isEmpty ? null : collectorName,
+          prefillCollectorId:
+              collectorId.isEmpty ? null : collectorId,
+          sellRequestId: docId,
+          prefillSourceType: "collector",
+        ),
+      ),
+    );
+  },
+  leading: Container(
+    width: 44,
+    height: 44,
+    decoration: BoxDecoration(
+      color: seen
+          ? Colors.white.withOpacity(0.08)
+          : Colors.orange.withOpacity(0.15),
+      borderRadius: BorderRadius.circular(14),
+    ),
+    child: Icon(
+      Icons.local_shipping_outlined,
+      color: seen ? Colors.white70 : Colors.orangeAccent,
+    ),
+  ),
+  title: Text(
+    collectorName.isEmpty
+        ? "Collector sell request"
+        : "$collectorName wants to sell",
+    style: const TextStyle(
+      color: Colors.white,
+      fontWeight: FontWeight.bold,
+    ),
+  ),
+  subtitle: Text(
+    "${kg.toStringAsFixed(2)} kg for receipt entry",
+    style: TextStyle(
+      color: Colors.grey.shade400,
+      fontSize: 12,
+    ),
+  ),
+  trailing: Text(
+    dt == null ? "" : hhmm(dt),
+    style: TextStyle(
+      color: Colors.grey.shade500,
+      fontSize: 11,
+    ),
+  ),
+),
+                            
+                           
+                              );
+                            }
 
                         final status = (data['status'] ?? 'en_route').toString();
                         final title = dropoffTitleFromStatus(status);
@@ -601,84 +684,86 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(color: Colors.white.withOpacity(0.08)),
                           ),
-                          child: ListTile(
-                            onTap: () async {
-                              await FirebaseFirestore.instance
-                                  .collection('dropoff_requests')
-                                  .doc(docId)
-                                  .set({
-                                'readByJunkshop': true,
-                                'updatedAt': FieldValue.serverTimestamp(),
-                              }, SetOptions(merge: true));
+child: ListTile(
+  onTap: status == 'arrived'
+      ? () async {
+          await FirebaseFirestore.instance
+              .collection('dropoff_requests')
+              .doc(docId)
+              .set({
+            'readByJunkshop': true,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
 
-                              if (!context.mounted) return;
-                              Navigator.pop(context);
+          if (!context.mounted) return;
+          Navigator.pop(context);
 
-                              if (status == 'arrived' || status == 'completed') {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => receipt.ReceiptScreen(
-                                      shopID: user.uid,
-                                      prefillCollectorName: householdName.isEmpty ? null : householdName,
-                                      prefillCollectorId: householdId.isEmpty ? null : householdId,
-                                      prefillSourceType: "household",
-                                      sellRequestId: docId,
-                                    ),
-                                  ),
-                                );
-                              }
-                            },
-                            leading: Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                color: readByJunkshop
-                                    ? Colors.white.withOpacity(0.08)
-                                    : status == 'cancelled'
-                                        ? Colors.red.withOpacity(0.15)
-                                        : status == 'arrived'
-                                            ? Colors.green.withOpacity(0.15)
-                                            : Colors.blue.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Icon(
-                                status == 'cancelled'
-                                    ? Icons.cancel_outlined
-                                    : status == 'arrived'
-                                        ? Icons.check_circle_outline
-                                        : Icons.store_mall_directory_outlined,
-                                color: readByJunkshop
-                                    ? Colors.white70
-                                    : status == 'cancelled'
-                                        ? Colors.redAccent
-                                        : status == 'arrived'
-                                            ? Colors.greenAccent
-                                            : Colors.lightBlueAccent,
-                              ),
-                            ),
-                            title: Text(
-                              title,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            subtitle: Text(
-                              message,
-                              style: TextStyle(
-                                color: Colors.grey.shade400,
-                                fontSize: 12,
-                              ),
-                            ),
-                            trailing: Text(
-                              dt == null ? "" : hhmm(dt),
-                              style: TextStyle(
-                                color: Colors.grey.shade500,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ),
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => receipt.ReceiptScreen(
+                shopID: user.uid,
+                prefillCollectorName:
+                    householdName.isEmpty ? null : householdName,
+                prefillCollectorId:
+                    householdId.isEmpty ? null : householdId,
+                prefillSourceType: "household",
+                sellRequestId: docId,
+              ),
+            ),
+          );
+        }
+      : null,
+  leading: Container(
+    width: 44,
+    height: 44,
+    decoration: BoxDecoration(
+      color: readByJunkshop
+          ? Colors.white.withOpacity(0.08)
+          : status == 'cancelled'
+              ? Colors.red.withOpacity(0.15)
+              : status == 'arrived'
+                  ? Colors.green.withOpacity(0.15)
+                  : Colors.blue.withOpacity(0.15),
+      borderRadius: BorderRadius.circular(14),
+    ),
+    child: Icon(
+      status == 'cancelled'
+          ? Icons.cancel_outlined
+          : status == 'arrived'
+              ? Icons.check_circle_outline
+              : Icons.store_mall_directory_outlined,
+      color: readByJunkshop
+          ? Colors.white70
+          : status == 'cancelled'
+              ? Colors.redAccent
+              : status == 'arrived'
+                  ? Colors.greenAccent
+                  : Colors.lightBlueAccent,
+    ),
+  ),
+  title: Text(
+    title,
+    style: const TextStyle(
+      color: Colors.white,
+      fontWeight: FontWeight.bold,
+    ),
+  ),
+  subtitle: Text(
+    message,
+    style: TextStyle(
+      color: Colors.grey.shade400,
+      fontSize: 12,
+    ),
+  ),
+  trailing: Text(
+    dt == null ? "" : hhmm(dt),
+    style: TextStyle(
+      color: Colors.grey.shade500,
+      fontSize: 11,
+    ),
+  ),
+),
                         );
                       },
                     );

@@ -265,7 +265,7 @@ class _CollectorNotificationsPageState
                 style: TextStyle(color: Colors.white),
               ),
               content: DropdownButtonFormField<String>(
-                value: selectedReason,
+                initialValue: selectedReason,
                 dropdownColor: bgColor,
                 decoration: InputDecoration(
                   filled: true,

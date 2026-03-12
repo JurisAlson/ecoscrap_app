@@ -90,7 +90,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
     super.initState();
     _listenToRequest();
     _initMyLocation();
-    BitmapDescriptor? _collectorIcon;
+    BitmapDescriptor? collectorIcon;
   }
 
   @override

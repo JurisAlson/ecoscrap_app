@@ -35,6 +35,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   final TextEditingController _sourceNameCtrl = TextEditingController();
   final TextEditingController _customerCtrl = TextEditingController();
 
+  final ScrollController _scrollCtrl = ScrollController();
+
   bool _saving = false;
   String _txType = "sell"; // sell | buy
 
@@ -47,24 +49,51 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   String? _sourceUserId;
 
   final List<_ReceiptItem> _items = [];
-  double get _transportCost {
+
+double get _transportCost {
   if (_txType != "sell") return 0.0;
 
   final kg = _totalWeightKg;
+  final branch = _selectedSellBranch ?? "";
 
+  if (branch == "ECO fortunes Cabuyao City") {
+    if (kg >= 1000 && kg <= 4000) return 4000.0;
+    return 0.0;
+  }
+
+  // Default: JMC Plastic Corporation Valenzuela City
   if (kg >= 4000 && kg <= 8000) return 10000.0;
   if (kg > 8000 && kg <= 12000) return 15000.0;
   if (kg > 12000 && kg <= 18000) return 18000.0;
 
   return 0.0;
 }
+double get _sellMinKg {
+  final branch = _selectedSellBranch ?? "";
 
-double get _netSellAmount {
-  if (_txType != "sell") return _totalAmount;
+  if (branch == "ECO fortunes Cabuyao City") {
+    return 1000.0;
+  }
 
-  final net = _totalAmount - _transportCost;
-  return net < 0 ? 0.0 : net;
+  return 4000.0;
 }
+
+double get _sellMaxKg {
+  final branch = _selectedSellBranch ?? "";
+
+  if (branch == "ECO fortunes Cabuyao City") {
+    return 4000.0;
+  }
+
+  return 18000.0;
+}
+
+  double get _netSellAmount {
+    if (_txType != "sell") return _totalAmount;
+
+    final net = _totalAmount - _transportCost;
+    return net < 0 ? 0.0 : net;
+  }
 
   double get _totalAmount => _items.fold(0.0, (sum, it) => sum + it.subtotal);
 
@@ -74,24 +103,31 @@ double get _netSellAmount {
       (sum, it) => sum + (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0),
     );
   }
+
   bool get _isPrefilledCollectorBuy =>
-    !(_openedFromCollectorSellRequest) &&
-    (widget.prefillSourceType == "collector");
+      !(_openedFromCollectorSellRequest) &&
+      (widget.prefillSourceType == "collector");
 
   bool get _isPrefilledHouseholdWalkIn =>
       !(_openedFromCollectorSellRequest) &&
       (widget.prefillSourceType == "household");
 
   bool get _openedFromCollectorSellRequest =>
-    (widget.sellRequestId?.trim().isNotEmpty ?? false) &&
-    widget.prefillSourceType == "collector";
+      (widget.sellRequestId?.trim().isNotEmpty ?? false) &&
+      widget.prefillSourceType == "collector";
 
   bool _isLockedSellRequestItem(int index) => false;
+
+  Set<String> _selectedSellInventoryIds({_ReceiptItem? exceptItem}) {
+    return _items
+        .where((it) => it.inventoryDocId != null && !identical(it, exceptItem))
+        .map((it) => it.inventoryDocId!)
+        .toSet();
+  }
 
   bool _isSellItemOverStock(_ReceiptItem item) {
     if (_txType != "sell") return false;
 
-    final enteredKg = double.tryParse(item.weightCtrl.text.trim()) ?? 0.0;
     if (item.inventoryDocId == null) return false;
 
     final totalForSameInventory = _items
@@ -139,34 +175,52 @@ double get _netSellAmount {
     it.subtotalCtrl.text = totalCost.toStringAsFixed(2);
   }
 
-void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
-  if (_txType != "sell") return;
+  void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
+    if (_txType != "sell") return;
 
-  final cat = normalizeCategoryKey(it.categoryValue ?? kMajorCategories.first);
-  final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
+    final cat = normalizeCategoryKey(it.categoryValue ?? kMajorCategories.first);
+    final kg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
 
-  final defaultSellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
+    final defaultSellPerKg = kFixedSellPricePerKg[cat] ?? 0.0;
 
-  if (!keepManualPrice || it.sellPricePerKg == null || it.sellPricePerKg! <= 0) {
-    it.sellPricePerKg = defaultSellPerKg;
+    if (!keepManualPrice || it.sellPricePerKg == null || it.sellPricePerKg! <= 0) {
+      it.sellPricePerKg = defaultSellPerKg;
+    }
+
+    final sellPerKg = it.sellPricePerKg ?? defaultSellPerKg;
+    final sellTotal = kg * sellPerKg;
+    it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
   }
 
-  final sellPerKg = it.sellPricePerKg ?? defaultSellPerKg;
-  final sellTotal = kg * sellPerKg;
-  it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
-}
+  Future<void> _addItem() async {
+    final it = _ReceiptItem();
 
-  void _addItem() => setState(() {
-        final it = _ReceiptItem();
+    if (_txType == "buy") {
+      it.categoryValue = kMajorCategories.first;
+      it.subCategoryValue = kBuySubCategories.first;
+      _recalcBuyItem(it);
+    }
 
-        if (_txType == "buy") {
-          it.categoryValue = kMajorCategories.first;
-          it.subCategoryValue = kBuySubCategories.first;
-          _recalcBuyItem(it);
-        }
+    setState(() {
+      _items.add(it);
+    });
 
-        _items.add(it);
-      });
+    await Future.delayed(const Duration(milliseconds: 120));
+
+    if (_scrollCtrl.hasClients) {
+      await _scrollCtrl.animateTo(
+        _scrollCtrl.position.maxScrollExtent + 260,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOut,
+      );
+    }
+
+    if (!mounted) return;
+
+    if (_txType == "sell") {
+      await _pickInventoryItem(it);
+    }
+  }
 
   void _removeItem(int index) => setState(() {
         _items[index].dispose();
@@ -249,6 +303,7 @@ void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
     _customerCtrl.dispose();
     _sourceNameCtrl.dispose();
     _walkInNameCtrl.dispose();
+    _scrollCtrl.dispose();
 
     for (final i in _items) {
       i.dispose();
@@ -262,7 +317,10 @@ void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _InventoryPickerSheet(shopID: widget.shopID),
+      builder: (_) => _InventoryPickerSheet(
+        shopID: widget.shopID,
+        excludedInventoryIds: _selectedSellInventoryIds(exceptItem: item),
+      ),
     );
 
     if (picked == null) return;
@@ -274,11 +332,10 @@ void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
       item.subCategoryValue = (picked['subCategory'] ?? '').toString();
       item.availableKg = (picked['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
-      item.sellPricePerKg = kFixedSellPricePerKg[
-      normalizeCategoryKey(item.categoryValue ?? "")
-    ] ?? 0.0;
-    _recalcSellItem(item, keepManualPrice: true);
-
+      item.sellPricePerKg =
+          kFixedSellPricePerKg[normalizeCategoryKey(item.categoryValue ?? "")] ??
+              0.0;
+      _recalcSellItem(item, keepManualPrice: true);
     });
   }
 
@@ -317,15 +374,20 @@ void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
     return snap.docs.first.id;
   }
 
-Future<void> _saveReceipt() async {
+  Future<void> _saveReceipt() async {
   if (_saving) return;
   setState(() => _saving = true);
 
   final isSell = _txType == "sell";
   final fromCollectorSellRequest = _openedFromCollectorSellRequest;
+
+  final fromHouseholdDropoff = !isSell &&
+      widget.prefillSourceType == "household" &&
+      (widget.sellRequestId?.trim().isNotEmpty ?? false);
+
   final isWalkInBuy = !isSell &&
-    (!_openedFromCollectorSellRequest) &&
-    (_isPrefilledHouseholdWalkIn || _sourceUserId == null);
+      !_openedFromCollectorSellRequest &&
+      (_isPrefilledHouseholdWalkIn || _sourceUserId == null);
 
   final collectorName = _sourceNameCtrl.text.trim();
   final walkInName = _walkInNameCtrl.text.trim();
@@ -347,7 +409,7 @@ Future<void> _saveReceipt() async {
           return;
         }
       } else {
-        if (collectorName.isEmpty) {
+        if (collectorName.isEmpty && !fromHouseholdDropoff) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Collector info is missing.")),
           );
@@ -356,11 +418,23 @@ Future<void> _saveReceipt() async {
       }
     }
 
-    final sourceType = isSell ? "" : (isWalkInBuy ? "walkin" : "collector");
-    final sourceName = isSell ? "" : (isWalkInBuy ? walkInName : collectorName);
+    final sourceType = isSell
+        ? ""
+        : fromHouseholdDropoff
+            ? "household"
+            : (isWalkInBuy ? "walkin" : "collector");
 
-    final partyName =
-        isSell ? _selectedSellBranch : (isWalkInBuy ? walkInName : collectorName);
+    final sourceName = isSell
+        ? ""
+        : fromHouseholdDropoff
+            ? walkInName
+            : (isWalkInBuy ? walkInName : collectorName);
+
+    final partyName = isSell
+        ? _selectedSellBranch
+        : fromHouseholdDropoff
+            ? walkInName
+            : (isWalkInBuy ? walkInName : collectorName);
 
     double totalWeightKg = 0.0;
 
@@ -385,25 +459,30 @@ Future<void> _saveReceipt() async {
         return;
       }
     }
-    if (isSell) {
-  if (totalWeightKg < 4000) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Minimum sell weight is 4,000 kg."),
-      ),
-    );
-    return;
-  }
 
-  if (totalWeightKg > 18000) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Maximum sell weight is 18,000 kg."),
-      ),
-    );
-    return;
-  }
-}
+    if (isSell) {
+      if (totalWeightKg < _sellMinKg) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "Minimum sell weight for ${_selectedSellBranch ?? 'this branch'} is ${_sellMinKg.toStringAsFixed(0)} kg.",
+            ),
+          ),
+        );
+        return;
+      }
+
+      if (totalWeightKg > _sellMaxKg) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "Maximum sell weight for ${_selectedSellBranch ?? 'this branch'} is ${_sellMaxKg.toStringAsFixed(0)} kg.",
+            ),
+          ),
+        );
+        return;
+      }
+    }
 
     if (_hasInvalidSellWeight) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -475,7 +554,9 @@ Future<void> _saveReceipt() async {
       DocumentReference<Map<String, dynamic>>? sellReqRef;
       DocumentSnapshot<Map<String, dynamic>>? sellReqSnap;
 
-      // READS FIRST
+      DocumentReference<Map<String, dynamic>>? dropoffReqRef;
+      DocumentSnapshot<Map<String, dynamic>>? dropoffReqSnap;
+
       if (fromCollectorSellRequest && widget.sellRequestId != null) {
         sellReqRef = db
             .collection('Users')
@@ -484,6 +565,14 @@ Future<void> _saveReceipt() async {
             .doc(widget.sellRequestId);
 
         sellReqSnap = await trx.get(sellReqRef);
+      }
+
+      if (fromHouseholdDropoff && widget.sellRequestId != null) {
+        dropoffReqRef = db
+            .collection('dropoff_requests')
+            .doc(widget.sellRequestId);
+
+        dropoffReqSnap = await trx.get(dropoffReqRef);
       }
 
       final Map<String, DocumentSnapshot<Map<String, dynamic>>> sellInventorySnaps =
@@ -496,7 +585,6 @@ Future<void> _saveReceipt() async {
         }
       }
 
-      // VALIDATION AFTER ALL READS
       if (fromCollectorSellRequest &&
           widget.sellRequestId != null &&
           sellReqRef != null) {
@@ -514,10 +602,23 @@ Future<void> _saveReceipt() async {
         final collectorIdFromSellRequest =
             (sellReqData['collectorId'] ?? '').toString().trim();
 
-        final requestedKg = ((sellReqData['kg'] as num?) ?? 0).toDouble();
-
         if (collectorIdFromSellRequest.isEmpty) {
           throw Exception("Missing collectorId in sell request.");
+        }
+      }
+
+      if (fromHouseholdDropoff &&
+          widget.sellRequestId != null &&
+          dropoffReqRef != null) {
+        if (dropoffReqSnap == null || !dropoffReqSnap.exists) {
+          throw Exception("Drop-off request not found.");
+        }
+
+        final dropoffData = dropoffReqSnap.data() ?? {};
+        final status = (dropoffData['status'] ?? '').toString();
+
+        if (status == 'completed') {
+          throw Exception("This drop-off request was already completed.");
         }
       }
 
@@ -542,33 +643,33 @@ Future<void> _saveReceipt() async {
         }
       }
 
-      // BUILD RECEIPT ITEMS
       for (final it in _items) {
         final weightKg = double.tryParse(it.weightCtrl.text.trim()) ?? 0.0;
         final cat = normalizeCategoryKey(it.categoryValue ?? "");
         final sub = (it.subCategoryValue ?? "").trim();
 
         if (isSell) {
-            final sellPerKg = it.sellPricePerKg ?? (kFixedSellPricePerKg[cat] ?? 0.0);
-            final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
+          final sellPerKg =
+              it.sellPricePerKg ?? (kFixedSellPricePerKg[cat] ?? 0.0);
+          final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
 
-            final sellTotal = weightKg * sellPerKg;
-            final costTotal = weightKg * buyCostPerKg;
-            final profit = sellTotal - costTotal;
+          final sellTotal = weightKg * sellPerKg;
+          final costTotal = weightKg * buyCostPerKg;
+          final profit = sellTotal - costTotal;
 
-            itemsPayload.add({
-              'inventoryDocId': it.inventoryDocId,
-              'itemName': (it.sellPickedName ?? "").trim(),
-              'category': cat,
-              'subCategory': sub,
-              'weightKg': weightKg,
-              'sellPricePerKg': sellPerKg,
-              'sellTotal': sellTotal,
-              'costPerKg': buyCostPerKg,
-              'costTotal': costTotal,
-              'profit': profit,
-              'subtotal': sellTotal,
-            });
+          itemsPayload.add({
+            'inventoryDocId': it.inventoryDocId,
+            'itemName': (it.sellPickedName ?? "").trim(),
+            'category': cat,
+            'subCategory': sub,
+            'weightKg': weightKg,
+            'sellPricePerKg': sellPerKg,
+            'sellTotal': sellTotal,
+            'costPerKg': buyCostPerKg,
+            'costTotal': costTotal,
+            'profit': profit,
+            'subtotal': sellTotal,
+          });
         } else {
           final buyCostPerKg = kFixedBuyCostPerKg[cat] ?? 0.0;
           final costTotal = weightKg * buyCostPerKg;
@@ -585,7 +686,6 @@ Future<void> _saveReceipt() async {
         }
       }
 
-      // WRITES ONLY FROM HERE
       if (!isSell) {
         for (final entry in buyGroups.entries) {
           final key = entry.key;
@@ -625,25 +725,25 @@ Future<void> _saveReceipt() async {
         }
       }
 
-final grossAmount = _totalAmount;
-final transportCost = isSell ? _transportCost : 0.0;
-final netAmount = isSell ? _netSellAmount : _totalAmount;
+      final grossAmount = _totalAmount;
+      final transportCost = isSell ? _transportCost : 0.0;
+      final netAmount = isSell ? _netSellAmount : _totalAmount;
 
-final payload = <String, dynamic>{
-  'transactionType': _txType,
-  'customerName': partyName,
-  'items': itemsPayload,
-  'totalAmount': grossAmount,
-  'totalWeightKg': totalWeightKg,
-  'transactionDate': FieldValue.serverTimestamp(),
-  'createdAt': FieldValue.serverTimestamp(),
-};
+      final payload = <String, dynamic>{
+        'transactionType': _txType,
+        'customerName': partyName,
+        'items': itemsPayload,
+        'totalAmount': grossAmount,
+        'totalWeightKg': totalWeightKg,
+        'transactionDate': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      };
 
-if (isSell) {
-  payload['grossAmount'] = grossAmount;
-  payload['transportCost'] = transportCost;
-  payload['netAmount'] = netAmount;
-}
+      if (isSell) {
+        payload['grossAmount'] = grossAmount;
+        payload['transportCost'] = transportCost;
+        payload['netAmount'] = netAmount;
+      }
 
       if (!isSell) {
         payload['sourceType'] = sourceType;
@@ -659,6 +759,11 @@ if (isSell) {
         payload['receiptOrigin'] = 'collector_sell_request';
       }
 
+      if (fromHouseholdDropoff && widget.sellRequestId != null) {
+        payload['dropoffRequestId'] = widget.sellRequestId;
+        payload['receiptOrigin'] = 'household_dropoff';
+      }
+
       trx.set(txRef, payload);
 
       if (fromCollectorSellRequest &&
@@ -669,6 +774,23 @@ if (isSell) {
           {
             'status': 'completed',
             'seen': true,
+            'receiptSaved': true,
+            'receiptTransactionId': txRef.id,
+            'processedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      if (fromHouseholdDropoff &&
+          widget.sellRequestId != null &&
+          dropoffReqRef != null) {
+        trx.set(
+          dropoffReqRef,
+          {
+            'status': 'completed',
+            'readByJunkshop': true,
             'receiptSaved': true,
             'receiptTransactionId': txRef.id,
             'processedAt': FieldValue.serverTimestamp(),
@@ -703,6 +825,7 @@ if (isSell) {
         title: Text(isSell ? "Selling Transaction" : "Buying Transaction"),
       ),
       body: SingleChildScrollView(
+        controller: _scrollCtrl,
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -715,7 +838,7 @@ if (isSell) {
                   const SizedBox(height: 8),
                   if (isSell) ...[
                     DropdownButtonFormField<String>(
-                      value: _sellBranches.contains(_selectedSellBranch)
+                      initialValue: _sellBranches.contains(_selectedSellBranch)
                           ? _selectedSellBranch
                           : _sellBranches.first,
                       items: _sellBranches
@@ -734,7 +857,8 @@ if (isSell) {
                       style: const TextStyle(color: Colors.white),
                       decoration: _dropdownDecoration(""),
                     ),
-                  ] else if (_openedFromCollectorSellRequest || _isPrefilledCollectorBuy) ...[
+                  ] else if (_openedFromCollectorSellRequest ||
+                      _isPrefilledCollectorBuy) ...[
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
@@ -959,8 +1083,8 @@ if (isSell) {
                                 ],
                                 if (!isSell) ...[
                                   DropdownButtonFormField<String>(
-                                    value: item.categoryValue ??
-                                        kMajorCategories.first,
+                                    initialValue:
+                                        item.categoryValue ?? kMajorCategories.first,
                                     items: kMajorCategories
                                         .map(
                                           (c) => DropdownMenuItem(
@@ -984,7 +1108,7 @@ if (isSell) {
                                   _label("Sub-category"),
                                   const SizedBox(height: 6),
                                   DropdownButtonFormField<String>(
-                                    value: item.subCategoryValue ??
+                                    initialValue: item.subCategoryValue ??
                                         kBuySubCategories.first,
                                     items: kBuySubCategories
                                         .map(
@@ -1023,108 +1147,126 @@ if (isSell) {
                         ],
                       ),
                       const SizedBox(height: 12),
-                    Column(
-  crossAxisAlignment: CrossAxisAlignment.start,
-  children: [
-    Row(
-      children: [
-        Expanded(
-          child: _textField(
-            controller: item.weightCtrl,
-            label: "Weight (kg)",
-            hint: "0.0",
-            readOnly: _isLockedSellRequestItem(index),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            onChanged: (_) => setState(() {
-              if (isSell) {
-                _recalcSellItem(item, keepManualPrice: true);
-              } else {
-                _recalcBuyItem(item);
-              }
-            }),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _textField(
-            controller: item.subtotalCtrl,
-            label: isSell ? "Subtotal (₱)" : "Cost (₱)",
-            hint: "0.00",
-            readOnly: true,
-          ),
-        ),
-      ],
-    ),
-    if (isSell) ...[
-      const SizedBox(height: 10),
-      _label("Sell Price Per Kg"),
-      const SizedBox(height: 6),
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.2),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withOpacity(0.08)),
-        ),
-        child: Row(
-          children: [
-            IconButton(
-              onPressed: () {
-                setState(() {
-                  final current = item.sellPricePerKg ??
-                      (kFixedSellPricePerKg[
-                            normalizeCategoryKey(item.categoryValue ?? "")
-                          ] ??
-                          0.0);
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _textField(
+                                  controller: item.weightCtrl,
+                                  label: "Weight (kg)",
+                                  hint: "0.0",
+                                  readOnly: _isLockedSellRequestItem(index),
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                                  onChanged: (_) => setState(() {
+                                    if (isSell) {
+                                      _recalcSellItem(item, keepManualPrice: true);
+                                    } else {
+                                      _recalcBuyItem(item);
+                                    }
+                                  }),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _textField(
+                                  controller: item.subtotalCtrl,
+                                  label: isSell ? "Subtotal (₱)" : "Cost (₱)",
+                                  hint: "0.00",
+                                  readOnly: true,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (isSell) ...[
+                            const SizedBox(height: 10),
+                            _label("Sell Price Per Kg"),
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.08),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        final current = item.sellPricePerKg ??
+                                            (kFixedSellPricePerKg[
+                                                    normalizeCategoryKey(
+                                                      item.categoryValue ?? "",
+                                                    )
+                                                  ] ??
+                                                0.0);
 
-                  final next = current - 1;
-                  item.sellPricePerKg = next < 0 ? 0 : next;
-                  _recalcSellItem(item, keepManualPrice: true);
-                });
-              },
-              icon: const Icon(
-                Icons.keyboard_arrow_down_rounded,
-                color: Colors.redAccent,
-                size: 30,
-              ),
-            ),
-            Expanded(
-              child: Center(
-                child: Text(
-                  "₱${(item.sellPricePerKg ?? 0).toStringAsFixed(2)} / kg",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                ),
-              ),
-            ),
-            IconButton(
-              onPressed: () {
-                setState(() {
-                  final current = item.sellPricePerKg ??
-                      (kFixedSellPricePerKg[
-                            normalizeCategoryKey(item.categoryValue ?? "")
-                          ] ??
-                          0.0);
+                                        final next = current - 1;
+                                        item.sellPricePerKg = next < 0 ? 0 : next;
+                                        _recalcSellItem(
+                                          item,
+                                          keepManualPrice: true,
+                                        );
+                                      });
+                                    },
+                                    icon: const Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      color: Colors.redAccent,
+                                      size: 30,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Center(
+                                      child: Text(
+                                        "₱${(item.sellPricePerKg ?? 0).toStringAsFixed(2)} / kg",
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        final current = item.sellPricePerKg ??
+                                            (kFixedSellPricePerKg[
+                                                    normalizeCategoryKey(
+                                                      item.categoryValue ?? "",
+                                                    )
+                                                  ] ??
+                                                0.0);
 
-                  item.sellPricePerKg = current + 1;
-                  _recalcSellItem(item, keepManualPrice: true);
-                });
-              },
-              icon: const Icon(
-                Icons.keyboard_arrow_up_rounded,
-                color: Colors.greenAccent,
-                size: 30,
-              ),
-            ),
-          ],
-        ),
-      ),
-    ],
-  ],
-),
+                                        item.sellPricePerKg = current + 1;
+                                        _recalcSellItem(
+                                          item,
+                                          keepManualPrice: true,
+                                        );
+                                      });
+                                    },
+                                    icon: const Icon(
+                                      Icons.keyboard_arrow_up_rounded,
+                                      color: Colors.greenAccent,
+                                      size: 30,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -1174,7 +1316,22 @@ _glassCard(
           ),
         ],
       ),
+
       if (isSell) ...[
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            _selectedSellBranch == "ECO fortunes Cabuyao City"
+                ? "Allowed weight: 1,000–4,000 kg • Shipping fee: ₱4,000"
+                : "Allowed weight: 4,000–18,000 kg • Shipping fee depends on total weight",
+            style: const TextStyle(
+              color: Color(0xFF94A3B8),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
         const SizedBox(height: 10),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1195,38 +1352,16 @@ _glassCard(
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text(
-              "Net Amount",
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+                  ],
+                ],
               ),
             ),
-            Text(
-              "₱${_netSellAmount.toStringAsFixed(2)}",
-              style: const TextStyle(
-                color: Colors.greenAccent,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-      ],
-    ],
-  ),
-),
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
               height: 56,
               child: ElevatedButton(
-                onPressed:
-                    (_saving || _hasInvalidSellWeight) ? null : _saveReceipt,
+                onPressed: (_saving || _hasInvalidSellWeight) ? null : _saveReceipt,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: primaryColor,
                   shape: RoundedRectangleBorder(
@@ -1372,7 +1507,12 @@ class _SellInventoryGroup {
 
 class _InventoryPickerSheet extends StatefulWidget {
   final String shopID;
-  const _InventoryPickerSheet({required this.shopID});
+  final Set<String> excludedInventoryIds;
+
+  const _InventoryPickerSheet({
+    required this.shopID,
+    required this.excludedInventoryIds,
+  });
 
   @override
   State<_InventoryPickerSheet> createState() => _InventoryPickerSheetState();
@@ -1450,6 +1590,8 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
                   final unitsKg = (m['unitsKg'] as num?)?.toDouble() ?? 0.0;
 
                   if (unitsKg <= 0) return false;
+                  if (widget.excludedInventoryIds.contains(d.id)) return false;
+
                   if (q.isEmpty) return true;
 
                   final hay = [
