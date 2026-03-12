@@ -21,6 +21,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   final List<String> _categories = const [
     "All",
     "PP WHITE",
+    "PP TRANS",
     "HDPE",
     "PP COLOR",
     "PET",

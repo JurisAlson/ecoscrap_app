@@ -1,7 +1,6 @@
 // ===================== transactiondetailscreen.dart (UPDATED: Walk-in display) =====================
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 class TransactionDetailScreen extends StatefulWidget {
   final String shopID;

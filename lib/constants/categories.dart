@@ -2,8 +2,7 @@ const List<String> kMajorCategories = [
   "PP WHITE",
   "PP TRANS",
   "PP COLOR",
-  "PP",
-  "HD",
+  "HDPE",
   "PET",
 ];
 

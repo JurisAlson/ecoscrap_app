@@ -580,7 +580,7 @@ class _OrderCard extends StatelessWidget {
                 style: TextStyle(color: Colors.white),
               ),
               content: DropdownButtonFormField<String>(
-                value: selectedReason,
+                initialValue: selectedReason,
                 dropdownColor: bgColor,
                 decoration: InputDecoration(
                   filled: true,

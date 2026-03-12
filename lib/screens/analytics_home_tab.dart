@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../constants/categories.dart';
 
@@ -31,6 +32,26 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
   bool get wantKeepAlive => true;
 
   final Color primaryColor = const Color(0xFF1FA9A7);
+
+  final NumberFormat _currencyFormat = NumberFormat.currency(
+    locale: 'en_PH',
+    symbol: '₱',
+    decimalDigits: 2,
+  );
+
+  final NumberFormat _number2Format = NumberFormat('#,##0.00');
+  final NumberFormat _wholeNumberFormat = NumberFormat('#,##0');
+  final NumberFormat _compactFormat = NumberFormat.compact();
+
+  String _formatCurrency(num value) => _currencyFormat.format(value);
+
+  String _formatKg(num value) => '${_number2Format.format(value)} kg';
+
+  String _formatChartNumber(num value) {
+    if (value >= 1000) return _compactFormat.format(value);
+    if (value % 1 == 0) return _wholeNumberFormat.format(value);
+    return _number2Format.format(value);
+  }
 
   int _selectedMonth = DateTime.now().month;
 
@@ -285,17 +306,17 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               children: [
                 _metricRow(
                   leftTitle: "Revenue",
-                  leftValue: "₱${revenue.toStringAsFixed(2)}",
+                  leftValue: _formatCurrency(revenue),
                   rightTitle: "Profit",
-                  rightValue: "₱${profit.toStringAsFixed(2)}",
+                  rightValue: _formatCurrency(profit),
                   rightValueColor: const Color(0xFF00E676),
                 ),
                 const SizedBox(height: 10),
                 _metricRow(
                   leftTitle: "Cost",
-                  leftValue: "₱${cost.toStringAsFixed(2)}",
+                  leftValue: _formatCurrency(cost),
                   rightTitle: "Sales Count",
-                  rightValue: "$salesCount",
+                  rightValue: _wholeNumberFormat.format(salesCount),
                 ),
                 const SizedBox(height: 16),
                 _card(
@@ -330,14 +351,14 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                                 ),
                               ),
                               Text(
-                                "₱${p.toStringAsFixed(2)}",
+                                _formatCurrency(p),
                                 style: const TextStyle(
                                   color: Colors.greenAccent,
                                 ),
                               ),
                               const SizedBox(width: 10),
                               Text(
-                                "₱${r.toStringAsFixed(2)}",
+                                _formatCurrency(r),
                                 style: const TextStyle(color: Colors.white),
                               ),
                             ],
@@ -487,12 +508,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               reservedSize: 42,
               interval: maxY <= 0 ? 1 : (maxY / 3),
               getTitlesWidget: (value, meta) {
-                String label;
-                if (value >= 1000) {
-                  label = "${(value / 1000).toStringAsFixed(1)}k";
-                } else {
-                  label = value.toStringAsFixed(0);
-                }
+                final label = _formatChartNumber(value);
                 return Text(
                   label,
                   style:
@@ -594,12 +610,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               reservedSize: 42,
               interval: maxY <= 0 ? 1 : (maxY / 3),
               getTitlesWidget: (value, meta) {
-                String label;
-                if (value >= 1000) {
-                  label = "${(value / 1000).toStringAsFixed(1)}k";
-                } else {
-                  label = value.toStringAsFixed(0);
-                }
+                final label = _formatChartNumber(value);
                 return Text(
                   label,
                   style:
@@ -664,7 +675,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
             Expanded(
               child: _miniStatCard(
                 title: "Total Stock",
-                value: "${totalKg.toStringAsFixed(2)} kg",
+                value: _formatKg(totalKg),
               ),
             ),
             const SizedBox(width: 10),
@@ -672,7 +683,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
               child: _miniStatCard(
                 title: "Highest Category",
                 value: top.key,
-                subValue: "${top.value.toStringAsFixed(2)} kg",
+                subValue: _formatKg(top.value),
               ),
             ),
           ],
@@ -702,7 +713,7 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
                         ),
                       ),
                       Text(
-                        "${e.value.toStringAsFixed(2)} kg",
+                        _formatKg(e.value),
                         style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 11,
