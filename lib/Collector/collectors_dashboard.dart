@@ -883,7 +883,7 @@
                         Expanded(
                           child: _summaryCard(
                             title: "Limit",
-                            value: "5",
+                            value: "20",
                             icon: Icons.layers_outlined,
                           ),
                         ),
@@ -1300,6 +1300,7 @@
       final status = (data['status'] ?? '').toString().toLowerCase();
       final name = (data['householdName'] ?? 'Household').toString();
       final address = (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
+      final phoneNumber = (data['phoneNumber'] ?? '').toString();
       final queueNumber = data['queueNumber'];
 
       final bagLabel = (data['bagLabel'] ?? '').toString();
@@ -1374,6 +1375,28 @@
                     child: Text(
                       address,
                       maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: textMuted,
+                        fontSize: 12,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (phoneNumber.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.phone_outlined, size: 16, color: textMuted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      phoneNumber,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: textMuted,
@@ -1703,6 +1726,7 @@
                                       (data['householdName'] ?? 'Household').toString();
                                   final address =
                                       (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
+                                  final phoneNumber = (data['phoneNumber'] ?? '').toString();
 
                                   return Container(
                                     margin: const EdgeInsets.only(bottom: 10),
@@ -1737,6 +1761,15 @@
                                                     fontSize: 11,
                                                   ),
                                                 ),
+                                              if (phoneNumber.isNotEmpty)
+                                              Text(
+                                                "Mobile: $phoneNumber",
+                                                style: TextStyle(
+                                                  color: Colors.grey.shade300,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),  
                                             ],
                                           ),
                                         ),
@@ -1819,14 +1852,16 @@
               data['name'] ??
               "Unknown")
           .toString();
-
+      final phoneNumber = (data['phoneNumber'] ?? '').toString();
       final title = _statusToTitle(status);
       final ts = _pickBestTimestamp(data, status);
       final timeText = _formatTimestamp(ts);
 
       return _logCard(
         title: title,
-        subtitle: "Name: $name",
+        subtitle: phoneNumber.isNotEmpty
+            ? "Name: $name\nMobile: $phoneNumber"
+            : "Name: $name",
         time: timeText,
         icon: _statusToIcon(status),
         iconBg: _statusToIconBg(status),

@@ -173,6 +173,7 @@ class _CollectorNotificationsPageState
 
     final scheduleText = _formatPickupSchedule(data);
     final source = (data['pickupSource'] ?? '').toString();
+    final phoneNumber = (data['phoneNumber'] ?? '').toString();
 
     final choice = await showDialog<String>(
       context: context,
@@ -181,12 +182,14 @@ class _CollectorNotificationsPageState
         content: SingleChildScrollView(
           child: Text(
             "Household: $household\n"
+            "${phoneNumber.isNotEmpty ? "Mobile: $phoneNumber\n" : ""}"
             "Address: $address\n"
             "${bagLabel.isNotEmpty ? "Bag: $bagLabel${bagKgNum != null ? " (${bagKgNum.toStringAsFixed(1)} kg)" : ""}\n" : ""}"
             "${distanceKm != null ? "Distance: ${distanceKm.toStringAsFixed(2)} km\n" : ""}"
             "${etaMinutes != null ? "ETA: $etaMinutes min\n" : ""}"
             "Schedule: $scheduleText\n"
             "${source.isNotEmpty ? "Pickup Source: $source\n" : ""}",
+            
           ),
         ),
         actionsAlignment: MainAxisAlignment.spaceBetween,
@@ -692,6 +695,7 @@ class _CollectorNotificationsPageState
                                             .toString();
                                     final address =
                                         (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
+                                    final phoneNumber = (data['phoneNumber'] ?? '').toString();
 
                                     final bagLabel =
                                         (data['bagLabel'] ?? '').toString();
@@ -767,18 +771,27 @@ class _CollectorNotificationsPageState
                                                       ),
                                                       const SizedBox(height: 4),
                                                       Text(
-                                                        address.isEmpty
-                                                            ? "No address"
-                                                            : address,
+                                                        address.isEmpty ? "No address" : address,
                                                         maxLines: 2,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
+                                                        overflow: TextOverflow.ellipsis,
                                                         style: TextStyle(
-                                                          color: Colors
-                                                              .grey.shade400,
+                                                          color: Colors.grey.shade400,
                                                           fontSize: 12,
                                                         ),
                                                       ),
+                                                      if (phoneNumber.isNotEmpty) ...[
+                                                        const SizedBox(height: 4),
+                                                        Text(
+                                                          "Mobile: $phoneNumber",
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          style: TextStyle(
+                                                            color: Colors.grey.shade300,
+                                                            fontSize: 12,
+                                                            fontWeight: FontWeight.w600,
+                                                          ),
+                                                        ),
+                                                      ],
                                                     ],
                                                   ),
                                                 ),
