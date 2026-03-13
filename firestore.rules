@@ -1011,104 +1011,104 @@ service cloud.firestore {
             ])
         && request.resource.data.hasCollectorReceipt == true
       )
-
-     
-
       || isAdmin()
-    );
+      );
+
+      allow delete: if false;
+    }
 
 
-// ==========================================================
-// DROPOFF REQUESTS
-// ==========================================================
-match /dropoff_requests/{requestId} {
+    // ==========================================================
+    // DROPOFF REQUESTS
+    // ==========================================================
+    match /dropoff_requests/{requestId} {
 
-  allow create: if signedIn()
-    && request.resource.data.householdId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.householdId == request.auth.uid;
 
-  allow read: if signedIn() && (
-    resource.data.householdId == request.auth.uid
-    || resource.data.junkshopId == request.auth.uid
-    || isAdmin()
-  );
+      allow read: if signedIn() && (
+        resource.data.householdId == request.auth.uid
+        || resource.data.junkshopId == request.auth.uid
+        || isAdmin()
+      );
 
-  allow update: if signedIn() && (
+      allow update: if signedIn() && (
 
-    // household marks arrived
-    (
-      resource.data.householdId == request.auth.uid
-      && resource.data.status == "en_route"
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "status",
-        "arrived",
-        "active",
-        "arrivedAt",
-        "updatedAt",
-        "readByJunkshop"
-      ])
-      && request.resource.data.status == "arrived"
-      && request.resource.data.arrived == true
-      && request.resource.data.active == false
-      && request.resource.data.readByJunkshop == false
-    )
+        // household marks arrived
+        (
+          resource.data.householdId == request.auth.uid
+          && resource.data.status == "en_route"
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "status",
+            "arrived",
+            "active",
+            "arrivedAt",
+            "updatedAt",
+            "readByJunkshop"
+          ])
+          && request.resource.data.status == "arrived"
+          && request.resource.data.arrived == true
+          && request.resource.data.active == false
+          && request.resource.data.readByJunkshop == false
+        )
 
-    ||
+        ||
 
-    // household cancels drop-off
-    (
-      resource.data.householdId == request.auth.uid
-      && resource.data.status == "en_route"
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "active",
-        "status",
-        "cancelReason",
-        "cancelledAt",
-        "updatedAt",
-        "readByJunkshop"
-      ])
-      && request.resource.data.active == false
-      && request.resource.data.status == "cancelled"
-      && request.resource.data.cancelReason is string
-      && request.resource.data.cancelReason.size() > 0
-      && request.resource.data.readByJunkshop == false
-    )
+        // household cancels drop-off
+        (
+          resource.data.householdId == request.auth.uid
+          && resource.data.status == "en_route"
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "active",
+            "status",
+            "cancelReason",
+            "cancelledAt",
+            "updatedAt",
+            "readByJunkshop"
+          ])
+          && request.resource.data.active == false
+          && request.resource.data.status == "cancelled"
+          && request.resource.data.cancelReason is string
+          && request.resource.data.cancelReason.size() > 0
+          && request.resource.data.readByJunkshop == false
+        )
 
-    ||
+        ||
 
-    // junkshop marks notification as read
-    (
-      resource.data.junkshopId == request.auth.uid
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "readByJunkshop",
-        "updatedAt"
-      ])
-      && request.resource.data.readByJunkshop is bool
-    )
+        // junkshop marks notification as read
+        (
+          resource.data.junkshopId == request.auth.uid
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "readByJunkshop",
+            "updatedAt"
+          ])
+          && request.resource.data.readByJunkshop is bool
+        )
 
-    ||
+        ||
 
-    // junkshop completes drop-off after saving receipt
-    (
-      resource.data.junkshopId == request.auth.uid
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "status",
-        "readByJunkshop",
-        "receiptSaved",
-        "receiptTransactionId",
-        "processedAt",
-        "updatedAt"
-      ])
-      && request.resource.data.status == "completed"
-      && request.resource.data.readByJunkshop == true
-    )
+        // junkshop completes drop-off after saving receipt
+        (
+          resource.data.junkshopId == request.auth.uid
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "status",
+            "readByJunkshop",
+            "receiptSaved",
+            "receiptTransactionId",
+            "processedAt",
+            "updatedAt"
+          ])
+          && request.resource.data.status == "completed"
+          && request.resource.data.readByJunkshop == true
+        )
 
-    ||
+        ||
 
-    isAdmin()
-  );
+        isAdmin()
+      );
 
-  allow delete: if false;
-}
+      allow delete: if false;
+    }
 
     // -------------------------
     // REQUESTS COLLECTOR_RECEIPTS
