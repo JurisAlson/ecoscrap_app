@@ -16,6 +16,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   String _query = "";
   String _selectedCategory = "All";
 
+  final NumberFormat _numberFormat = NumberFormat('#,##0.##');
+
+  String _formatKg(num value) => '${_numberFormat.format(value)} kg';
+
   final TextEditingController _searchController = TextEditingController();
 
   final List<String> _categories = const [
@@ -326,13 +330,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ),
               const SizedBox(height: 2),
               Text(
-                "${unitsKg.toStringAsFixed(2)} kg",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15,
-                ),
-              ),
+  _formatKg(unitsKg),
+  style: const TextStyle(
+    color: Colors.white,
+    fontWeight: FontWeight.w700,
+    fontSize: 15,
+  ),
+),
             ],
           ),
         ],

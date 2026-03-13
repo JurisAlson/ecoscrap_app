@@ -4,7 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-
 import '../constants/categories.dart';
 
 class AnalyticsHomeTab extends StatefulWidget {
@@ -33,37 +32,36 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
 
   final Color primaryColor = const Color(0xFF1FA9A7);
 
-  final NumberFormat _currencyFormat = NumberFormat.currency(
-    locale: 'en_PH',
-    symbol: '₱',
-    decimalDigits: 2,
-  );
+final NumberFormat _numberFormat = NumberFormat('#,##0.##');
+final NumberFormat _wholeNumberFormat = NumberFormat('#,##0');
+final NumberFormat _compactFormat = NumberFormat.compact();
 
-  final NumberFormat _number2Format = NumberFormat('#,##0.00');
-  final NumberFormat _wholeNumberFormat = NumberFormat('#,##0');
-  final NumberFormat _compactFormat = NumberFormat.compact();
+int _selectedYear = DateTime.now().year;
 
-  String _formatCurrency(num value) => _currencyFormat.format(value);
-
-  String _formatKg(num value) => '${_number2Format.format(value)} kg';
-
-  String _formatChartNumber(num value) {
-    if (value >= 1000) return _compactFormat.format(value);
-    if (value % 1 == 0) return _wholeNumberFormat.format(value);
-    return _number2Format.format(value);
+String _formatCurrency(num value) {
+  if (value % 1 == 0) {
+    return '₱${_wholeNumberFormat.format(value)}';
   }
+  return '₱${_numberFormat.format(value)}';
+}
+
+String _formatKg(num value) => '${_numberFormat.format(value)} kg';
+
+String _formatChartNumber(num value) {
+  if (value >= 1000) return _compactFormat.format(value);
+  if (value % 1 == 0) return _wholeNumberFormat.format(value);
+  return _numberFormat.format(value);
+}
 
   int _selectedMonth = DateTime.now().month;
 
-  DateTime _monthStart(int month) {
-    final now = DateTime.now();
-    return DateTime(now.year, month, 1);
-  }
+DateTime _monthStart(int month) {
+  return DateTime(_selectedYear, month, 1);
+}
 
-  DateTime _monthEndExclusive(int month) {
-    final now = DateTime.now();
-    return DateTime(now.year, month + 1, 1);
-  }
+DateTime _monthEndExclusive(int month) {
+  return DateTime(_selectedYear, month + 1, 1);
+}
 
   int _daysInMonth(DateTime start) {
     final end = DateTime(start.year, start.month + 1, 1);
@@ -832,101 +830,152 @@ class _AnalyticsHomeTabState extends State<AnalyticsHomeTab>
   }
 
   Widget _buildMonthSelector() {
-    const months = [
-      "JAN",
-      "FEB",
-      "MAR",
-      "APR",
-      "MAY",
-      "JUN",
-      "JUL",
-      "AUG",
-      "SEP",
-      "OCT",
-      "NOV",
-      "DEC"
-    ];
+  const months = [
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC"
+  ];
 
-    final selectedLabel = months[_selectedMonth - 1];
+  final currentYear = DateTime.now().year;
+  final years = List.generate(5, (i) => currentYear - i);
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Selected Month",
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
+  final selectedLabel = months[_selectedMonth - 1];
+
+  return Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(0.05),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: Colors.white.withOpacity(0.06)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Selected Period",
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
           ),
-          const SizedBox(height: 4),
-          Text(
-            "Viewing analytics for $selectedLabel",
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 12,
-              height: 1.2,
-            ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          "Viewing analytics for $selectedLabel $_selectedYear",
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+            height: 1.2,
           ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 36,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: months.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final monthNumber = index + 1;
-                final isSelected = monthNumber == _selectedMonth;
+        ),
+        const SizedBox(height: 12),
 
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedMonth = monthNumber),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeOutCubic,
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      gradient: isSelected
-                          ? const LinearGradient(
-                              colors: [Color(0xFF1FA9A7), Colors.green],
-                            )
-                          : null,
-                      color:
-                          isSelected ? null : Colors.white.withOpacity(0.06),
-                      border: Border.all(
-                        color: isSelected
-                            ? Colors.white.withOpacity(0.18)
-                            : Colors.white.withOpacity(0.10),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      months[index],
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.6,
-                        color: isSelected ? Colors.white : Colors.white70,
-                      ),
+        SizedBox(
+          height: 36,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: years.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final year = years[index];
+              final isSelected = year == _selectedYear;
+
+              return GestureDetector(
+                onTap: () => setState(() => _selectedYear = year),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    gradient: isSelected
+                        ? const LinearGradient(
+                            colors: [Color(0xFF1FA9A7), Colors.green],
+                          )
+                        : null,
+                    color: isSelected ? null : Colors.white.withOpacity(0.06),
+                    border: Border.all(
+                      color: isSelected
+                          ? Colors.white.withOpacity(0.18)
+                          : Colors.white.withOpacity(0.10),
                     ),
                   ),
-                );
-              },
-            ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    "$year",
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.6,
+                      color: isSelected ? Colors.white : Colors.white70,
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
-        ],
-      ),
-    );
-  }
+        ),
+
+        const SizedBox(height: 12),
+
+        SizedBox(
+          height: 36,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: months.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final monthNumber = index + 1;
+              final isSelected = monthNumber == _selectedMonth;
+
+              return GestureDetector(
+                onTap: () => setState(() => _selectedMonth = monthNumber),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    gradient: isSelected
+                        ? const LinearGradient(
+                            colors: [Color(0xFF1FA9A7), Colors.green],
+                          )
+                        : null,
+                    color: isSelected ? null : Colors.white.withOpacity(0.06),
+                    border: Border.all(
+                      color: isSelected
+                          ? Colors.white.withOpacity(0.18)
+                          : Colors.white.withOpacity(0.10),
+                    ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    months[index],
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.6,
+                      color: isSelected ? Colors.white : Colors.white70,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _sectionTitle(String t) => Padding(
         padding: const EdgeInsets.only(bottom: 10),

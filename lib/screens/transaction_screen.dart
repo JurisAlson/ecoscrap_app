@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'receipt_screen.dart' as receipt;
 import 'transactiondetailscreen.dart';
+import 'package:intl/intl.dart';
 
 class TransactionScreen extends StatefulWidget {
   final String shopID;
@@ -16,6 +17,16 @@ class TransactionScreen extends StatefulWidget {
 class _TransactionScreenState extends State<TransactionScreen> {
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
+
+  final NumberFormat _numberFormat = NumberFormat('#,##0.##');
+  final NumberFormat _wholeNumberFormat = NumberFormat('#,##0');
+
+  String _formatPrice(num value) {
+    if (value % 1 == 0) {
+      return '₱${_wholeNumberFormat.format(value)}';
+    }
+    return '₱${_numberFormat.format(value)}';
+  }
 
   String _txType = "sell";
   String _q = "";
@@ -735,16 +746,16 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                             ),
                                           ),
                                           const SizedBox(height: 8),
-                                          Text(
-                                            "₱${total.toStringAsFixed(2)}",
-                                            style: TextStyle(
-                                              color: isSale
-                                                  ? Colors.greenAccent
-                                                  : Colors.orangeAccent,
-                                              fontWeight: FontWeight.w800,
-                                              fontSize: 14,
-                                            ),
-                                          ),
+Text(
+  _formatPrice(total),
+  style: TextStyle(
+    color: isSale
+        ? Colors.greenAccent
+        : Colors.orangeAccent,
+    fontWeight: FontWeight.w800,
+    fontSize: 14,
+  ),
+),
                                         ],
                                       ),
                                     ),

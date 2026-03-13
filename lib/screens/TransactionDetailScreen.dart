@@ -1,6 +1,7 @@
 // ===================== transactiondetailscreen.dart (UPDATED: Walk-in display) =====================
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 class TransactionDetailScreen extends StatefulWidget {
   final String shopID;
@@ -19,6 +20,31 @@ class TransactionDetailScreen extends StatefulWidget {
 class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
   static const Color bgColor = Color(0xFF0F172A);
   static const Color primaryColor = Color(0xFF1FA9A7);
+
+final NumberFormat _php = NumberFormat.currency(
+  locale: 'en_PH',
+  symbol: '₱',
+  decimalDigits: 0,
+);
+
+final NumberFormat _num2 = NumberFormat('#,##0.##');
+
+String _formatMoney(num value) {
+  if (value % 1 == 0) {
+    return NumberFormat.currency(
+      locale: 'en_PH',
+      symbol: '₱',
+      decimalDigits: 0,
+    ).format(value);
+  }
+
+  return NumberFormat.currency(
+    locale: 'en_PH',
+    symbol: '₱',
+    decimalDigits: 2,
+  ).format(value);
+}
+String _formatKg(num value) => '${_num2.format(value)} kg';
 
   String _formatDate(DateTime d) {
     final y = d.year.toString().padLeft(4, '0');
@@ -200,14 +226,14 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  "${weight.toStringAsFixed(2)} kg",
+                                  _formatKg(weight),
                                   style: const TextStyle(color: Colors.grey),
                                 ),
                               ],
                             ),
                           ),
                           Text(
-                            "₱${subtotal.toStringAsFixed(2)}",
+                            _formatMoney(subtotal),
                             style: TextStyle(
                               color: isSale ? Colors.greenAccent : Colors.orangeAccent,
                               fontWeight: FontWeight.bold,
@@ -233,7 +259,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
                         ),
                       ),
                       Text(
-                        "${totalKg.toStringAsFixed(2)} kg",
+                        _formatKg(totalKg),
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -261,7 +287,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
                           ),
                         ),
                         Text(
-                          "₱${totalAmount.toStringAsFixed(2)}",
+                          _formatMoney(totalAmount),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
