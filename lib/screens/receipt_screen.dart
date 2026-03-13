@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../constants/categories.dart';
+import 'package:intl/intl.dart';
 
 class ReceiptScreen extends StatefulWidget {
   final String shopID;
@@ -23,6 +24,8 @@ class ReceiptScreen extends StatefulWidget {
     this.prefillSourceType,
   });
 
+  
+
   @override
   State<ReceiptScreen> createState() => _ReceiptScreenState();
 }
@@ -36,6 +39,27 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   final TextEditingController _customerCtrl = TextEditingController();
 
   final ScrollController _scrollCtrl = ScrollController();
+
+final NumberFormat _num2 = NumberFormat('#,##0.##');
+
+String _formatMoney(num value) {
+  if (value % 1 == 0) {
+    return NumberFormat.currency(
+      locale: 'en_PH',
+      symbol: '₱',
+      decimalDigits: 0,
+    ).format(value);
+  }
+
+  return NumberFormat.currency(
+    locale: 'en_PH',
+    symbol: '₱',
+    decimalDigits: 2,
+  ).format(value);
+}
+
+String _formatKg(num value) => '${_num2.format(value)} kg';
+String _formatNumber(num value) => _num2.format(value);
 
   bool _saving = false;
   String _txType = "sell"; // sell | buy
@@ -172,7 +196,7 @@ double get _sellMaxKg {
     it.buyCostPerKg = costPerKg;
 
     final totalCost = kg * costPerKg;
-    it.subtotalCtrl.text = totalCost.toStringAsFixed(2);
+    it.subtotalCtrl.text = _formatNumber(totalCost);
   }
 
   void _recalcSellItem(_ReceiptItem it, {bool keepManualPrice = true}) {
@@ -189,7 +213,7 @@ double get _sellMaxKg {
 
     final sellPerKg = it.sellPricePerKg ?? defaultSellPerKg;
     final sellTotal = kg * sellPerKg;
-    it.subtotalCtrl.text = sellTotal.toStringAsFixed(2);
+    it.subtotalCtrl.text = _formatNumber(sellTotal);
   }
 
   Future<void> _addItem() async {
@@ -465,7 +489,7 @@ double get _sellMaxKg {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "Minimum sell weight for ${_selectedSellBranch ?? 'this branch'} is ${_sellMinKg.toStringAsFixed(0)} kg.",
+              "Minimum sell weight for ${_selectedSellBranch ?? 'this branch'} is ${_formatNumber(_sellMinKg)} kg.",
             ),
           ),
         );
@@ -476,7 +500,7 @@ double get _sellMaxKg {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "Maximum sell weight for ${_selectedSellBranch ?? 'this branch'} is ${_sellMaxKg.toStringAsFixed(0)} kg.",
+              "Maximum sell weight for ${_selectedSellBranch ?? 'this branch'} is ${_formatNumber(_sellMaxKg)} kg.",
             ),
           ),
         );
@@ -637,7 +661,7 @@ double get _sellMaxKg {
           if (currentKg < group.totalKg) {
             final itemName = (invData['name'] ?? group.itemName).toString();
             throw Exception(
-              "Not enough stock for $itemName. Available: ${currentKg.toStringAsFixed(2)} kg",
+              "Not enough stock for $itemName. Available: ${_formatKg(currentKg)}",
             );
           }
         }
@@ -1046,7 +1070,7 @@ double get _sellMaxKg {
                                           MainAxisAlignment.spaceBetween,
                                       children: [
                                         Text(
-                                          "Available: ${item.availableKg.toStringAsFixed(2)} kg",
+                                          "Available: ${_formatKg(item.availableKg)}",
                                           style: const TextStyle(
                                             color: Color(0xFF94A3B8),
                                             fontSize: 12,
@@ -1054,7 +1078,7 @@ double get _sellMaxKg {
                                           ),
                                         ),
                                         Text(
-                                          "Remaining: ${_remainingSellKg(item).toStringAsFixed(2)} kg",
+                                          "Remaining: ${_formatKg(_remainingSellKg(item))}",
                                           style: TextStyle(
                                             color: _isSellItemOverStock(item)
                                                 ? Colors.redAccent
@@ -1228,7 +1252,7 @@ double get _sellMaxKg {
                                   Expanded(
                                     child: Center(
                                       child: Text(
-                                        "₱${(item.sellPricePerKg ?? 0).toStringAsFixed(2)} / kg",
+                                        "${_formatMoney(item.sellPricePerKg ?? 0)} / kg",
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontWeight: FontWeight.bold,
@@ -1287,7 +1311,7 @@ _glassCard(
             ),
           ),
           Text(
-            "₱${_totalAmount.toStringAsFixed(2)}",
+            _formatMoney(_totalAmount),
             style: TextStyle(
               color: primaryColor,
               fontSize: 18,
@@ -1308,7 +1332,7 @@ _glassCard(
             ),
           ),
           Text(
-            "${_totalWeightKg.toStringAsFixed(2)} kg",
+            _formatKg(_totalWeightKg),
             style: const TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.w700,
@@ -1344,7 +1368,7 @@ _glassCard(
               ),
             ),
             Text(
-              "- ₱${_transportCost.toStringAsFixed(2)}",
+              "- ${_formatMoney(_transportCost)}",
               style: const TextStyle(
                 color: Colors.redAccent,
                 fontWeight: FontWeight.w700,
@@ -1469,7 +1493,10 @@ class _ReceiptItem {
 
   double availableKg = 0.0;
 
-  double get subtotal => double.tryParse(subtotalCtrl.text.trim()) ?? 0.0;
+  double get subtotal {
+    final raw = subtotalCtrl.text.trim().replaceAll(',', '');
+    return double.tryParse(raw) ?? 0.0;
+  }
 
   void dispose() {
     weightCtrl.dispose();
@@ -1520,6 +1547,9 @@ class _InventoryPickerSheet extends StatefulWidget {
 
 class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
   String q = "";
+
+  final NumberFormat _num2 = NumberFormat('#,##0.##');
+  String _formatKg(num value) => '${_num2.format(value)} kg';
 
   @override
   Widget build(BuildContext context) {
@@ -1637,7 +1667,7 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
                         style: const TextStyle(color: Colors.white),
                       ),
                       subtitle: Text(
-                        "$category • $subCategory • ${unitsKg.toStringAsFixed(2)} kg",
+                        "$category • $subCategory • ${_formatKg(unitsKg)}",
                         style: const TextStyle(color: Colors.grey),
                       ),
                       onTap: () {

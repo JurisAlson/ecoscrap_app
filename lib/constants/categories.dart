@@ -15,7 +15,7 @@ const List<String> kBuySubCategories = [
 ];
 
 const Map<String, double> kFixedBuyCostPerKg = {
-  "HD": 13.0,
+  "HDPE": 13.0,
   "PP": 13.0,
   "PP WHITE": 13.0,
   "PP TRANS": 13.0,
@@ -28,7 +28,7 @@ const Map<String, double> kFixedSellPricePerKg = {
   "PP TRANS": 42.0,
   "PP COLOR": 30.0,
   "PET": 23.0,
-  "HD": 50.0,
+  "HDPE": 50.0,
   "PP": 30.0,
 };
 
@@ -61,8 +61,8 @@ String normalizeCategoryKey(String raw) {
 
     'PP': 'PP',
 
-    'HD': 'HD',
-    'HDPE': 'HD',
+'HD': 'HDPE',
+'HDPE': 'HDPE',
 
     'PET': 'PET',
     'PETE': 'PET',
