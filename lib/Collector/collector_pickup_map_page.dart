@@ -30,6 +30,7 @@ class PickupStop {
   final String status;
   final String bagLabel;
   final int? bagKg;
+  final String phoneNumber;
   final bool hasCollectorReceipt;
   final Timestamp? acceptedAt;
 
@@ -43,6 +44,7 @@ class PickupStop {
     required this.status,
     required this.bagLabel,
     required this.bagKg,
+    required this.phoneNumber,
     required this.hasCollectorReceipt,
     required this.acceptedAt,
   });
@@ -59,6 +61,7 @@ class PickupStop {
     String? status,
     String? bagLabel,
     int? bagKg,
+    String? phoneNumber,
     bool? hasCollectorReceipt,
     Timestamp? acceptedAt,
   }) {
@@ -72,6 +75,7 @@ class PickupStop {
       status: status ?? this.status,
       bagLabel: bagLabel ?? this.bagLabel,
       bagKg: bagKg ?? this.bagKg,
+      phoneNumber: phoneNumber ?? this.phoneNumber,
       hasCollectorReceipt: hasCollectorReceipt ?? this.hasCollectorReceipt,
       acceptedAt: acceptedAt ?? this.acceptedAt,
     );
@@ -104,6 +108,7 @@ class PickupStop {
       status: (data['status'] ?? '').toString(),
       bagLabel: (data['bagLabel'] ?? '').toString(),
       bagKg: parsedBagKg,
+      phoneNumber: (data['phoneNumber'] ?? '').toString(),
       hasCollectorReceipt: data['hasCollectorReceipt'] == true,
       acceptedAt: data['acceptedAt'] is Timestamp ? data['acceptedAt'] as Timestamp : null,
     );
@@ -495,6 +500,27 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     } catch (e) {
       debugPrint("❌ getDirections crashed: $e");
       return null;
+    }
+  }
+  Future<void> _callCurrentStop() async {
+    final stop = _currentStop;
+    if (stop == null || stop.phoneNumber.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No mobile number available.")),
+      );
+      return;
+    }
+
+    final uri = Uri(scheme: 'tel', path: stop.phoneNumber.trim());
+
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Could not open dialer.")),
+      );
     }
   }
 
@@ -1145,6 +1171,11 @@ Future<void> _openJunkshopChat() async {
                                                     ? "Address: —"
                                                     : currentStop.pickupAddress,
                                               ),
+                                              if (currentStop.phoneNumber.isNotEmpty)
+                                              _pillChip(
+                                                icon: Icons.phone_outlined,
+                                                text: "Mobile: ${currentStop.phoneNumber}",
+                                              ),
                                             ],
                                           ),
                                         ),
@@ -1323,6 +1354,18 @@ Future<void> _openJunkshopChat() async {
                             border: Colors.white.withOpacity(0.14),
                             onTap: _openGoogleMapsNavigation,
                           ),
+                          const SizedBox(height: 10),
+
+                          if (currentStop?.phoneNumber.trim().isNotEmpty == true)
+                            _actionWide(
+                              icon: Icons.call_outlined,
+                              title: "CALL",
+                              subtitle: "Contact household",
+                              bg: Colors.white.withOpacity(0.10),
+                              fg: Colors.white,
+                              border: Colors.white.withOpacity(0.14),
+                              onTap: _callCurrentStop,
+                            ),
 
                           const SizedBox(height: 10),
 
@@ -1419,6 +1462,17 @@ Future<void> _openJunkshopChat() async {
                     fontSize: 12,
                   ),
                 ),
+                if (stop.phoneNumber.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    "Mobile: ${stop.phoneNumber}",
+                    style: TextStyle(
+                      color: Colors.grey.shade300,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
                 Text(
                   "Status: ${stop.status.toUpperCase()}",
