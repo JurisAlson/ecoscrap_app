@@ -454,8 +454,8 @@ class _BuyFormState extends State<_BuyForm> {
                     _saving
                         ? "SAVING..."
                         : alreadyReceipted
-                            ? "RECEIPT ALREADY SAVED"
-                            : "SAVE BUY RECEIPT",
+                            ? "TRANSACTION ALREADY SAVED"
+                            : "SAVE",
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,

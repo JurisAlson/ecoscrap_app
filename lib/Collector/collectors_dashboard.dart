@@ -3,7 +3,6 @@
   import 'package:firebase_auth/firebase_auth.dart';
   import 'package:firebase_messaging/firebase_messaging.dart';
   import 'package:flutter/material.dart';
-  import 'collector_messages_page.dart';
   import 'collector_notifications_page.dart';
   import 'collector_pickup_map_page.dart';
   import 'collector_transaction_page.dart';
@@ -254,7 +253,7 @@
                 icon: const Icon(Icons.logout),
                 label: const Text("Logout"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryColor,
+                  backgroundColor: Colors.red,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
@@ -596,7 +595,7 @@
                 );
               },
             ),
-            const CollectorMessagesPage(),
+
             const CollectorTransactionPage(embedded: true),
           ];
 
@@ -652,7 +651,6 @@
           unselectedFontSize: 11,
           items: const [
             BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: "HOME"),
-            BottomNavigationBarItem(icon: Icon(Icons.forum_outlined), label: "CHATS"),
             BottomNavigationBarItem(icon: Icon(Icons.receipt_long), label: "TRANSACTION"),
           ],
         ),
@@ -1780,11 +1778,14 @@
                               ),
                             ],
                             const SizedBox(height: 8),
+
                             SizedBox(
                               width: double.infinity,
-                              child: ElevatedButton(
+                              height: 46,
+                              child: ElevatedButton.icon(
                                 onPressed: () {
                                   final requestIds = docs.map((d) => d.id).toList();
+
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
@@ -1794,7 +1795,22 @@
                                     ),
                                   );
                                 },
-                                child: const Text("OPEN ALL ON MAP"),
+                                icon: const Icon(Icons.map_outlined, size: 18),
+                                label: const Text(
+                                  "OPEN ALL ON MAP",
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.3,
+                                  ),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  elevation: 0,
+                                  backgroundColor: const Color(0xFF1FA9A7), // same teal as your UI
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                ),
                               ),
                             ),
                           ],
