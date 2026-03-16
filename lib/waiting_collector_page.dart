@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'household/household_dashboard.dart';
+
 
 class WaitingCollectorPage extends StatefulWidget {
   final String requestId;
@@ -66,36 +68,41 @@ class _WaitingCollectorPageState extends State<WaitingCollectorPage>
     _listenToRequest();
   }
 
-  void _goToOrderTab() {
-    if (!mounted || _hasNavigated) return;
+void _goToOrderTab() {
+  if (!mounted || _hasNavigated) return;
 
-    _hasNavigated = true;
-    _requestSub?.cancel();
+  _hasNavigated = true;
+  _requestSub?.cancel();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final navigator = Navigator.of(context);
-      if (navigator.canPop()) {
-        navigator.pop(true);
-      }
-    });
-  }
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!mounted) return;
 
-  void _closeWaitingPage() {
-    if (!mounted || _hasNavigated) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => const DashboardPage(initialTabIndex: 2),
+      ),
+      (route) => false,
+    );
+  });
+}
 
-    _hasNavigated = true;
-    _requestSub?.cancel();
+void _closeWaitingPage() {
+  if (!mounted || _hasNavigated) return;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final navigator = Navigator.of(context);
-      if (navigator.canPop()) {
-        navigator.pop(false);
-      }
-    });
-  }
+  _hasNavigated = true;
+  _requestSub?.cancel();
 
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!mounted) return;
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => const DashboardPage(initialTabIndex: 2),
+      ),
+      (route) => false,
+    );
+  });
+}
   void _listenToRequest() {
     _requestSub = FirebaseFirestore.instance
         .collection('requests')

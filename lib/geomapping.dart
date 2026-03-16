@@ -57,6 +57,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   Position? _currentPosition;
   StreamSubscription<Position>? _posSub;
 
+  bool get _hasActivePickupRequest =>
+    _activePickupRequestId != null && _tripStage == TripStage.pickup;
+
   List<LatLng> _routePoints = [];
   String _dirDistanceText = "";
   String _dirDurationText = "";
@@ -502,11 +505,16 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
     return doc.id;
   }
+  
 
   Future<void> _startDirectionsToMores() async {
     if (!_locationReady || _currentPosition == null) {
       _snack("Still getting your location. Please wait...", bg: _surface);
       return;
+    }
+    if (_hasActivePickupRequest) {
+    _snack("You already have an active pickup request. Cancel it first.");
+    return;
     }
 
     final go = await showDialog<bool>(
@@ -741,6 +749,11 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
   Future<void> _openPickupFlowPage() async {
+    if (_hasActivePickupRequest) {
+    _snack("You already have an active pickup request. Cancel it first.");
+    return;
+    } 
+
     if (_availableCollectors.isEmpty) {
       _snack("No available collectors right now.");
       return;
@@ -1340,154 +1353,193 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          if (_isDelivering) ...[
-                            Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: _surface,
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(color: _border),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    _dropoffStatus == "arrived"
-                                        ? Icons.check_circle
-                                        : Icons.local_shipping_outlined,
-                                    color: _dropoffStatus == "arrived"
-                                        ? _accent
-                                        : _blue,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      _dropoffStatus == "arrived"
-                                          ? "You have arrived at $_moresName"
-                                          : "You are on the way to $_moresName",
-                                      style: const TextStyle(
-                                        color: _textPrimary,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: SizedBox(
-                                    height: 54,
-                                    child: ElevatedButton.icon(
-                                      onPressed: _focusDropoffRoute,
-                                      icon: const Icon(Icons.map_outlined),
-                                      label: const Text("ROUTE"),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _surfaceAlt,
-                                        foregroundColor: _textPrimary,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                          side:
-                                              const BorderSide(color: _border),
-                                        ),
-                                        elevation: 0,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: SizedBox(
-                                    height: 54,
-                                    child: ElevatedButton.icon(
-                                      onPressed: _dropoffStatus == "arrived"
-                                          ? null
-                                          : _markDropoffArrived,
-                                      icon:
-                                          const Icon(Icons.check_circle_outline),
-                                      label: const Text("ARRIVED"),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _accent,
-                                        foregroundColor: _textPrimary,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                        ),
-                                        elevation: 0,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            SizedBox(
-                              height: 54,
-                              child: ElevatedButton.icon(
-                                onPressed: _dropoffStatus == "arrived"
-                                    ? null
-                                    : _cancelDropoff,
-                                icon: const Icon(Icons.cancel_outlined),
-                                label: const Text("CANCEL RIDE"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent,
-                                  foregroundColor: _textPrimary,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  elevation: 0,
-                                ),
-                              ),
-                            ),
-                          ] else ...[
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: SizedBox(
-                                    height: 52,
-                                    child: ElevatedButton.icon(
-                                      onPressed: _startDirectionsToMores,
-                                      icon: const Icon(Icons.directions),
-                                      label: const Text("DROP-OFF"),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _surfaceAlt,
-                                        foregroundColor: _textPrimary,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(18),
-                                          side:
-                                              const BorderSide(color: _border),
-                                        ),
-                                        elevation: 0,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: SizedBox(
-                                    height: 52,
-                                    child: ElevatedButton.icon(
-                                      onPressed: _openPickupFlowPage,
-                                      icon: const Icon(Icons.local_shipping),
-                                      label: const Text("PICKUP"),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _accent,
-                                        foregroundColor: _textPrimary,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(18),
-                                        ),
-                                        elevation: 0,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+if (_isDelivering) ...[
+  Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: _surface,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: _border),
+    ),
+    child: Row(
+      children: [
+        Icon(
+          _dropoffStatus == "arrived"
+              ? Icons.check_circle
+              : Icons.local_shipping_outlined,
+          color: _dropoffStatus == "arrived" ? _accent : _blue,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            _dropoffStatus == "arrived"
+                ? "You have arrived at $_moresName"
+                : "You are on the way to $_moresName",
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    ),
+  ),
+  const SizedBox(height: 16),
+  Row(
+    children: [
+      Expanded(
+        child: SizedBox(
+          height: 54,
+          child: ElevatedButton.icon(
+            onPressed: _focusDropoffRoute,
+            icon: const Icon(Icons.map_outlined),
+            label: const Text("ROUTE"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _surfaceAlt,
+              foregroundColor: _textPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: _border),
+              ),
+              elevation: 0,
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: SizedBox(
+          height: 54,
+          child: ElevatedButton.icon(
+            onPressed:
+                _dropoffStatus == "arrived" ? null : _markDropoffArrived,
+            icon: const Icon(Icons.check_circle_outline),
+            label: const Text("ARRIVED"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: _textPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              elevation: 0,
+            ),
+          ),
+        ),
+      ),
+    ],
+  ),
+  const SizedBox(height: 10),
+  SizedBox(
+    height: 54,
+    child: ElevatedButton.icon(
+      onPressed: _dropoffStatus == "arrived" ? null : _cancelDropoff,
+      icon: const Icon(Icons.cancel_outlined),
+      label: const Text("CANCEL RIDE"),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.redAccent,
+        foregroundColor: _textPrimary,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        elevation: 0,
+      ),
+    ),
+  ),
+] else if (_isPickup) ...[
+  Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: _surface,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: _border),
+    ),
+    child: Row(
+      children: [
+        const SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.5,
+            valueColor: AlwaysStoppedAnimation<Color>(_accent),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            _collectorName == null
+                ? "Waiting for collector to accept your pickup request"
+                : "Collector $_collectorName is assigned",
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    ),
+  ),
+  const SizedBox(height: 10),
+  Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: _surfaceAlt,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: _border),
+    ),
+    child: const Text(
+      "Pickup and drop-off actions are disabled while your pickup order is active. Cancel it from the Order page.",
+      style: TextStyle(
+        color: _textSecondary,
+        fontWeight: FontWeight.w700,
+        height: 1.4,
+      ),
+    ),
+  ),
+] else ...[
+  Row(
+    children: [
+      Expanded(
+        child: SizedBox(
+          height: 52,
+          child: ElevatedButton.icon(
+            onPressed: _startDirectionsToMores,
+            icon: const Icon(Icons.directions),
+            label: const Text("DROP-OFF"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _surfaceAlt,
+              foregroundColor: _textPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: const BorderSide(color: _border),
+              ),
+              elevation: 0,
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: SizedBox(
+          height: 52,
+          child: ElevatedButton.icon(
+            onPressed: _openPickupFlowPage,
+            icon: const Icon(Icons.local_shipping),
+            label: const Text("PICKUP"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: _textPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              elevation: 0,
+            ),
+          ),
+        ),
+      ),
+    ],
+  ),
+],
                           const SizedBox(height: 10),
                           Center(
                             child: Container(

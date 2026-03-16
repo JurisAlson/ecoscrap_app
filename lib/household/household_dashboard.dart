@@ -182,6 +182,88 @@ void initState() {
       },
     );
   }
+  Widget _activeDropoffBanner() {
+  return StreamBuilder<QuerySnapshot>(
+    stream: FirebaseFirestore.instance
+        .collection('dropoff_requests')
+        .where('householdId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: ['en_route'])
+        .limit(1)
+        .snapshots(),
+    builder: (context, snap) {
+      if (!snap.hasData || snap.data!.docs.isEmpty) {
+        return const SizedBox.shrink();
+      }
+
+      final doc = snap.data!.docs.first;
+      final data = doc.data() as Map<String, dynamic>;
+
+      final junkshopName =
+          (data['junkshopName'] ?? 'Drop-off destination').toString();
+
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const GeoMappingPage(),
+                ),
+              );
+            },
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 11,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: primaryColor.withOpacity(0.28),
+                ),
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      "Drop-off in progress • $junkshopName",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    color: Colors.grey.shade400,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
 
   Widget _swipeHint({
     String? label,
@@ -528,6 +610,7 @@ Future<void> _clearNotifications() async {
                 children: [
                   _header(user),
                   _waitingCollectorBanner(),
+                  _activeDropoffBanner(),
                   Expanded(
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 240),
