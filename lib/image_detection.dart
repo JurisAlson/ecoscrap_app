@@ -5,7 +5,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import 'detection_result_page.dart'; // must contain DetectionResultPage + DetectionStatus enum
+import 'detection_result_page.dart';
 import '../services/tflite_service.dart';
 import '../widgets/app_loader.dart';
 
@@ -21,12 +21,61 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   File? _image;
 
   bool _isPickingImage = false;
+  bool _isAnalyzing = false;
 
   final Color primaryColor = const Color(0xFF1FA9A7);
   final Color bgColor = const Color(0xFF0F172A);
 
-  // ✅ ORIGINAL GUIDE (Good lighting / Fill frame / Plastic only / Avoid blur)
-  // ✅ ✔ badge TOP for good, ✖ badge BOTTOM for bad
+  @override
+  void initState() {
+    super.initState();
+    _recoverLostImage();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
+
+  Future<void> _recoverLostImage() async {
+    try {
+      final LostDataResponse response = await _picker.retrieveLostData();
+
+      if (response.isEmpty) return;
+
+      if (response.files != null && response.files!.isNotEmpty) {
+        final file = File(response.files!.first.path);
+
+        if (!mounted) return;
+        setState(() {
+          _image = file;
+        });
+
+        await _analyzeImage(file);
+        return;
+      }
+
+      if (response.file != null) {
+        final file = File(response.file!.path);
+
+        if (!mounted) return;
+        setState(() {
+          _image = file;
+        });
+
+        await _analyzeImage(file);
+        return;
+      }
+
+      if (response.exception != null) {
+        debugPrint('Lost image recovery error: ${response.exception}');
+      }
+    } catch (e, st) {
+      debugPrint('retrieveLostData failed: $e');
+      debugPrint('$st');
+    }
+  }
+
   Future<bool> _showScanInstructions() async {
     bool agreed = false;
 
@@ -40,50 +89,97 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
             final PageController controller = PageController();
 
             final pages = [
-  {
-    "title": "1) Good lighting",
-    "subtitle": "Scan in a bright area. Avoid dark or yellow lighting.",
-    "items": [
-      // ✅ TOP = VALID (check)
-      {"asset": "assets/plastic_validation/valid_1/plastic49.jpg", "good": true},
-      {"asset": "assets/plastic_validation/valid_1/plastic419.jpg", "good": true},
-
-      // ❌ BOTTOM = INVALID (x)
-      {"asset": "assets/plastic_validation/invalid_1/plastic156.jpg", "good": false},
-      {"asset": "assets/plastic_validation/invalid_1/plastic159.jpg", "good": false},
-    ],
-  },
-  {
-    "title": "2) Fill the frame",
-    "subtitle": "Move closer so the item fills most of the photo.",
-    "items": [
-      {"asset": "assets/plastic_validation/valid_2/plastic155.jpg", "good": true},
-      {"asset": "assets/plastic_validation/valid_2/plastic160.jpg", "good": true},
-      {"asset": "assets/plastic_validation/invalid_2/plastic43.jpg", "good": false},
-      {"asset": "assets/plastic_validation/invalid_2/plastic170.jpg", "good": false},
-    ],
-  },
-  {
-    "title": "3) PLASTIC items only",
-    "subtitle": "Avoid taking scanning non plastic materials such as Glass, Metal ETC.",
-    "items": [
-      {"asset": "assets/plastic_validation/valid_3/plastic291.jpg", "good": true},
-      {"asset": "assets/plastic_validation/valid_3/plastic317.jpg", "good": true},
-      {"asset": "assets/plastic_validation/invalid_3/trash12.jpg", "good": false},
-      {"asset": "assets/plastic_validation/invalid_3/trash67.jpg", "good": false},
-    ],
-  },
-  {
-    "title": "4) Avoid glare & blur",
-    "subtitle": "Keep steady and reduce reflections on shiny plastics.",
-    "items": [
-      {"asset": "assets/plastic_validation/valid_4/plastic47.jpg", "good": true},
-      {"asset": "assets/plastic_validation/valid_4/plastic468.jpg", "good": true},
-      {"asset": "assets/plastic_validation/invalid_4/invalid2.jpg", "good": false},
-      {"asset": "assets/plastic_validation/invalid_4/invalid4_1.jpg", "good": false},
-    ],
-  },
-];
+              {
+                "title": "1) Good lighting",
+                "subtitle": "Scan in a bright area. Avoid dark or yellow lighting.",
+                "items": [
+                  {
+                    "asset": "assets/plastic_validation/valid_1/plastic49.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/valid_1/plastic419.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_1/plastic156.jpg",
+                    "good": false,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_1/plastic159.jpg",
+                    "good": false,
+                  },
+                ],
+              },
+              {
+                "title": "2) Fill the frame",
+                "subtitle": "Move closer so the item fills most of the photo.",
+                "items": [
+                  {
+                    "asset": "assets/plastic_validation/valid_2/plastic155.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/valid_2/plastic160.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_2/plastic43.jpg",
+                    "good": false,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_2/plastic170.jpg",
+                    "good": false,
+                  },
+                ],
+              },
+              {
+                "title": "3) PLASTIC items only",
+                "subtitle":
+                    "Avoid scanning non-plastic materials such as glass, metal, etc.",
+                "items": [
+                  {
+                    "asset": "assets/plastic_validation/valid_3/plastic291.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/valid_3/plastic317.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_3/trash12.jpg",
+                    "good": false,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_3/trash67.jpg",
+                    "good": false,
+                  },
+                ],
+              },
+              {
+                "title": "4) Avoid glare & blur",
+                "subtitle":
+                    "Keep steady and reduce reflections on shiny plastics.",
+                "items": [
+                  {
+                    "asset": "assets/plastic_validation/valid_4/plastic47.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/valid_4/plastic468.jpg",
+                    "good": true,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_4/invalid2.jpg",
+                    "good": false,
+                  },
+                  {
+                    "asset": "assets/plastic_validation/invalid_4/invalid4_1.jpg",
+                    "good": false,
+                  },
+                ],
+              },
+            ];
 
             Widget swipeHint() {
               return Container(
@@ -96,76 +192,87 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.chevron_left, size: 18, color: Colors.white.withOpacity(0.65)),
+                    Icon(
+                      Icons.chevron_left,
+                      size: 18,
+                      color: Colors.white.withOpacity(0.65),
+                    ),
                     const SizedBox(width: 2),
-                    Icon(Icons.swipe, size: 18, color: Colors.white.withOpacity(0.85)),
+                    Icon(
+                      Icons.swipe,
+                      size: 18,
+                      color: Colors.white.withOpacity(0.85),
+                    ),
                     const SizedBox(width: 2),
-                    Icon(Icons.chevron_right, size: 18, color: Colors.white.withOpacity(0.65)),
+                    Icon(
+                      Icons.chevron_right,
+                      size: 18,
+                      color: Colors.white.withOpacity(0.65),
+                    ),
                   ],
                 ),
               );
             }
 
             Widget safeAssetImage(String path) {
-  return Image.asset(
-    path,
-    fit: BoxFit.cover,
-    errorBuilder: (_, __, ___) => Center(
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Text(
-          "Missing:\n$path",
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.55),
-            fontSize: 10,
-            height: 1.2,
-          ),
-        ),
-      ),
-    ),
-  );
-}
+              return Image.asset(
+                path,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Text(
+                      "Missing:\n$path",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.55),
+                        fontSize: 10,
+                        height: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+
             Widget tile(Map<String, dynamic> item) {
-  final bool good = item["good"] as bool;
+              final bool good = item["good"] as bool;
+              final Color badgeColor = good ? Colors.green : Colors.red;
+              final IconData badgeIcon = good ? Icons.check : Icons.close;
 
-  final Color badgeColor = good ? Colors.green : Colors.red;
-  final IconData badgeIcon = good ? Icons.check : Icons.close;
+              return Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: safeAssetImage(item["asset"] as String),
+                      ),
+                    ),
+                    Positioned(
+                      top: good ? 8 : null,
+                      bottom: good ? null : 8,
+                      right: 8,
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: badgeColor.withOpacity(0.90),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(badgeIcon, size: 14, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
 
-  return Container(
-    decoration: BoxDecoration(
-      color: Colors.white.withOpacity(0.05),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Colors.white.withOpacity(0.08)),
-    ),
-    child: Stack(
-      children: [
-        Positioned.fill(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: safeAssetImage(item["asset"] as String),
-          ),
-        ),
-
-        // ✅ CHECK stays TOP, ❌ X stays BOTTOM (proper comparison)
-        Positioned(
-          top: good ? 8 : null,
-          bottom: good ? null : 8,
-          right: 8,
-          child: Container(
-            width: 22,
-            height: 22,
-            decoration: BoxDecoration(
-              color: badgeColor.withOpacity(0.90),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(badgeIcon, size: 14, color: Colors.white),
-          ),
-        ),
-      ],
-    ),
-  );
-}
             Widget dots() {
               return Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -187,7 +294,9 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
 
             return AlertDialog(
               backgroundColor: bgColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
               title: Row(
                 children: [
                   Icon(Icons.camera_alt, color: primaryColor),
@@ -195,7 +304,10 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                   const Expanded(
                     child: Text(
                       "Before you scan",
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                   swipeHint(),
@@ -208,19 +320,25 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                   children: [
                     Text(
                       "Swipe through the guides. Try to match the GOOD examples.",
-                      style: TextStyle(color: Colors.grey.shade300, fontSize: 13, height: 1.3),
+                      style: TextStyle(
+                        color: Colors.grey.shade300,
+                        fontSize: 13,
+                        height: 1.3,
+                      ),
                     ),
                     const SizedBox(height: 12),
-
                     SizedBox(
                       height: 290,
                       child: PageView.builder(
                         controller: controller,
                         itemCount: pages.length,
-                        onPageChanged: (i) => setLocalState(() => pageIndex = i),
+                        onPageChanged: (i) => setLocalState(() {
+                          pageIndex = i;
+                        }),
                         itemBuilder: (_, p) {
                           final page = pages[p];
-                          final items = (page["items"] as List).cast<Map<String, dynamic>>();
+                          final items =
+                              (page["items"] as List).cast<Map<String, dynamic>>();
 
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -236,7 +354,11 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                               const SizedBox(height: 4),
                               Text(
                                 page["subtitle"] as String,
-                                style: TextStyle(color: Colors.grey.shade400, fontSize: 12, height: 1.25),
+                                style: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  fontSize: 12,
+                                  height: 1.25,
+                                ),
                               ),
                               const SizedBox(height: 12),
                               Expanded(
@@ -244,7 +366,8 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                                   shrinkWrap: true,
                                   physics: const NeverScrollableScrollPhysics(),
                                   itemCount: items.length,
-                                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                  gridDelegate:
+                                      const SliverGridDelegateWithFixedCrossAxisCount(
                                     crossAxisCount: 2,
                                     mainAxisSpacing: 10,
                                     crossAxisSpacing: 10,
@@ -258,17 +381,17 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                         },
                       ),
                     ),
-
                     const SizedBox(height: 10),
                     dots(),
-
                     const SizedBox(height: 14),
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.06),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.08),
+                        ),
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -278,17 +401,22 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                           Expanded(
                             child: Text(
                               "Best accuracy: 1 plastic item only, bright light, close-up, steady hands.",
-                              style: TextStyle(color: Colors.grey.shade300, fontSize: 12, height: 1.3),
+                              style: TextStyle(
+                                color: Colors.grey.shade300,
+                                fontSize: 12,
+                                height: 1.3,
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ),
-
                     const SizedBox(height: 14),
                     CheckboxListTile(
                       value: agreed,
-                      onChanged: (v) => setLocalState(() => agreed = v ?? false),
+                      onChanged: (v) => setLocalState(() {
+                        agreed = v ?? false;
+                      }),
                       controlAffinity: ListTileControlAffinity.leading,
                       dense: true,
                       activeColor: primaryColor,
@@ -305,13 +433,18 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text("Cancel", style: TextStyle(color: Colors.grey.shade300)),
+                  child: Text(
+                    "Cancel",
+                    style: TextStyle(color: Colors.grey.shade300),
+                  ),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: bgColor,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                   onPressed: agreed ? () => Navigator.pop(ctx, true) : null,
                   child: const Text("Continue"),
@@ -327,7 +460,7 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   }
 
   Future<void> _captureImageWithCamera() async {
-    if (_isPickingImage) return;
+    if (_isPickingImage || _isAnalyzing) return;
 
     final ok = await _showScanInstructions();
     if (!ok) return;
@@ -335,26 +468,62 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
     _isPickingImage = true;
 
     try {
-      final XFile? capturedFile = await _picker.pickImage(source: ImageSource.camera);
+      final XFile? capturedFile = await _picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1280,
+        maxHeight: 1280,
+        imageQuality: 80,
+      );
+
       if (capturedFile == null) return;
 
+      final file = File(capturedFile.path);
+
+      if (!mounted) return;
       setState(() {
-        _image = File(capturedFile.path);
+        _image = file;
       });
 
+      await _analyzeImage(file);
+    } catch (e, st) {
+      debugPrint('Camera capture error: $e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+      AppLoader.hide(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to capture image. Please try again.'),
+        ),
+      );
+    } finally {
+      _isPickingImage = false;
+    }
+  }
+
+  Future<void> _analyzeImage(File file) async {
+    if (_isAnalyzing) return;
+    _isAnalyzing = true;
+
+    try {
       if (!mounted) return;
 
       AppLoader.show(
         context,
         title: "Scanning your photo…",
         message: "Analyzing plastic type. This will only take a moment.",
-        preview: Image.file(_image!, fit: BoxFit.cover),
+        preview: Image.file(
+          file,
+          fit: BoxFit.cover,
+          cacheWidth: 512,
+          filterQuality: FilterQuality.low,
+        ),
       );
 
       await Future.delayed(Duration.zero);
       await WidgetsBinding.instance.endOfFrame;
 
-      final double p = await TFLiteService.runModel(_image!.path);
+      final double p = await TFLiteService.runModel(file.path);
 
       const double yesThreshold = 0.80;
       const double noThreshold = 0.35;
@@ -378,7 +547,6 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
       }
 
       if (!mounted) return;
-
       AppLoader.hide(context);
 
       Navigator.push(
@@ -391,12 +559,19 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
           ),
         ),
       );
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('Analyze image error: $e');
+      debugPrint('$st');
+
       if (!mounted) return;
       AppLoader.hide(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Analysis failed. Please try another image.'),
+        ),
+      );
     } finally {
-      _isPickingImage = false;
+      _isAnalyzing = false;
     }
   }
 
@@ -406,13 +581,24 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
-          _blurCircle(Colors.green.withOpacity(0.1), 350, bottom: 100, left: -100),
+          _blurCircle(
+            primaryColor.withOpacity(0.15),
+            300,
+            top: -100,
+            right: -100,
+          ),
+          _blurCircle(
+            Colors.green.withOpacity(0.1),
+            350,
+            bottom: 100,
+            left: -100,
+          ),
           SafeArea(
             child: Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
                       IconButton(
@@ -442,19 +628,33 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.05),
                             borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: Colors.white.withOpacity(0.1)),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.1),
+                            ),
                           ),
                           child: _image != null
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(24),
-                                  child: Image.file(_image!, fit: BoxFit.cover),
+                                  child: Image.file(
+                                    _image!,
+                                    fit: BoxFit.cover,
+                                    cacheWidth: 700,
+                                    filterQuality: FilterQuality.low,
+                                  ),
                                 )
                               : Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: const [
-                                    Icon(Icons.image_outlined, size: 60, color: Colors.grey),
+                                    Icon(
+                                      Icons.image_outlined,
+                                      size: 60,
+                                      color: Colors.grey,
+                                    ),
                                     SizedBox(height: 12),
-                                    Text("No image captured", style: TextStyle(color: Colors.grey)),
+                                    Text(
+                                      "No image captured",
+                                      style: TextStyle(color: Colors.grey),
+                                    ),
                                   ],
                                 ),
                         ),
@@ -470,11 +670,18 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                                 borderRadius: BorderRadius.circular(16),
                               ),
                             ),
-                            onPressed: _captureImageWithCamera,
+                            onPressed: (_isPickingImage || _isAnalyzing)
+                                ? null
+                                : _captureImageWithCamera,
                             icon: const Icon(Icons.camera_alt),
-                            label: const Text(
-                              "Open Camera",
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            label: Text(
+                              _isPickingImage || _isAnalyzing
+                                  ? "Processing..."
+                                  : "Open Camera",
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),
