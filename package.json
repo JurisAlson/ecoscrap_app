@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "firebase-tools": "^15.10.0",
+    "g": "^2.0.1"
+  }
+}
