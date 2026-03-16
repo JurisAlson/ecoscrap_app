@@ -37,7 +37,37 @@ final NumberFormat _wholeNumberFormat = NumberFormat('#,##0');
 final NumberFormat _compactFormat = NumberFormat.compact();
 
 int _selectedYear = DateTime.now().year;
+Widget _yearNavButton({
+  required IconData icon,
+  required VoidCallback? onTap,
+}) {
+  final isDisabled = onTap == null;
 
+  return GestureDetector(
+    onTap: onTap,
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      height: 44,
+      width: 44,
+      decoration: BoxDecoration(
+        color: isDisabled
+            ? Colors.white.withOpacity(0.03)
+            : Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDisabled
+              ? Colors.white.withOpacity(0.05)
+              : Colors.white.withOpacity(0.10),
+        ),
+      ),
+      child: Icon(
+        icon,
+        color: isDisabled ? Colors.white24 : Colors.white,
+        size: 20,
+      ),
+    ),
+  );
+}
 String _formatCurrency(num value) {
   if (value % 1 == 0) {
     return '₱${_wholeNumberFormat.format(value)}';
@@ -84,6 +114,7 @@ DateTime _monthEndExclusive(int month) {
         ),
       );
     }
+    
 
     final txStream = FirebaseFirestore.instance
         .collection('Users')
@@ -829,7 +860,33 @@ DateTime _monthEndExclusive(int month) {
     );
   }
 
-  Widget _buildMonthSelector() {
+  Widget _compactYearButton({
+  required IconData icon,
+  required VoidCallback? onTap,
+}) {
+  final disabled = onTap == null;
+
+  return GestureDetector(
+    onTap: onTap,
+    child: Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: disabled
+            ? Colors.white.withOpacity(0.03)
+            : Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(
+        icon,
+        size: 14,
+        color: disabled ? Colors.white24 : Colors.white,
+      ),
+    ),
+  );
+}
+
+Widget _buildMonthSelector() {
   const months = [
     "JAN",
     "FEB",
@@ -846,12 +903,15 @@ DateTime _monthEndExclusive(int month) {
   ];
 
   final currentYear = DateTime.now().year;
-  final years = List.generate(5, (i) => currentYear - i);
+
+  if (_selectedYear < currentYear) {
+    _selectedYear = currentYear;
+  }
 
   final selectedLabel = months[_selectedMonth - 1];
 
   return Container(
-    padding: const EdgeInsets.all(16),
+    padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
       color: Colors.white.withOpacity(0.05),
       borderRadius: BorderRadius.circular(18),
@@ -860,75 +920,79 @@ DateTime _monthEndExclusive(int month) {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          "Selected Period",
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          "Viewing analytics for $selectedLabel $_selectedYear",
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 12,
-            height: 1.2,
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        SizedBox(
-          height: 36,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: years.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final year = years[index];
-              final isSelected = year == _selectedYear;
-
-              return GestureDetector(
-                onTap: () => setState(() => _selectedYear = year),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    gradient: isSelected
-                        ? const LinearGradient(
-                            colors: [Color(0xFF1FA9A7), Colors.green],
-                          )
-                        : null,
-                    color: isSelected ? null : Colors.white.withOpacity(0.06),
-                    border: Border.all(
-                      color: isSelected
-                          ? Colors.white.withOpacity(0.18)
-                          : Colors.white.withOpacity(0.10),
-                    ),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    "$year",
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Selected Period",
                     style: TextStyle(
-                      fontSize: 11,
+                      color: Colors.white,
+                      fontSize: 13,
                       fontWeight: FontWeight.bold,
-                      letterSpacing: 0.6,
-                      color: isSelected ? Colors.white : Colors.white70,
                     ),
                   ),
-                ),
-              );
-            },
-          ),
+                  const SizedBox(height: 3),
+                  Text(
+                    "$selectedLabel $_selectedYear",
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              height: 34,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _compactYearButton(
+                    icon: Icons.remove,
+                    onTap: _selectedYear > currentYear
+                        ? () {
+                            setState(() {
+                              _selectedYear--;
+                            });
+                          }
+                        : null,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Text(
+                      "$_selectedYear",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  _compactYearButton(
+                    icon: Icons.add,
+                    onTap: () {
+                      setState(() {
+                        _selectedYear++;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-
         const SizedBox(height: 12),
-
         SizedBox(
-          height: 36,
+          height: 34,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: months.length,
@@ -940,11 +1004,11 @@ DateTime _monthEndExclusive(int month) {
               return GestureDetector(
                 onTap: () => setState(() => _selectedMonth = monthNumber),
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(10),
                     gradient: isSelected
                         ? const LinearGradient(
                             colors: [Color(0xFF1FA9A7), Colors.green],
@@ -953,17 +1017,17 @@ DateTime _monthEndExclusive(int month) {
                     color: isSelected ? null : Colors.white.withOpacity(0.06),
                     border: Border.all(
                       color: isSelected
-                          ? Colors.white.withOpacity(0.18)
-                          : Colors.white.withOpacity(0.10),
+                          ? Colors.white.withOpacity(0.16)
+                          : Colors.white.withOpacity(0.08),
                     ),
                   ),
                   alignment: Alignment.center,
                   child: Text(
                     months[index],
                     style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.6,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
                       color: isSelected ? Colors.white : Colors.white70,
                     ),
                   ),

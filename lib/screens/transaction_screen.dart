@@ -1,5 +1,6 @@
 // ===================== transaction_screen.dart =====================
 import 'dart:ui';
+import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'receipt_screen.dart' as receipt;
@@ -21,6 +22,14 @@ class _TransactionScreenState extends State<TransactionScreen> {
   final NumberFormat _numberFormat = NumberFormat('#,##0.##');
   final NumberFormat _wholeNumberFormat = NumberFormat('#,##0');
 
+  final int _itemsPerPage = 10;
+  int _currentPage = 1;
+
+  String _txType = "sell";
+  String _q = "";
+  DateTimeRange? _dateRange;
+  String _collectedFilter = "all"; // all | walkin | collector
+
   String _formatPrice(num value) {
     if (value % 1 == 0) {
       return '₱${_wholeNumberFormat.format(value)}';
@@ -28,14 +37,12 @@ class _TransactionScreenState extends State<TransactionScreen> {
     return '₱${_numberFormat.format(value)}';
   }
 
-  String _txType = "sell";
-  String _q = "";
-  DateTimeRange? _dateRange;
-  String _collectedFilter = "all"; // all | walkin | collector
-
   void _switchType(String next) {
     if (_txType == next) return;
-    setState(() => _txType = next);
+    setState(() {
+      _txType = next;
+      _currentPage = 1;
+    });
   }
 
   Widget _blurCircle(
@@ -133,7 +140,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
       message: tooltip,
       child: GestureDetector(
         onTap: () {
-          setState(() => _collectedFilter = value);
+          setState(() {
+            _collectedFilter = value;
+            _currentPage = 1;
+          });
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
@@ -160,6 +170,120 @@ class _TransactionScreenState extends State<TransactionScreen> {
       ),
     );
   }
+
+Widget _buildPagination(int totalPages) {
+  if (totalPages <= 1) return const SizedBox.shrink();
+
+  const int visiblePages = 3;
+
+  int startPage = ((_currentPage - 1) ~/ visiblePages) * visiblePages + 1;
+  int endPage = math.min(startPage + visiblePages - 1, totalPages);
+
+  return Center(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+
+          /// LEFT ARROW
+          GestureDetector(
+            onTap: startPage > 1
+                ? () {
+                    setState(() {
+                      _currentPage = startPage - 1;
+                    });
+                  }
+                : null,
+            child: Container(
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: startPage > 1
+                    ? Colors.white.withOpacity(0.06)
+                    : Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Icon(
+                Icons.chevron_left_rounded,
+                color: startPage > 1 ? Colors.white : Colors.white30,
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 6),
+
+          /// PAGE NUMBERS
+          ...List.generate(endPage - startPage + 1, (index) {
+            final page = startPage + index;
+            final isActive = page == _currentPage;
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: GestureDetector(
+                onTap: () => setState(() => _currentPage = page),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: isActive
+                        ? primaryColor.withOpacity(0.22)
+                        : Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isActive
+                          ? primaryColor.withOpacity(0.45)
+                          : Colors.white.withOpacity(0.08),
+                    ),
+                  ),
+                  child: Text(
+                    "$page",
+                    style: TextStyle(
+                      color: isActive ? Colors.white : const Color(0xFF94A3B8),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+
+          const SizedBox(width: 6),
+
+          /// RIGHT ARROW
+          GestureDetector(
+            onTap: endPage < totalPages
+                ? () {
+                    setState(() {
+                      _currentPage = endPage + 1;
+                    });
+                  }
+                : null,
+            child: Container(
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: endPage < totalPages
+                    ? Colors.white.withOpacity(0.06)
+                    : Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Icon(
+                Icons.chevron_right_rounded,
+                color: endPage < totalPages ? Colors.white : Colors.white30,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
 
   String _formatDate(DateTime d) {
     return "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}  "
@@ -206,6 +330,204 @@ class _TransactionScreenState extends State<TransactionScreen> {
     final start = _dateRange!.start;
     final end = _dateRange!.end;
     return "${start.month}/${start.day}/${start.year} - ${end.month}/${end.day}/${end.year}";
+  }
+
+  Widget _buildTransactionTile(
+    QueryDocumentSnapshot doc,
+    Map<String, dynamic> data,
+  ) {
+    final type = (data['transactionType'] ?? '').toString().toLowerCase();
+    final isSale = type == 'sell';
+
+    final sourceType = (data['sourceType'] ?? '').toString().toLowerCase();
+    final isCollector = sourceType == 'collector';
+    final isWalkIn = sourceType == 'walkin';
+
+    final name = _displayPartyName(data);
+    final total = (data['totalAmount'] as num?)?.toDouble() ?? 0.0;
+    final ts = data['transactionDate'] as Timestamp?;
+    final date = ts?.toDate();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.055),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.07),
+        ),
+      ),
+      child: ListTile(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => TransactionDetailScreen(
+                shopID: widget.shopID,
+                transactionData: {
+                  ...data,
+                  'receiptId': doc.id,
+                },
+              ),
+            ),
+          );
+        },
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 8,
+        ),
+        leading: Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: isSale
+                ? Colors.green.withOpacity(0.14)
+                : isCollector
+                    ? Colors.orange.withOpacity(0.14)
+                    : Colors.blue.withOpacity(0.14),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(
+            isSale
+                ? Icons.sell_rounded
+                : isWalkIn
+                    ? Icons.person_rounded
+                    : Icons.shopping_cart_rounded,
+            color: isSale
+                ? Colors.greenAccent
+                : isWalkIn
+                    ? Colors.blueAccent
+                    : Colors.orangeAccent,
+          ),
+        ),
+        title: Text(
+          name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: 14.5,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Text(
+            date != null ? _formatDate(date) : "",
+            style: const TextStyle(
+              color: Color(0xFF94A3B8),
+              fontSize: 12,
+            ),
+          ),
+        ),
+        trailing: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 4,
+              ),
+              decoration: BoxDecoration(
+                color: isSale
+                    ? Colors.green.withOpacity(0.12)
+                    : Colors.orange.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                isSale ? "SOLD" : "COLLECTED",
+                style: TextStyle(
+                  color: isSale ? Colors.greenAccent : Colors.orangeAccent,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _formatPrice(total),
+              style: TextStyle(
+                color: isSale ? Colors.greenAccent : Colors.orangeAccent,
+                fontWeight: FontWeight.w800,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScrollableTopInfo(int docsLength, int totalPages) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _dateFilterLabel(),
+                  style: const TextStyle(
+                    color: Color(0xFF94A3B8),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (_txType == "buy") ...[
+                _buildCollectedSourceButton(
+                  icon: Icons.filter_list_rounded,
+                  value: "all",
+                  tooltip: "All collected",
+                ),
+                const SizedBox(width: 4),
+                _buildCollectedSourceButton(
+                  icon: Icons.person_rounded,
+                  value: "walkin",
+                  tooltip: "Walk-in only",
+                ),
+                const SizedBox(width: 4),
+                _buildCollectedSourceButton(
+                  icon: Icons.local_shipping_rounded,
+                  value: "collector",
+                  tooltip: "Collector only",
+                ),
+              ],
+              if (_dateRange != null) ...[
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: () => setState(() {
+                    _dateRange = null;
+                    _currentPage = 1;
+                  }),
+                  child: const Text(
+                    "Clear",
+                    style: TextStyle(
+                      color: Color(0xFF1FA9A7),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            "$docsLength transaction${docsLength == 1 ? '' : 's'} • Page $_currentPage of $totalPages",
+            style: const TextStyle(
+              color: Color(0xFF94A3B8),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -264,6 +586,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
+
+                  // FIXED
                   _glassCard(
                     child: TextField(
                       style: const TextStyle(
@@ -283,7 +607,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
                             if (_q.isNotEmpty)
                               IconButton(
                                 onPressed: () {
-                                  setState(() => _q = "");
+                                  setState(() {
+                                    _q = "";
+                                    _currentPage = 1;
+                                  });
                                 },
                                 icon: const Icon(
                                   Icons.close_rounded,
@@ -333,7 +660,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                 );
 
                                 if (picked != null) {
-                                  setState(() => _dateRange = picked);
+                                  setState(() {
+                                    _dateRange = picked;
+                                    _currentPage = 1;
+                                  });
                                 }
                               },
                               tooltip: _dateRange == null
@@ -366,10 +696,15 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           ),
                         ),
                       ),
-                      onChanged: (v) => setState(() => _q = v.trim().toLowerCase()),
+                      onChanged: (v) => setState(() {
+                        _q = v.trim().toLowerCase();
+                        _currentPage = 1;
+                      }),
                     ),
                   ),
                   const SizedBox(height: 12),
+
+                  // FIXED
                   _glassCard(
                     padding: const EdgeInsets.all(6),
                     child: SizedBox(
@@ -383,14 +718,13 @@ class _TransactionScreenState extends State<TransactionScreen> {
                     ),
                   ),
                   const SizedBox(height: 4),
+
                   Expanded(
                     child: StreamBuilder<QuerySnapshot>(
                       stream: txStream,
                       builder: (context, snapshot) {
                         if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
-                          );
+                          return const Center(child: CircularProgressIndicator());
                         }
 
                         final docs = (snapshot.data?.docs ?? []).where((d) {
@@ -438,333 +772,87 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           return displayName.contains(_q);
                         }).toList();
 
-                        if (docs.isEmpty) {
-                          return Column(
-                            children: [
-                              Padding(
-  padding: const EdgeInsets.only(bottom: 4),
-  child: Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Row(
-        children: [
-          Expanded(
-            child: Text(
-              _dateFilterLabel(),
-              style: const TextStyle(
-                color: Color(0xFF94A3B8),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+                        final totalPages =
+                            math.max(1, (docs.length / _itemsPerPage).ceil());
 
-          if (_txType == "buy") ...[
-            _buildCollectedSourceButton(
-              icon: Icons.filter_list_rounded,
-              value: "all",
-              tooltip: "All collected",
-            ),
-            const SizedBox(width: 4),
-            _buildCollectedSourceButton(
-              icon: Icons.person_rounded,
-              value: "walkin",
-              tooltip: "Walk-in only",
-            ),
-            const SizedBox(width: 4),
-            _buildCollectedSourceButton(
-              icon: Icons.local_shipping_rounded,
-              value: "collector",
-              tooltip: "Collector only",
-            ),
-          ],
-
-          if (_dateRange != null) ...[
-            const SizedBox(width: 6),
-            GestureDetector(
-              onTap: () => setState(() => _dateRange = null),
-              child: const Text(
-                "Clear",
-                style: TextStyle(
-                  color: Color(0xFF1FA9A7),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-
-      const SizedBox(height: 2),
-
-      Text(
-        "${docs.length} transaction${docs.length == 1 ? '' : 's'}",
-        style: const TextStyle(
-          color: Color(0xFF94A3B8),
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    ],
-  ),
-),
-                              Expanded(
-                                child: Center(
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        const Icon(
-                                          Icons.receipt_long_outlined,
-                                          size: 64,
-                                          color: Color(0xFF64748B),
-                                        ),
-                                        const SizedBox(height: 14),
-                                        Text(
-                                          _txType == "sell"
-                                              ? "No sold transactions found"
-                                              : "No collected transactions found",
-                                          style: const TextStyle(
-                                            color: Colors.white70,
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        const Text(
-                                          "Try changing the search or date filter.",
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            color: Color(0xFF94A3B8),
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
+                        if (_currentPage > totalPages) {
+                          _currentPage = totalPages;
                         }
 
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Padding(
-  padding: const EdgeInsets.only(bottom: 4),
+                        final startIndex = (_currentPage - 1) * _itemsPerPage;
+                        final endIndex = math.min(startIndex + _itemsPerPage, docs.length);
+
+                        final pagedDocs = docs.isEmpty
+                            ? <QueryDocumentSnapshot>[]
+                            : docs.sublist(startIndex, endIndex);
+
+                        if (docs.isEmpty) {
+                          return ListView(
+  padding: const EdgeInsets.only(bottom: 65),
+  children: [
+    _buildScrollableTopInfo(docs.length, totalPages),
+    const SizedBox(height: 40),
+    Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.receipt_long_outlined,
+            size: 64,
+            color: Color(0xFF64748B),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            _txType == "sell"
+                ? "No sold transactions found"
+                : "No collected transactions found",
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            "Try changing the search or date filter.",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFF94A3B8),
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    ),
+  ],
+);
+                        }
+
+                        return SingleChildScrollView(
+  padding: const EdgeInsets.only(bottom: 0),
   child: Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Row(
-        children: [
-          Expanded(
-            child: Text(
-              _dateFilterLabel(),
-              style: const TextStyle(
-                color: Color(0xFF94A3B8),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
+      _buildScrollableTopInfo(docs.length, totalPages),
+      const SizedBox(height: 10),
+
+      ...List.generate(pagedDocs.length, (index) {
+        final doc = pagedDocs[index];
+        final data = doc.data() as Map<String, dynamic>;
+
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: index == pagedDocs.length - 1 ? 12 : 10,
           ),
-          if (_txType == "buy") ...[
-            _buildCollectedSourceButton(
-              icon: Icons.filter_list_rounded,
-              value: "all",
-              tooltip: "All collected",
-            ),
-            const SizedBox(width: 4),
-            _buildCollectedSourceButton(
-              icon: Icons.person_rounded,
-              value: "walkin",
-              tooltip: "Walk-in only",
-            ),
-            const SizedBox(width: 4),
-            _buildCollectedSourceButton(
-              icon: Icons.local_shipping_rounded,
-              value: "collector",
-              tooltip: "Collector only",
-            ),
-          ],
-          if (_dateRange != null) ...[
-            const SizedBox(width: 6),
-            GestureDetector(
-              onTap: () => setState(() => _dateRange = null),
-              child: const Text(
-                "Clear",
-                style: TextStyle(
-                  color: Color(0xFF1FA9A7),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-      const SizedBox(height: 2),
-      Text(
-        "${docs.length} transaction${docs.length == 1 ? '' : 's'}",
-        style: const TextStyle(
-          color: Color(0xFF94A3B8),
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
+          child: _buildTransactionTile(doc, data),
+        );
+      }),
+
+      _buildPagination(totalPages),
     ],
   ),
-),
-                            Expanded(
-                              child: ListView.separated(
-                                padding: const EdgeInsets.only(bottom: 100),
-                                itemCount: docs.length,
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(height: 10),
-                                itemBuilder: (context, index) {
-                                  final doc = docs[index];
-                                  final data = doc.data() as Map<String, dynamic>;
-
-                                  final type = (data['transactionType'] ?? '')
-                                      .toString()
-                                      .toLowerCase();
-                                  final isSale = type == 'sell';
-
-                                  final sourceType = (data['sourceType'] ?? '')
-                                      .toString()
-                                      .toLowerCase();
-                                  final isCollector = sourceType == 'collector';
-                                  final isWalkIn = sourceType == 'walkin';
-
-                                  final name = _displayPartyName(data);
-                                  final total =
-                                      (data['totalAmount'] as num?)?.toDouble() ?? 0.0;
-                                  final ts = data['transactionDate'] as Timestamp?;
-                                  final date = ts?.toDate();
-
-                                  return Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.055),
-                                      borderRadius: BorderRadius.circular(18),
-                                      border: Border.all(
-                                        color: Colors.white.withOpacity(0.07),
-                                      ),
-                                    ),
-                                    child: ListTile(
-                                      onTap: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) => TransactionDetailScreen(
-                                              shopID: widget.shopID,
-                                              transactionData: {
-                                                ...data,
-                                                'receiptId': doc.id,
-                                              },
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                      contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 8,
-                                      ),
-                                      leading: Container(
-                                        width: 46,
-                                        height: 46,
-                                        decoration: BoxDecoration(
-                                          color: isSale
-                                              ? Colors.green.withOpacity(0.14)
-                                              : isCollector
-                                                  ? Colors.orange.withOpacity(0.14)
-                                                  : Colors.blue.withOpacity(0.14),
-                                          borderRadius: BorderRadius.circular(14),
-                                        ),
-                                        child: Icon(
-                                          isSale
-                                              ? Icons.sell_rounded
-                                              : isWalkIn
-                                                  ? Icons.person_rounded
-                                                  : Icons.shopping_cart_rounded,
-                                          color: isSale
-                                              ? Colors.greenAccent
-                                              : isWalkIn
-                                                  ? Colors.blueAccent
-                                                  : Colors.orangeAccent,
-                                        ),
-                                      ),
-                                      title: Text(
-                                        name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14.5,
-                                        ),
-                                      ),
-                                      subtitle: Padding(
-                                        padding: const EdgeInsets.only(top: 6),
-                                        child: Text(
-                                          date != null ? _formatDate(date) : "",
-                                          style: const TextStyle(
-                                            color: Color(0xFF94A3B8),
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ),
-                                      trailing: Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        crossAxisAlignment: CrossAxisAlignment.end,
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 4,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: isSale
-                                                  ? Colors.green.withOpacity(0.12)
-                                                  : Colors.orange.withOpacity(0.12),
-                                              borderRadius:
-                                                  BorderRadius.circular(999),
-                                            ),
-                                            child: Text(
-                                              isSale ? "SOLD" : "COLLECTED",
-                                              style: TextStyle(
-                                                color: isSale
-                                                    ? Colors.greenAccent
-                                                    : Colors.orangeAccent,
-                                                fontSize: 10.5,
-                                                fontWeight: FontWeight.w800,
-                                                letterSpacing: 0.6,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 8),
-Text(
-  _formatPrice(total),
-  style: TextStyle(
-    color: isSale
-        ? Colors.greenAccent
-        : Colors.orangeAccent,
-    fontWeight: FontWeight.w800,
-    fontSize: 14,
-  ),
-),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        );
+);
                       },
                     ),
                   ),
