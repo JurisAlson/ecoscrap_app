@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'geomapping.dart';
 
 enum DetectionStatus { recyclable, nonRecyclable, uncertain }
+enum DetectionResultAction { scanAgain, dashboard }
 
 class DetectionResultPage extends StatelessWidget {
   final DetectionStatus status;
@@ -128,27 +129,30 @@ class DetectionResultPage extends StatelessWidget {
                           ],
 
                           // ✅ Always allow Scan Again
-                          _actionButton(
-                            icon: Icons.camera_alt,
-                            label: "Scan Again",
-                            onTap: () => Navigator.pop(context),
-                            outlined: true,
-                            color: Colors.white.withOpacity(0.85),
-                            textColor: Colors.white,
-                          ),
+                        _actionButton(
+                          icon: Icons.camera_alt,
+                          label: "Scan Again",
+                          onTap: () {
+                            Navigator.pop(context, DetectionResultAction.scanAgain);
+                          },
+                          outlined: true,
+                          color: Colors.white.withOpacity(0.85),
+                          textColor: Colors.white,
+                        ),
 
                           const SizedBox(height: 18),
-                          TextButton(
-                            onPressed: () =>
-                                Navigator.popUntil(context, (r) => r.isFirst),
-                            child: const Text(
-                              "Back to Dashboard",
-                              style: TextStyle(
-                                color: Color(0xFF1FA9A7),
-                                fontWeight: FontWeight.bold,
-                              ),
+                         TextButton(
+                          onPressed: () {
+                            Navigator.pop(context, DetectionResultAction.dashboard);
+                          },
+                          child: const Text(
+                            "Back to Dashboard",
+                            style: TextStyle(
+                              color: Color(0xFF1FA9A7),
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
+                        ),
                         ],
                       ),
                     ),

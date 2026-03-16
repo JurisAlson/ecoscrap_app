@@ -59,10 +59,10 @@ final _sitioController = TextEditingController();
     _nameController.addListener(_refresh);
     _emailController.addListener(_refresh);
     _confirmPasswordController.addListener(_refresh);
-_blockController.addListener(_refresh);
-_lotController.addListener(_refresh);
-_subdivisionController.addListener(_refresh);
-_sitioController.addListener(_refresh);
+    _blockController.addListener(_refresh);
+    _lotController.addListener(_refresh);
+    _subdivisionController.addListener(_refresh);
+    _sitioController.addListener(_refresh);
   }
 
   void _refresh() {

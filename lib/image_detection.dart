@@ -460,20 +460,29 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   }
 
   Future<void> _captureImageWithCamera() async {
+
+        if (!mounted) return;
+    setState(() {
+      _image = null;
+    });
+
     if (_isPickingImage || _isAnalyzing) return;
 
     final ok = await _showScanInstructions();
     if (!ok) return;
 
-    _isPickingImage = true;
+    if (!mounted) return;
+setState(() {
+  _isPickingImage = true;
+});
 
     try {
-      final XFile? capturedFile = await _picker.pickImage(
-        source: ImageSource.camera,
-        maxWidth: 1280,
-        maxHeight: 1280,
-        imageQuality: 80,
-      );
+final XFile? capturedFile = await _picker.pickImage(
+  source: ImageSource.camera,
+  maxWidth: 960,
+  maxHeight: 960,
+  imageQuality: 70,
+);
 
       if (capturedFile == null) return;
 
@@ -497,13 +506,20 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
         ),
       );
     } finally {
-      _isPickingImage = false;
+      if (mounted) {
+  setState(() {
+    _isPickingImage = false;
+  });
+}
     }
   }
 
   Future<void> _analyzeImage(File file) async {
     if (_isAnalyzing) return;
-    _isAnalyzing = true;
+    if (!mounted) return;
+setState(() {
+  _isAnalyzing = true;
+});
 
     try {
       if (!mounted) return;
@@ -515,9 +531,10 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
         preview: Image.file(
           file,
           fit: BoxFit.cover,
-          cacheWidth: 512,
+          cacheWidth: 256,
           filterQuality: FilterQuality.low,
-        ),
+          gaplessPlayback: true,
+        ),  
       );
 
       await Future.delayed(Duration.zero);
@@ -549,16 +566,29 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
       if (!mounted) return;
       AppLoader.hide(context);
 
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => DetectionResultPage(
-            status: status,
-            itemName: itemName,
-            confidence: confidence,
-          ),
-        ),
-      );
+final action = await Navigator.push<DetectionResultAction>(
+  context,
+  MaterialPageRoute(
+    builder: (_) => DetectionResultPage(
+      status: status,
+      itemName: itemName,
+      confidence: confidence,
+    ),
+  ),
+);
+
+if (!mounted) return;
+
+setState(() {
+  _image = null;
+});
+
+imageCache.clearLiveImages();
+imageCache.clear();
+
+if (action == DetectionResultAction.dashboard) {
+  Navigator.popUntil(context, (route) => route.isFirst);
+}
     } catch (e, st) {
       debugPrint('Analyze image error: $e');
       debugPrint('$st');
@@ -571,7 +601,11 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
         ),
       );
     } finally {
-      _isAnalyzing = false;
+      if (mounted) {
+  setState(() {
+    _isAnalyzing = false;
+  });
+}
     }
   }
 
@@ -635,12 +669,13 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
                           child: _image != null
                               ? ClipRRect(
                                   borderRadius: BorderRadius.circular(24),
-                                  child: Image.file(
-                                    _image!,
-                                    fit: BoxFit.cover,
-                                    cacheWidth: 700,
-                                    filterQuality: FilterQuality.low,
-                                  ),
+child: Image.file(
+  _image!,
+  fit: BoxFit.cover,
+  cacheWidth: 320,
+  filterQuality: FilterQuality.low,
+  gaplessPlayback: true,
+),
                                 )
                               : Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
