@@ -216,6 +216,8 @@ double get _sellMaxKg {
     it.subtotalCtrl.text = _formatNumber(sellTotal);
   }
 
+  
+
   Future<void> _addItem() async {
     final it = _ReceiptItem();
 

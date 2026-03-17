@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import '../admin_helpers.dart';
 import '../admin_theme_page.dart';
@@ -631,13 +632,21 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
                                   setState(() => _busy = true);
                                   try {
+                                    final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
+                                        .httpsCallable("rejectCollector");
+
+                                    await callable.call({
+                                      "uid": uid,
+                                      "reason": "Your collector application was rejected by the admin.",
+                                    });
+
                                     await _rejectCollectorAndRestoreUser(uid);
+
                                     if (mounted) {
                                       AdminHelpers.toast(context, "Rejected $name. User restored.");
                                       Navigator.pop(context);
                                     }
                                   } catch (_) {
-                                    // Do not surface raw error
                                     if (mounted) AdminHelpers.toast(context, "Reject failed. Please try again.");
                                   } finally {
                                     if (mounted) setState(() => _busy = false);

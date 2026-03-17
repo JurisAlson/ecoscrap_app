@@ -8,6 +8,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../chat/screens/chat_page.dart';
+import '../chat/services/chat_services.dart';
 
 import 'pickup_request_page.dart';
 
@@ -52,6 +54,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   final String _moresName = "Mores Scrap Trading";
   final String _moresSubtitle = "Brgy Palo Alto, Calamba";
   final String _moresJunkshopUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
+  final ChatService _chatService = ChatService();
 
   bool _locationReady = false;
   Position? _currentPosition;
@@ -165,6 +168,56 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     _mapController = controller;
     await _mapController?.setMapStyle(_darkMapStyle);
   }
+
+  Future<void> _deleteDropoffChat(String requestId) async {
+  final db = FirebaseFirestore.instance;
+  final chatRef = db.collection('chats').doc('dropoff_$requestId');
+
+  try {
+    final messages = await chatRef.collection('messages').get();
+    for (final doc in messages.docs) {
+      await doc.reference.delete();
+    }
+
+    await chatRef.delete();
+  } catch (e) {
+    debugPrint('Failed to delete dropoff chat: $e');
+  }
+}
+
+
+  Future<void> _openDropoffChat() async {
+  final user = FirebaseAuth.instance.currentUser;
+  final requestId = _activeDropoffRequestId;
+
+  if (user == null || requestId == null) {
+    _snack("No active drop-off chat available.");
+    return;
+  }
+
+  try {
+    final chatId = await _chatService.ensureDropoffChat(
+      requestId: requestId,
+      householdUid: user.uid,
+      junkshopUid: _moresJunkshopUid,
+    );
+
+    if (!mounted) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatPage(
+          chatId: chatId,
+          title: _moresName,
+          otherUserId: _moresJunkshopUid,
+        ),
+      ),
+    );
+  } catch (e) {
+    _snack("Failed to open chat.");
+  }
+}
 
   Future<void> _initLocation() async {
     final ok = await _ensureLocationPermission();
@@ -1104,9 +1157,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
               ),
             ),
             Positioned(
-              top: 62,
-              left: 20,
-              right: 20,
+              top: 44,
+              left: 16,
+              right: 16,
               child: Row(
                 children: [
                   _circularButton(
@@ -1149,6 +1202,13 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                       ),
                     ),
                   ),
+                  if (_isDelivering && _activeDropoffRequestId != null) ...[
+                    const SizedBox(width: 12),
+                    _circularButton(
+                      Icons.chat_bubble_outline,
+                      onTap: _openDropoffChat,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1171,8 +1231,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                             : "Pin mode OFF.",
                       );
                     },
-                    child:
-                        const Icon(Icons.push_pin_outlined, color: _textPrimary),
+                    child: const Icon(Icons.push_pin_outlined, color: _textPrimary),
                   ),
                   const SizedBox(height: 10),
                   FloatingActionButton(

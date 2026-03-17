@@ -28,10 +28,9 @@ class ChatListPage extends StatelessWidget {
       );
     }
 
-    final q = FirebaseFirestore.instance
+    final baseQuery = FirebaseFirestore.instance
         .collection('chats')
         .where('participants', arrayContains: me)
-        .where('type', isEqualTo: type)
         .orderBy('lastMessageAt', descending: true);
 
     return Scaffold(
@@ -61,7 +60,7 @@ class ChatListPage extends StatelessWidget {
             child: _blurCircle(Colors.green.withOpacity(0.10), 360),
           ),
           StreamBuilder<QuerySnapshot>(
-            stream: q.snapshots(),
+            stream: baseQuery.snapshots(),
             builder: (context, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
@@ -75,7 +74,23 @@ class ChatListPage extends StatelessWidget {
                 );
               }
 
-              final docs = snap.data?.docs ?? [];
+              final allDocs = snap.data?.docs ?? [];
+
+              final docs = allDocs.where((d) {
+                final data = d.data() as Map<String, dynamic>;
+                final chatType = (data['type'] ?? '').toString();
+
+                if (type == "pickup") {
+                  return chatType == "pickup";
+                }
+
+                if (type == "junkshop") {
+                  return chatType == "junkshop" || chatType == "dropoff";
+                }
+
+                return chatType == type;
+              }).toList();
+
               if (docs.isEmpty) {
                 return const Center(
                   child: Text(
@@ -107,19 +122,25 @@ class ChatListPage extends StatelessWidget {
                     orElse: () => "",
                   );
 
-                  // ✅ ids + names on chat doc (recommended)
-                  final householdUid = (data['householdUid'] ?? '').toString().trim();
-                  final collectorUid = (data['collectorUid'] ?? '').toString().trim();
-                  final householdName = (data['householdName'] ?? '').toString().trim();
-                  final collectorName = (data['collectorName'] ?? '').toString().trim();
+                  final householdUid =
+                      (data['householdUid'] ?? '').toString().trim();
+                  final collectorUid =
+                      (data['collectorUid'] ?? '').toString().trim();
+                  final householdName =
+                      (data['householdName'] ?? '').toString().trim();
+                  final collectorName =
+                      (data['collectorName'] ?? '').toString().trim();
 
-                  final junkshopUid = (data['junkshopUid'] ?? '').toString().trim();
-                  final junkshopName = (data['junkshopName'] ?? '').toString().trim();
+                  final junkshopUid =
+                      (data['junkshopUid'] ?? '').toString().trim();
+                  final junkshopName =
+                      (data['junkshopName'] ?? '').toString().trim();
+
+                  final chatType = (data['type'] ?? '').toString().trim();
 
                   String displayNameFromChat = "";
 
-                  // ✅ Pickup chats: show "the other person"
-                  if (type == "pickup") {
+                  if (chatType == "pickup") {
                     if (me == householdUid && collectorName.isNotEmpty) {
                       displayNameFromChat = collectorName;
                     } else if (me == collectorUid && householdName.isNotEmpty) {
@@ -127,8 +148,7 @@ class ChatListPage extends StatelessWidget {
                     }
                   }
 
-                  // ✅ Junkshop chats (your existing logic)
-                  if (type == "junkshop") {
+                  if (chatType == "junkshop") {
                     if (me == junkshopUid && collectorName.isNotEmpty) {
                       displayNameFromChat = collectorName;
                     } else if (me == collectorUid && junkshopName.isNotEmpty) {
@@ -136,7 +156,14 @@ class ChatListPage extends StatelessWidget {
                     }
                   }
 
-                  // ✅ if we already have name OR otherUid missing
+                  if (chatType == "dropoff") {
+                    if (me == junkshopUid && householdName.isNotEmpty) {
+                      displayNameFromChat = householdName;
+                    } else if (me == householdUid && junkshopName.isNotEmpty) {
+                      displayNameFromChat = junkshopName;
+                    }
+                  }
+
                   if (displayNameFromChat.isNotEmpty || otherUid.isEmpty) {
                     final displayName = displayNameFromChat.isNotEmpty
                         ? displayNameFromChat
@@ -161,7 +188,6 @@ class ChatListPage extends StatelessWidget {
                     );
                   }
 
-                  // ✅ fallback: read Users doc for the otherUid
                   return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                     stream: FirebaseFirestore.instance
                         .collection('Users')
@@ -270,8 +296,11 @@ class _ChatTile extends StatelessWidget {
                     color: Colors.white.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.chat_bubble_outline,
-                      color: Colors.white70, size: 18),
+                  child: const Icon(
+                    Icons.chat_bubble_outline,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -284,7 +313,8 @@ class _ChatTile extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -292,7 +322,10 @@ class _ChatTile extends StatelessWidget {
                         lastMsg.isEmpty ? "(no messages yet)" : lastMsg,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white70),
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.70),
+                          fontSize: 13,
+                        ),
                       ),
                     ],
                   ),
@@ -301,8 +334,9 @@ class _ChatTile extends StatelessWidget {
                 Text(
                   timeText,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.65),
+                    color: Colors.white.withOpacity(0.55),
                     fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
