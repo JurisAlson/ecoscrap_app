@@ -33,11 +33,23 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
-// 4 controllers, but address still becomes one final string
-final _blockController = TextEditingController();
-final _lotController = TextEditingController();
-final _subdivisionController = TextEditingController();
-final _sitioController = TextEditingController();
+  // Address still becomes one final string
+  final _blockController = TextEditingController();
+  final _lotController = TextEditingController();
+
+  String? _selectedSubdivision;
+
+  final List<String> _subdivisionOptions = const [
+    'San Francisco Heights (Suntrust)',
+    'PHirst Park Homes Calamba',
+    'Lynville Residences Palo Alto',
+    'Palo Alto Executive Village',
+    'Southwynd Residences',
+    'Pacific Hill Subdivision',
+    'Hacienda Hill',
+    'Palo Alto Highland 1',
+    'Palo Alto Highland 2',
+  ];
 
   String? _scannedIdPath;
   bool _isLoading = false;
@@ -61,8 +73,6 @@ final _sitioController = TextEditingController();
     _confirmPasswordController.addListener(_refresh);
     _blockController.addListener(_refresh);
     _lotController.addListener(_refresh);
-    _subdivisionController.addListener(_refresh);
-    _sitioController.addListener(_refresh);
   }
 
   void _refresh() {
@@ -75,10 +85,8 @@ final _sitioController = TextEditingController();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
-_blockController.dispose();
-_lotController.dispose();
-_subdivisionController.dispose();
-_sitioController.dispose();
+    _blockController.dispose();
+    _lotController.dispose();
     super.dispose();
   }
 
@@ -129,36 +137,82 @@ _sitioController.dispose();
         _emailController.text.trim().isNotEmpty &&
         _passwordController.text.trim().isNotEmpty &&
         _confirmPasswordController.text.trim().isNotEmpty &&
-_blockController.text.trim().isNotEmpty &&
-_lotController.text.trim().isNotEmpty &&
-_subdivisionController.text.trim().isNotEmpty &&
-_sitioController.text.trim().isNotEmpty &&
+        _blockController.text.trim().isNotEmpty &&
+        _lotController.text.trim().isNotEmpty &&
+        _selectedSubdivision != null &&
+        _selectedSubdivision!.trim().isNotEmpty &&
         _scannedIdPath != null;
   }
 
-String _buildFormattedAddress() {
-  final block = _blockController.text.trim();
-  final lot = _lotController.text.trim();
-  final subdivision = _subdivisionController.text.trim();
-  final sitio = _sitioController.text.trim();
+  String _buildFormattedAddress() {
+    final block = _blockController.text.trim();
+    final lot = _lotController.text.trim();
+    final subdivision = _selectedSubdivision?.trim() ?? '';
 
-  return "Block $block Lot $lot, $subdivision, Sitio $sitio";
-}
-  Future<bool> _validateScannedId(String imagePath) async {
+    return "Block $block Lot $lot, $subdivision";
+  }
+
+  String _normalizeText(String text) {
+    return text
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  bool _doesScannedNameMatch({
+    required String scannedText,
+    required String declaredName,
+  }) {
+    final normalizedScanned = _normalizeText(scannedText);
+    final normalizedDeclared = _normalizeText(declaredName);
+
+    if (normalizedDeclared.isEmpty) return false;
+
+    if (normalizedScanned.contains(normalizedDeclared)) {
+      return true;
+    }
+
+    final parts = normalizedDeclared
+        .split(' ')
+        .where((p) => p.trim().length >= 2)
+        .toList();
+
+    if (parts.isEmpty) return false;
+
+    int matches = 0;
+    for (final part in parts) {
+      if (normalizedScanned.contains(part)) {
+        matches++;
+      }
+    }
+
+    final requiredMatches = parts.length >= 2 ? 2 : 1;
+    return matches >= requiredMatches;
+  }
+
+  Future<bool> _validateScannedId({
+    required String imagePath,
+    required String declaredName,
+  }) async {
     final inputImage = InputImage.fromFilePath(imagePath);
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     try {
       final recognizedText = await textRecognizer.processImage(inputImage);
-      final text = recognizedText.text.toLowerCase();
+      final rawText = recognizedText.text;
+      final text = rawText.toLowerCase();
 
-      if (text.trim().isEmpty) return false;
-      if (text.length < 20) return false;
+      if (rawText.trim().isEmpty) return false;
+      if (rawText.length < 20) return false;
 
-      // Only validation requested:
-      // 1) scanner/crop happened
-      // 2) text contains Palo Alto
-      return text.contains('palo alto');
+      final hasPaloAlto = text.contains('palo alto');
+      final hasMatchingName = _doesScannedNameMatch(
+        scannedText: rawText,
+        declaredName: declaredName,
+      );
+
+      return hasPaloAlto && hasMatchingName;
     } catch (_) {
       return false;
     } finally {
@@ -168,15 +222,21 @@ String _buildFormattedAddress() {
 
   Future<void> _scanGovernmentId() async {
     await _showInfoDialog(
-      title: "Scan Government ID",
+      title: "Scan ID",
       icon: Icons.document_scanner_outlined,
       message:
-          "Please scan a valid Government-issued ID.\n\n"
-          "The scanner will detect the 4 edges and crop the document.\n"
-          "The scan must clearly show the text 'Palo Alto' to continue.",
+"Please scan your ID.\n\n"
+"Place it clearly inside the frame and remove any surrounding objects.",
     );
 
     try {
+      final declaredName = _nameController.text.trim();
+
+      if (declaredName.isEmpty) {
+        _toast("Please enter your name before scanning your ID.", error: true);
+        return;
+      }
+
       final dir = await getTemporaryDirectory();
       final outputPath =
           "${dir.path}/resident_id_${DateTime.now().millisecondsSinceEpoch}.jpg";
@@ -200,10 +260,14 @@ String _buildFormattedAddress() {
         return;
       }
 
-      final isValid = await _validateScannedId(outputPath);
+      final isValid = await _validateScannedId(
+        imagePath: outputPath,
+        declaredName: declaredName,
+      );
+
       if (!isValid) {
         _toast(
-          "Scan rejected. The image must be a valid cropped ID and must clearly show 'Palo Alto'.",
+          "Scan rejected. Please make sure you are using your own ID and that it is clearly captured inside the frame.",
           error: true,
         );
         return;
@@ -215,8 +279,7 @@ String _buildFormattedAddress() {
         title: "ID Accepted",
         icon: Icons.check_circle_outline,
         message:
-            "The ID scan passed validation.\n\n"
-            "It will be submitted for admin review.",
+"Your ID has been captured successfully.\n\nIt will be reviewed by the admin.",
       );
     } on PlatformException catch (e) {
       _toast("Scanner failed: ${e.message ?? e.code}", error: true);
@@ -291,8 +354,13 @@ String _buildFormattedAddress() {
 
     if (!_formKey.currentState!.validate()) return;
 
+    if (_selectedSubdivision == null || _selectedSubdivision!.trim().isEmpty) {
+      _toast("Subdivision is required.", error: true);
+      return;
+    }
+
     if (_scannedIdPath == null) {
-      _toast("Government ID scan is required.", error: true);
+      _toast("Please scan your ID to continue.", error: true);
       return;
     }
 
@@ -397,89 +465,146 @@ String _buildFormattedAddress() {
     return path.split(Platform.pathSeparator).last;
   }
 
-Widget _buildTextField(
-  TextEditingController controller,
-  String label,
-  IconData icon, {
-  bool isObscure = false,
-  required _FieldType type,
-}) {
-  final isNumeric =
-      type == _FieldType.blockNumber || type == _FieldType.lotNumber;
+  Widget _buildTextField(
+    TextEditingController controller,
+    String label,
+    IconData icon, {
+    bool isObscure = false,
+    required _FieldType type,
+  }) {
+    final isNumeric =
+        type == _FieldType.blockNumber || type == _FieldType.lotNumber;
 
-  return TextFormField(
-    controller: controller,
-    obscureText: isObscure,
-    maxLines: 1,
-    keyboardType: isNumeric ? TextInputType.number : TextInputType.text,
-    inputFormatters: isNumeric
-        ? [FilteringTextInputFormatter.digitsOnly]
-        : null,
-    style: const TextStyle(color: Colors.white),
-    autovalidateMode: AutovalidateMode.onUserInteraction,
-    decoration: InputDecoration(
-      filled: true,
-      fillColor: Colors.white.withOpacity(0.06),
-      labelText: label,
-      labelStyle: const TextStyle(color: Colors.white70),
-      prefixIcon: Icon(icon, color: _primary),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.white.withOpacity(0.10)),
+    return TextFormField(
+      controller: controller,
+      obscureText: isObscure,
+      maxLines: 1,
+      keyboardType: isNumeric ? TextInputType.number : TextInputType.text,
+      inputFormatters:
+          isNumeric ? [FilteringTextInputFormatter.digitsOnly] : null,
+      style: const TextStyle(color: Colors.white),
+      autovalidateMode: AutovalidateMode.onUserInteraction,
+      decoration: InputDecoration(
+        filled: true,
+        fillColor: Colors.white.withOpacity(0.06),
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white70),
+        prefixIcon: Icon(icon, color: _primary),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.10)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: _primary, width: 1.6),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.redAccent),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.redAccent, width: 1.6),
+        ),
       ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _primary, width: 1.6),
+      validator: (v) {
+        final value = (v ?? "").trim();
+        if (value.isEmpty) return "Required";
+
+        switch (type) {
+          case _FieldType.email:
+            if (!value.contains("@") || !value.contains(".")) {
+              return "Enter a valid email";
+            }
+            break;
+
+          case _FieldType.password:
+            if (value.length < 6) {
+              return "Password must be at least 6 characters";
+            }
+            break;
+
+          case _FieldType.confirmPassword:
+            if (value != _passwordController.text.trim()) {
+              return "Passwords do not match";
+            }
+            break;
+
+          case _FieldType.blockNumber:
+          case _FieldType.lotNumber:
+            if (int.tryParse(value) == null) {
+              return "Numbers only";
+            }
+            break;
+
+          case _FieldType.name:
+            break;
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildSubdivisionDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _selectedSubdivision,
+      dropdownColor: const Color(0xFF1E293B),
+      style: const TextStyle(color: Colors.white),
+      iconEnabledColor: Colors.white70,
+      autovalidateMode: AutovalidateMode.onUserInteraction,
+      decoration: InputDecoration(
+        filled: true,
+        fillColor: Colors.white.withOpacity(0.06),
+        labelText: "Subdivision",
+        labelStyle: const TextStyle(color: Colors.white70),
+        prefixIcon: const Icon(Icons.apartment_outlined, color: _primary),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.10)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: _primary, width: 1.6),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.redAccent),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.redAccent, width: 1.6),
+        ),
       ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Colors.redAccent),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Colors.redAccent, width: 1.6),
-      ),
-    ),
-    validator: (v) {
-      final value = (v ?? "").trim();
-      if (value.isEmpty) return "Required";
-
-      switch (type) {
-        case _FieldType.email:
-          if (!value.contains("@") || !value.contains(".")) {
-            return "Enter a valid email";
-          }
-          break;
-
-        case _FieldType.password:
-          if (value.length < 6) {
-            return "Password must be at least 6 characters";
-          }
-          break;
-
-        case _FieldType.confirmPassword:
-          if (value != _passwordController.text.trim()) {
-            return "Passwords do not match";
-          }
-          break;
-
-        case _FieldType.blockNumber:
-        case _FieldType.lotNumber:
-          if (int.tryParse(value) == null) {
-            return "Numbers only";
-          }
-          break;
-
-        case _FieldType.subdivision:
-        case _FieldType.sitio:
-        case _FieldType.name:
-          break;
-      }
-      return null;
-    },
-  );
-}
+      items: _subdivisionOptions
+          .map(
+            (subdivision) => DropdownMenuItem<String>(
+              value: subdivision,
+              child: Text(
+                subdivision,
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          )
+          .toList(),
+      onChanged: _isLoading
+          ? null
+          : (value) {
+              setState(() {
+                _selectedSubdivision = value;
+              });
+            },
+      validator: (value) {
+        if (value == null || value.trim().isEmpty) {
+          return "Required";
+        }
+        return null;
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -517,11 +642,12 @@ Widget _buildTextField(
                 const SizedBox(height: 12),
 
                 _InfoCard(
-                  title: "Government ID Scan Required",
+                  title: "ID Verification Required",
                   icon: Icons.badge_outlined,
                   children: const [
                     _Bullet(text: "Scanner must detect and crop the ID"),
-                    _Bullet(text: "OCR must detect the words: Palo Alto"),
+                    _Bullet(text: "Make sure the ID is clear and readable"),
+                    _Bullet(text: "Use your own ID when registering"),
                     _Bullet(text: "Admin will still review before approval"),
                   ],
                 ),
@@ -546,43 +672,30 @@ Widget _buildTextField(
                 ),
                 const SizedBox(height: 15),
 
-Row(
-  children: [
-    Expanded(
-      child: _buildTextField(
-        _blockController,
-        "Block",
-        Icons.home_work_outlined,
-        type: _FieldType.blockNumber,
-      ),
-    ),
-    const SizedBox(width: 12),
-    Expanded(
-      child: _buildTextField(
-        _lotController,
-        "Lot",
-        Icons.numbers_outlined,
-        type: _FieldType.lotNumber,
-      ),
-    ),
-  ],
-),
-const SizedBox(height: 15),
-
-                _buildTextField(
-                  _subdivisionController,
-                  "Subdivision",
-                  Icons.apartment_outlined,
-                  type: _FieldType.subdivision,
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildTextField(
+                        _blockController,
+                        "Block",
+                        Icons.home_work_outlined,
+                        type: _FieldType.blockNumber,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildTextField(
+                        _lotController,
+                        "Lot",
+                        Icons.numbers_outlined,
+                        type: _FieldType.lotNumber,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 15),
 
-                _buildTextField(
-                  _sitioController,
-                  "Sitio",
-                  Icons.location_on_outlined,
-                  type: _FieldType.sitio,
-                ),
+                _buildSubdivisionDropdown(),
                 const SizedBox(height: 15),
 
                 _buildTextField(
@@ -606,7 +719,8 @@ const SizedBox(height: 15),
 
                 _ScanTile(
                   requiredLabel: true,
-                  pickedFileName: _scannedIdPath == null ? null : _fileNameOnly(_scannedIdPath!),
+                  pickedFileName:
+                      _scannedIdPath == null ? null : _fileNameOnly(_scannedIdPath!),
                   onTap: _isLoading ? null : _scanGovernmentId,
                   onRemove: _isLoading || _scannedIdPath == null
                       ? null
@@ -666,8 +780,6 @@ enum _FieldType {
   email,
   blockNumber,
   lotNumber,
-  subdivision,
-  sitio,
   password,
   confirmPassword,
 }
@@ -715,7 +827,7 @@ class _HeroHeaderUser extends StatelessWidget {
                 ),
                 SizedBox(height: 6),
                 Text(
-                  "Scan a Government ID that clearly shows Palo Alto.",
+                  "Scan an ID that clearly shows Palo Alto.",
                   style: TextStyle(color: Colors.white70, height: 1.35),
                 ),
               ],
@@ -857,8 +969,12 @@ class _ScanTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Icon(
-                hasFile ? Icons.check_circle_outline : Icons.document_scanner_outlined,
-                color: hasFile ? const Color(0xFF7CF5F2) : const Color(0xFF1FA9A7),
+                hasFile
+                    ? Icons.check_circle_outline
+                    : Icons.document_scanner_outlined,
+                color: hasFile
+                    ? const Color(0xFF7CF5F2)
+                    : const Color(0xFF1FA9A7),
               ),
             ),
             const SizedBox(width: 12),
@@ -872,7 +988,7 @@ class _ScanTile extends StatelessWidget {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text(
-                        hasFile ? "Government ID accepted" : "Scan Government ID",
+                        hasFile ? "ID accepted" : "Scan ID",
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -880,11 +996,13 @@ class _ScanTile extends StatelessWidget {
                       ),
                       if (requiredLabel)
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
                             color: Colors.redAccent.withOpacity(0.18),
                             borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: Colors.redAccent.withOpacity(0.35)),
+                            border: Border.all(
+                                color: Colors.redAccent.withOpacity(0.35)),
                           ),
                           child: const Text(
                             "REQUIRED",
@@ -899,7 +1017,9 @@ class _ScanTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    hasFile ? pickedFileName! : "Scanner will crop and validate 'Palo Alto'",
+                    hasFile
+                        ? pickedFileName!
+                        : "Scan your ID for account verification.",
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white70),
@@ -925,4 +1045,4 @@ class _ScanTile extends StatelessWidget {
       ),
     );
   }
-} 
+}
