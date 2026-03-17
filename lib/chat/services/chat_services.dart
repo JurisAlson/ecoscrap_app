@@ -105,6 +105,50 @@ class ChatService {
     });
   }
 
+Future<String> ensureDropoffChat({
+  required String requestId,
+  required String householdUid,
+  required String junkshopUid,
+}) async {
+  final chatId = "dropoff_$requestId";
+  final ref = _db.collection('chats').doc(chatId);
+  final snap = await ref.get();
+
+  if (snap.exists) return chatId;
+
+  String householdName = "Household";
+  String junkshopName = "Junkshop";
+
+  try {
+    final householdDoc = await _db.collection("Users").doc(householdUid).get();
+    final junkshopDoc = await _db.collection("Users").doc(junkshopUid).get();
+
+    final h = householdDoc.data() ?? {};
+    final j = junkshopDoc.data() ?? {};
+
+    householdName =
+        (h["name"] ?? h["Name"] ?? h["publicName"] ?? "Household").toString();
+
+    junkshopName =
+        (j["shopName"] ?? j["name"] ?? j["Name"] ?? "Junkshop").toString();
+  } catch (_) {}
+
+  await ref.set({
+    'type': 'dropoff',
+    'requestId': requestId,
+    'participants': [householdUid, junkshopUid],
+    'householdUid': householdUid,
+    'junkshopUid': junkshopUid,
+    'householdName': householdName,
+    'junkshopName': junkshopName,
+    'createdAt': FieldValue.serverTimestamp(),
+    'lastMessage': '',
+    'lastMessageAt': FieldValue.serverTimestamp(),
+  });
+
+  return chatId;
+}
+
   // ==========================================================
   // ✅ SEND IMAGE WITH PROGRESS
   // ==========================================================

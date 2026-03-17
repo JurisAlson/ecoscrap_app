@@ -136,82 +136,132 @@ async function sendPushToUser(
 /* ====================================================
   ADMIN-ONLY: Reject resident
 ==================================================== */
-export const rejectResidentAndDeleteAccount = onCall(
-  { region: "asia-southeast1" },
-  async (request) => {
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Login required.");
-    }
-    if (request.auth.token?.admin !== true) {
-      throw new HttpsError("permission-denied", "Admin only.");
-    }
-
-    const uid = String(request.data?.uid || "").trim();
-    const reason = String(request.data?.reason || "").trim();
-
-    if (!uid) {
-      throw new HttpsError("invalid-argument", "uid required");
-    }
-
-    const db = admin.firestore();
-    const bucket = admin.storage().bucket();
-
-    try {
-      // notify first while account/docs still exist
-      await sendPushToUser(
-        uid,
-        "Resident verification rejected ❌",
-        reason
-          ? `Your residency request was rejected. Reason: ${reason}`
-          : "Your residency request was rejected by the admin.",
-        { type: "resident_admin_rejected" }
-      ).catch((e) => {
-        logger.warn("Failed to notify resident before delete", {
-          uid,
-          err: String(e),
-        });
-      });
-
-      // read KYC file path before deleting docs
-      const kycSnap = await db.collection("residentKYC").doc(uid).get();
-      const kyc = (kycSnap.data() || {}) as any;
-      const storagePath = String(kyc.storagePath || "").trim();
-
-      // delete storage file
-      if (storagePath) {
-        await bucket.file(storagePath).delete({ ignoreNotFound: true } as any);
-      }
-
-      // optional audit log
-      await db.collection("adminAuditLogs").add({
-        action: "reject_resident_and_delete_account",
-        targetUid: uid,
-        reason,
-        performedBy: request.auth.uid,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      }).catch(() => null);
-
-      // delete firestore docs
-      await db.collection("residentKYC").doc(uid).delete().catch(() => null);
-      await db.collection("residentRequests").doc(uid).delete().catch(() => null);
-      const userRef = db.collection("Users").doc(uid);
-      await db.recursiveDelete(userRef).catch(() => null);
-
-      // delete auth account last
-      await admin.auth().deleteUser(uid);
-
-      logger.info("rejectResidentAndDeleteAccount success", { uid });
-      return { ok: true, uid };
-    } catch (err: any) {
-      logger.error("rejectResidentAndDeleteAccount failed", {
-        uid,
-        error: String(err),
-        stack: err?.stack,
-      });
-      throw new HttpsError("internal", err?.message || String(err));
-    }
+exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Login required.");
   }
-);
+  if (request.auth.token?.admin !== true) {
+    throw new HttpsError("permission-denied", "Admin only.");
+  }
+
+  const uid = String(request.data?.uid || "").trim();
+  const reason = String(request.data?.reason || "").trim();
+
+  if (!uid) {
+    throw new HttpsError("invalid-argument", "uid required");
+  }
+
+  const db = admin.firestore();
+  const bucket = admin.storage().bucket();
+
+  try {
+    const authUser = await admin.auth().getUser(uid);
+    const email = String(authUser.email || "").trim();
+
+    await sendPushToUser(
+      uid,
+      "Resident verification rejected.",
+      reason
+        ? `Your residency request was rejected. Reason: ${reason}`
+        : "Your residency request was rejected by the admin.",
+      { type: "resident_admin_rejected" }
+    ).catch((e) => {
+      logger.warn("Failed to notify resident before delete", {
+        uid,
+        err: String(e),
+      });
+    });
+
+    if (email) {
+      await db.collection("mail").add({
+        to: email,
+        message: {
+          subject: "EcoScrap Verification Rejected",
+          text: reason
+            ? `Your registration was rejected.\n\nReason: ${reason}`
+            : "Your registration was rejected by the admin.",
+        },
+      });
+    }
+
+    const kycSnap = await db.collection("residentKYC").doc(uid).get();
+    const kyc = kycSnap.data() || {};
+    const storagePath = String(kyc.storagePath || "").trim();
+
+    if (storagePath) {
+      await bucket.file(storagePath).delete({ ignoreNotFound: true });
+    }
+
+    await db.collection("adminAuditLogs").add({
+      action: "reject_resident_and_delete_account",
+      targetUid: uid,
+      reason,
+      performedBy: request.auth.uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }).catch(() => null);
+
+    await db.collection("residentKYC").doc(uid).delete().catch(() => null);
+    await db.collection("residentRequests").doc(uid).delete().catch(() => null);
+
+    const userRef = db.collection("Users").doc(uid);
+    await db.recursiveDelete(userRef).catch(() => null);
+
+    await admin.auth().deleteUser(uid);
+
+    logger.info("rejectResidentAndDeleteAccount success", { uid });
+    return { ok: true, uid };
+  } catch (err: any) {
+    logger.error("rejectResidentAndDeleteAccount failed", {
+      uid,
+      error: String(err),
+      stack: err?.stack,
+    });
+    throw new HttpsError("internal", err?.message || String(err));
+  }
+});
+
+exports.rejectCollector = onCall({ region: "asia-southeast1" }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Login required.");
+  }
+  if (request.auth.token?.admin !== true) {
+    throw new HttpsError("permission-denied", "Admin only.");
+  }
+
+  const uid = String(request.data?.uid || "").trim();
+  const reason = String(request.data?.reason || "").trim();
+
+  if (!uid) {
+    throw new HttpsError("invalid-argument", "uid required");
+  }
+
+  try {
+    const user = await admin.auth().getUser(uid);
+    const email = String(user.email || "").trim();
+
+    if (email) {
+      await admin.firestore().collection("mail").add({
+        to: email,
+        message: {
+          subject: "EcoScrap Collector Application Rejected",
+          text: reason
+            ? `Your collector application was rejected.\n\nReason: ${reason}`
+            : "Your collector application was rejected by the admin.",
+        },
+      });
+    }
+
+    logger.info("rejectCollector email sent", { uid });
+    return { ok: true, uid };
+  } catch (err: any) {
+    logger.error("rejectCollector failed", {
+      uid,
+      error: String(err),
+      stack: err?.stack,
+    });
+    throw new HttpsError("internal", err?.message || String(err));
+  }
+});
 
 /* ====================================================
   SANITIZE residentRequests PII (remove publicName/emailDisplay)
@@ -1654,7 +1704,7 @@ export const adminSetUserRestricted = onCall(
 /* ====================================================
    GET DIRECTIONS
 ==================================================== */
-exports.getDirections = onCall(
+export const getDirections = onCall(
   {
     region: "asia-southeast1",
     secrets: [GOOGLE_MAPS_API_KEY],

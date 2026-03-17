@@ -30,6 +30,81 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
 
   static const Color _primary = Color(0xFF1FA9A7);
 
+  Future<String?> _pickRejectReason(BuildContext context) async {
+  final reasons = [
+    "Invalid ID submitted",
+    "Blurry or unreadable document",
+    "Information does not match submitted details",
+    "Duplicate account detected",
+    "Incomplete requirements",
+    "Outside service area",
+    "Other",
+  ];
+
+  String selected = reasons.first;
+  final otherController = TextEditingController();
+
+  return showDialog<String>(
+    context: context,
+    builder: (context) {
+      return StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: const Text("Select rejection reason"),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButton<String>(
+                  value: selected,
+                  isExpanded: true,
+                  items: reasons.map((r) {
+                    return DropdownMenuItem(
+                      value: r,
+                      child: Text(r),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() => selected = val);
+                    }
+                  },
+                ),
+                if (selected == "Other") ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: otherController,
+                    decoration: const InputDecoration(
+                      labelText: "Enter custom reason",
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("Cancel"),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  final result = selected == "Other"
+                      ? otherController.text.trim()
+                      : selected;
+
+                  if (result.isEmpty) return;
+                  Navigator.pop(context, result);
+                },
+                child: const Text("Confirm"),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
   // =========================
   // ADMIN: APPROVE
   // =========================
