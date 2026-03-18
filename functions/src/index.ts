@@ -220,49 +220,6 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
   }
 });
 
-exports.rejectCollector = onCall({ region: "asia-southeast1" }, async (request) => {
-  if (!request.auth) {
-    throw new HttpsError("unauthenticated", "Login required.");
-  }
-  if (request.auth.token?.admin !== true) {
-    throw new HttpsError("permission-denied", "Admin only.");
-  }
-
-  const uid = String(request.data?.uid || "").trim();
-  const reason = String(request.data?.reason || "").trim();
-
-  if (!uid) {
-    throw new HttpsError("invalid-argument", "uid required");
-  }
-
-  try {
-    const user = await admin.auth().getUser(uid);
-    const email = String(user.email || "").trim();
-
-    if (email) {
-      await admin.firestore().collection("mail").add({
-        to: email,
-        message: {
-          subject: "EcoScrap Collector Application Rejected",
-          text: reason
-            ? `Your collector application was rejected.\n\nReason: ${reason}`
-            : "Your collector application was rejected by the admin.",
-        },
-      });
-    }
-
-    logger.info("rejectCollector email sent", { uid });
-    return { ok: true, uid };
-  } catch (err: any) {
-    logger.error("rejectCollector failed", {
-      uid,
-      error: String(err),
-      stack: err?.stack,
-    });
-    throw new HttpsError("internal", err?.message || String(err));
-  }
-});
-
 /* ====================================================
   SANITIZE residentRequests PII (remove publicName/emailDisplay)
 ==================================================== */
@@ -1404,9 +1361,28 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
           message: {
             subject: "EcoScrap Collector Application Approved",
             html: `
-              <h2>EcoScrap</h2>
-              <p>Your collector application has been approved by the admin.</p>
-              <p>You may now continue using the app as a collector.</p>
+            <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+              <h2 style="color:#1FA9A7;">EcoScrap</h2>
+
+              <p>Dear ${name},</p>
+
+              <p>We are pleased to inform you that your <strong>collector application has been approved</strong>.</p>
+
+              <p>You may now log in and begin using your collector account within EcoScrap.</p>
+
+              <p>If you have any questions or need assistance, you may contact our team at 
+              <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+
+              <br/>
+
+              <p>Best regards,<br/>
+              <strong>EcoScrap Team</strong></p>
+
+              <hr style="margin-top:20px;" />
+              <small style="color:#777;">
+                This is an automated message. Please do not reply directly to this email.
+              </small>
+            </div>
             `,
           },
         });
@@ -1433,15 +1409,29 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
           to: email,
           message: {
             subject: "EcoScrap Collector Application Rejected",
-            html: reason.length > 0
-              ? `
-                <h2>EcoScrap</h2>
-                <p>Your collector application was rejected.</p>
-                <p><strong>Reason:</strong> ${reason}</p>
-              `
-              : `
-                <h2>EcoScrap</h2>
-                <p>Your collector application was rejected by the admin.</p>
+            html: `
+              <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                <h2 style="color:#1FA9A7;">EcoScrap</h2>
+
+                <p>Dear ${name},</p>
+
+                <p>We regret to inform you that your <strong>collector application has been declined</strong>.</p>
+
+                <p>You may review your submission and reapply at any time.</p>
+
+                <p>If you have questions, you may contact our team at 
+                <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+
+                <br/>
+
+                <p>Best regards,<br/>
+                <strong>EcoScrap Team</strong></p>
+
+                <hr style="margin-top:20px;" />
+                <small style="color:#777;">
+                  This is an automated message. Please do not reply directly to this email.
+                </small>
+              </div>
               `,
           },
         });
@@ -1484,6 +1474,18 @@ export const notifyResidentAdminApproved = onDocumentUpdated(
       });
     }
 
+    let name = "User";
+
+      try {
+        const userDoc = await admin.firestore().collection("Users").doc(uid).get();
+        const data = userDoc.data() || {};
+
+        name =
+          String(data.publicName || data.name || data.fullName || "User").trim() || "User";
+      } catch (e) {
+        logger.warn("Failed to get user name", { uid, err: String(e) });
+      }
+
     await sendPushToUser(
       uid,
       "Resident approved ✅",
@@ -1497,10 +1499,31 @@ export const notifyResidentAdminApproved = onDocumentUpdated(
         message: {
           subject: "EcoScrap Resident Registration Approved",
           html: `
-            <h2>EcoScrap</h2>
-            <p>Your residency request has been approved.</p>
-            <p>You may now continue using the app.</p>
-          `,
+        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+          <h2 style="color:#1FA9A7;">EcoScrap</h2>
+
+          <p>Dear ${name},</p>
+
+          <p>Your <strong>residency verification has been successfully approved</strong>.</p>
+
+          <p>You now have full access to EcoScrap services.</p>
+
+          <p>We are glad to have you as part of our community.</p>
+
+          <p>If you have any questions, you may contact our team at 
+          <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+
+          <br/>
+
+          <p>Best regards,<br/>
+          <strong>EcoScrap Team</strong></p>
+
+          <hr style="margin-top:20px;" />
+          <small style="color:#777;">
+            This is an automated message. Please do not reply directly to this email.
+          </small>
+        </div>
+        `,
         },
       });
     }
