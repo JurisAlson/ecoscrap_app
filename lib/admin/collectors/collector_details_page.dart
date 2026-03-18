@@ -16,7 +16,11 @@ import 'package:ecoscrap_app/security/kyc_shared_key.dart';
 
 class CollectorDetailsPage extends StatefulWidget {
   final DocumentReference<Map<String, dynamic>> requestRef;
-  const CollectorDetailsPage({super.key, required this.requestRef});
+
+  const CollectorDetailsPage({
+    super.key,
+    required this.requestRef,
+  });
 
   @override
   State<CollectorDetailsPage> createState() => _CollectorDetailsPageState();
@@ -25,14 +29,8 @@ class CollectorDetailsPage extends StatefulWidget {
 class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   bool _busy = false;
 
-  // ===== UI tokens (match your admin pages) =====
   static const Color _primary = Color(0xFF1FA9A7);
 
-  // ✅ Reject collector:
-  // - Revert role back to user
-  // - Reset ONLY collector fields so they can resubmit
-  // - DO NOT touch residentStatus/residentVerified/resident fields
-  // - DO NOT override residence admin approval logic
   Future<void> _rejectCollectorAndRestoreUser(String uid) async {
     final db = FirebaseFirestore.instance;
 
@@ -40,62 +38,36 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     final reqRef = db.collection("collectorRequests").doc(uid);
 
     await db.runTransaction((tx) async {
-      // ✅ restore role back to "user"
-      tx.set(userRef, {
-        "role": "user",
-        "Roles": "user",
+      tx.set(
+        userRef,
+        {
+          "role": "user",
+          "Roles": "user",
+          "collectorVerified": false,
+          "collectorStatus": "rejected",
+          "collectorActive": false,
+          "collectorUpdatedAt": FieldValue.serverTimestamp(),
+          "junkshopId": FieldValue.delete(),
+          "junkshopName": FieldValue.delete(),
+          "assignedJunkshopUid": FieldValue.delete(),
+          "assignedJunkshopName": FieldValue.delete(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
 
-        // ✅ IMPORTANT:
-        // Do NOT touch these if they are residence verification
-        // "residentStatus": ..., "residentVerified": ...
-        // Do NOT set adminStatus/adminVerified here (that blocks resident dashboard)
-
-        // ✅ Collector-only reset (so they can resubmit)
-        "collectorVerified": false, // if you still use this legacy field
-        "collectorStatus": "rejected",
-        "collectorActive": false,
-        "collectorUpdatedAt": FieldValue.serverTimestamp(),
-
-        // ✅ remove junkshop assignment if any
-        "junkshopId": FieldValue.delete(),
-        "junkshopName": FieldValue.delete(),
-        "assignedJunkshopUid": FieldValue.delete(),
-        "assignedJunkshopName": FieldValue.delete(),
-
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      // ✅ mark request as rejected
-      tx.set(reqRef, {
-        "status": "rejected",
-        "adminRejectedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+        reqRef,
+        {
+          "status": "rejected",
+          "adminRejectedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
     });
   }
 
-  // (Optional) keep if used elsewhere
-  Future<void> approveCollector(DocumentReference reqRef) async {
-    await reqRef.set({
-      "status": "adminApproved",
-      "adminApprovedAt": FieldValue.serverTimestamp(),
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  // (Optional) keep if used elsewhere
-  Future<void> rejectCollector(DocumentReference reqRef, {String reason = ""}) async {
-    await reqRef.set({
-      "status": "rejected",
-      "adminRejectedAt": FieldValue.serverTimestamp(),
-      "adminRejectReason": reason,
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  // ✅ Approve collector:
-  // If you want NEW logic: collectorStatus should be "adminApproved"
-  // and role becomes collector.
   Future<void> _adminApprove(String uid) async {
     final db = FirebaseFirestore.instance;
 
@@ -105,62 +77,67 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     await db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
       if (!reqSnap.exists) {
-        // Do not include uid in surfaced messages
         throw Exception("Collector request not found");
       }
 
-      // request doc status
-      tx.set(reqRef, {
-        "status": "adminApproved",
-        "adminApprovedAt": FieldValue.serverTimestamp(),
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+        reqRef,
+        {
+          "status": "adminApproved",
+          "adminApprovedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
 
-      // user becomes collector
-      tx.set(userRef, {
-        "role": "collector",
-        "Roles": "collector",
-
-        // ✅ NEW: dashboard checks collectorStatus == adminApproved
-        "collectorStatus": "adminApproved",
-        "collectorActive": true,
-        "collectorVerified": true, // legacy if you still use
-        "collectorUpdatedAt": FieldValue.serverTimestamp(),
-
-        "updatedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+        userRef,
+        {
+          "role": "collector",
+          "Roles": "collector",
+          "collectorStatus": "adminApproved",
+          "collectorActive": true,
+          "collectorVerified": true,
+          "collectorUpdatedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
     });
   }
 
-  // =====================================================
-  // 🔓 ADMIN: download encrypted bytes -> decrypt -> return bytes
-  // =====================================================
-  Future<_DecryptedKyc?> _downloadAndDecryptKyc(String uid) async {
+  Future<_DecryptedEquipmentPhoto?> _downloadAndDecryptEquipmentPhoto(
+    String uid,
+  ) async {
     final db = FirebaseFirestore.instance;
-    final kycSnap = await db.collection("collectorKYC").doc(uid).get();
-    final kyc = kycSnap.data() ?? {};
+    final snap = await db.collection("collectorEquipment").doc(uid).get();
+    final data = snap.data() ?? {};
 
-    final storagePath = (kyc["storagePath"] ?? "").toString();
+    final photo = Map<String, dynamic>.from(data["photo"] ?? {});
+
+    final storagePath = (photo["storagePath"] ?? "").toString();
     if (storagePath.isEmpty) return null;
 
-    final originalFileName = (kyc["originalFileName"] ?? "").toString();
+    final originalFileName = (photo["originalFileName"] ?? "").toString();
+    final ephPubKeyB64 = (photo["ephPubKeyB64"] ?? "").toString();
+    final saltB64 = (photo["saltB64"] ?? "").toString();
+    final nonceB64 = (photo["nonceB64"] ?? "").toString();
+    final macB64 = (photo["macB64"] ?? "").toString();
 
-    final ephPubKeyB64 = (kyc["ephPubKeyB64"] ?? "").toString();
-    final saltB64 = (kyc["saltB64"] ?? "").toString();
-    final nonceB64 = (kyc["nonceB64"] ?? "").toString();
-    final macB64 = (kyc["macB64"] ?? "").toString();
-
-    if (ephPubKeyB64.isEmpty || saltB64.isEmpty || nonceB64.isEmpty || macB64.isEmpty) {
-      // Avoid including uid/path in errors that might be shown
+    if (ephPubKeyB64.isEmpty ||
+        saltB64.isEmpty ||
+        nonceB64.isEmpty ||
+        macB64.isEmpty) {
       throw Exception("Missing required encryption metadata");
     }
 
-    // 1) download encrypted blob
     final ref = FirebaseStorage.instance.ref(storagePath);
     final encryptedBytes = await ref.getData(12 * 1024 * 1024);
-    if (encryptedBytes == null) throw Exception("Failed to download encrypted file");
 
-    // 2) derive AES key using Admin private + collector ephemeral public
+    if (encryptedBytes == null) {
+      throw Exception("Failed to download encrypted file");
+    }
+
     final collectorEphPubBytes = base64Decode(ephPubKeyB64);
     final salt = base64Decode(saltB64);
 
@@ -170,7 +147,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       salt: salt,
     );
 
-    // 3) decrypt
     final nonce = Uint8List.fromList(base64Decode(nonceB64));
     final macBytes = Uint8List.fromList(base64Decode(macB64));
 
@@ -179,10 +155,10 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       macBytes: macBytes,
       nonce: nonce,
       key: aesKey,
-      aad: utf8.encode(uid), // keep uid internally for AAD; not shown in UI
+      aad: utf8.encode(uid),
     );
 
-    return _DecryptedKyc(
+    return _DecryptedEquipmentPhoto(
       bytes: plain,
       originalFileName: originalFileName,
       storagePath: storagePath,
@@ -222,8 +198,10 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     );
   }
 
-  // ---------- UI helpers ----------
-  Widget _panel({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
+  Widget _panel({
+    required Widget child,
+    EdgeInsets padding = const EdgeInsets.all(14),
+  }) {
     return Container(
       width: double.infinity,
       padding: padding,
@@ -254,6 +232,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   Widget _pill(String text, {Color? bg, Color? fg, IconData? icon}) {
     final b = bg ?? Colors.white.withOpacity(0.05);
     final f = fg ?? Colors.white.withOpacity(0.85);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -270,7 +249,11 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
           ],
           Text(
             text,
-            style: TextStyle(color: f, fontWeight: FontWeight.w900, fontSize: 12),
+            style: TextStyle(
+              color: f,
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+            ),
           ),
         ],
       ),
@@ -288,13 +271,18 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       height: 52,
       child: ElevatedButton.icon(
         icon: Icon(icon),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+        label: Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
           backgroundColor: background,
           foregroundColor: foreground,
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       ),
     );
@@ -309,12 +297,17 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       height: 52,
       child: OutlinedButton.icon(
         icon: Icon(icon),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+        label: Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
         onPressed: onTap,
         style: OutlinedButton.styleFrom(
           foregroundColor: Colors.white,
           side: BorderSide(color: Colors.white.withOpacity(0.14)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       ),
     );
@@ -328,7 +321,6 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     return Colors.white54;
   }
 
-  // ---------- page ----------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -344,91 +336,91 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
           stream: widget.requestRef.snapshots(),
           builder: (context, snap) {
             if (snap.hasError) {
-              // Do not show raw error (might contain identifiers)
               return const Center(
-                child: Text("Failed to load request.", style: TextStyle(color: Colors.redAccent)),
+                child: Text(
+                  "Failed to load request.",
+                  style: TextStyle(color: Colors.redAccent),
+                ),
               );
             }
+
             if (!snap.hasData) {
-              return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+              return const Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              );
             }
+
             if (!snap.data!.exists) {
               return const Center(
-                child: Text("Request not found.", style: TextStyle(color: Colors.white70)),
+                child: Text(
+                  "Request not found.",
+                  style: TextStyle(color: Colors.white70),
+                ),
               );
             }
 
             final data = snap.data!.data() ?? {};
-            final uid = snap.data!.id; // internal only (do not display)
+            final uid = snap.data!.id;
 
-            final name = (data["publicName"] ?? "Collector").toString();
+            final name = (data["publicName"] ??
+                    data["residentName"] ??
+                    data["name"] ??
+                    "Collector")
+                .toString();
+
             final email = (data["emailDisplay"] ?? "").toString();
             final status = (data["status"] ?? "").toString();
             final isPending = status.toLowerCase() == "pending";
             final accent = _statusAccent(status);
 
-            final kycBlock = FutureBuilder<_DecryptedKyc?>(
-              future: _downloadAndDecryptKyc(uid),
-              builder: (context, kycSnap) {
-                if (kycSnap.connectionState == ConnectionState.waiting) {
+            final equipmentBlock = FutureBuilder<_DecryptedEquipmentPhoto?>(
+              future: _downloadAndDecryptEquipmentPhoto(uid),
+              builder: (context, photoSnap) {
+                if (photoSnap.connectionState == ConnectionState.waiting) {
                   return _panel(
-                    padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 18,
+                      horizontal: 14,
+                    ),
                     child: const SizedBox(
                       height: 180,
-                      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                    ),
-                  );
-                }
-                if (kycSnap.hasError) {
-                  // Do not show raw error
-                  return _panel(
-                    child: const Text(
-                      "ID file could not be opened.",
-                      style: TextStyle(color: Colors.redAccent, height: 1.3),
+                      child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                     ),
                   );
                 }
 
-                final kyc = kycSnap.data;
-                if (kyc == null) {
+                if (photoSnap.hasError) {
+                  return _panel(
+                    child: const Text(
+                      "Equipment photo could not be opened.",
+                      style: TextStyle(
+                        color: Colors.redAccent,
+                        height: 1.3,
+                      ),
+                    ),
+                  );
+                }
+
+                final photo = photoSnap.data;
+                if (photo == null) {
                   return _panel(
                     child: Row(
                       children: [
-                        Icon(Icons.badge_outlined, color: Colors.white.withOpacity(0.6)),
+                        Icon(
+                          Icons.photo_outlined,
+                          color: Colors.white.withOpacity(0.6),
+                        ),
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Text(
-                            "No ID file uploaded.",
-                            style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                final fname = kyc.originalFileName.toLowerCase();
-                final isPdf = fname.endsWith(".pdf");
-
-                if (isPdf) {
-                  return _panel(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.picture_as_pdf_outlined, color: Colors.white.withOpacity(0.75)),
-                            const SizedBox(width: 10),
-                            const Text(
-                              "Government ID (PDF)",
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                            "No equipment photo uploaded.",
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w700,
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          "(e.g. syncfusion_flutter_pdfviewer or flutter_pdfview).",
-                          style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
+                          ),
                         ),
                       ],
                     ),
@@ -442,8 +434,20 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.badge_outlined, color: Colors.white.withOpacity(0.75)),
+                          Icon(
+                            Icons.photo_camera_outlined,
+                            color: Colors.white.withOpacity(0.75),
+                          ),
                           const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              "Collection Device Photo",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
                           _pill(
                             "Tap to zoom",
                             bg: Colors.white.withOpacity(0.04),
@@ -453,13 +457,13 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       ),
                       const SizedBox(height: 12),
                       GestureDetector(
-                        onTap: () => _showDecryptedImageDialog(kyc.bytes),
+                        onTap: () => _showDecryptedImageDialog(photo.bytes),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(14),
                           child: AspectRatio(
                             aspectRatio: 16 / 10,
                             child: Image.memory(
-                              kyc.bytes,
+                              photo.bytes,
                               width: double.infinity,
                               fit: BoxFit.cover,
                             ),
@@ -487,9 +491,14 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                           decoration: BoxDecoration(
                             color: _primary.withOpacity(0.16),
                             borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: _primary.withOpacity(0.22)),
+                            border: Border.all(
+                              color: _primary.withOpacity(0.22),
+                            ),
                           ),
-                          child: const Icon(Icons.local_shipping_outlined, color: _primary),
+                          child: const Icon(
+                            Icons.local_shipping_outlined,
+                            color: _primary,
+                          ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -508,7 +517,10 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                               if (email.isNotEmpty)
                                 Text(
                                   email,
-                                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.65),
+                                    fontSize: 12,
+                                  ),
                                 ),
                               const SizedBox(height: 10),
                               Wrap(
@@ -529,24 +541,26 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 14),
-                  kycBlock,
+                  equipmentBlock,
                   const SizedBox(height: 12),
-
                   _panel(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.security, color: Colors.blueAccent.withOpacity(0.95), size: 18),
+                        Icon(
+                          Icons.security,
+                          color: Colors.blueAccent.withOpacity(0.95),
+                          size: 18,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             "Confidentiality Notice (Admin Responsibility)\n"
-                            "This ID contains sensitive personal information and must be handled with care. "
-                            "Access it only for collector verification and never share, screenshot, download, "
-                            "or distribute it outside official review procedures. "
-                            "You are ethically responsible for maintaining privacy and protecting collector data.",
+                            "This uploaded equipment photo is provided for collector verification only. "
+                            "Review it only for official approval purposes and do not share it outside the admin workflow. "
+                            "Never distribute, repost, or misuse submitted images. "
+                            "You are responsible for protecting applicant data during review.",
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.65),
                               height: 1.35,
@@ -558,28 +572,33 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 14),
-
                   if (_busy)
                     _panel(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                       child: const Row(
                         children: [
-                          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
                           SizedBox(width: 10),
                           Text(
                             "Processing...",
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ],
                       ),
                     ),
-
                   if (_busy) const SizedBox(height: 12),
-
                   _sectionLabel("Admin Actions"),
-
                   Row(
                     children: [
                       Expanded(
@@ -589,25 +608,39 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                           onTap: (_busy || !isPending)
                               ? null
                               : () async {
-                                  final ok = await AdminHelpers.confirm<bool>(
+                                  final ok =
+                                      await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Approve collector?",
-                                    body: "Approve $name? (This makes it visible to junkshops)",
+                                    body:
+                                        "Approve $name? (This makes the collector visible to junkshops)",
                                     yesValue: true,
                                     yesLabel: "Approve",
                                   );
+
                                   if (ok != true) return;
 
                                   setState(() => _busy = true);
                                   try {
                                     await _adminApprove(uid);
-                                    if (mounted) AdminHelpers.toast(context, "Approved $name");
+                                    if (mounted) {
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Approved $name",
+                                      );
+                                    }
                                     if (mounted) Navigator.pop(context);
                                   } catch (_) {
-                                    // Do not surface raw error
-                                    if (mounted) AdminHelpers.toast(context, "Approve failed. Please try again.");
+                                    if (mounted) {
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Approve failed. Please try again.",
+                                      );
+                                    }
                                   } finally {
-                                    if (mounted) setState(() => _busy = false);
+                                    if (mounted) {
+                                      setState(() => _busy = false);
+                                    }
                                   }
                                 },
                         ),
@@ -620,7 +653,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                           onTap: (_busy || !isPending)
                               ? null
                               : () async {
-                                  final ok = await AdminHelpers.confirm<bool>(
+                                  final ok =
+                                      await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Reject collector?",
                                     body:
@@ -628,28 +662,43 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                     yesValue: true,
                                     yesLabel: "Reject",
                                   );
+
                                   if (ok != true) return;
 
                                   setState(() => _busy = true);
                                   try {
-                                    final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
+                                    final callable = FirebaseFunctions
+                                        .instanceFor(
+                                          region: "asia-southeast1",
+                                        )
                                         .httpsCallable("rejectCollector");
 
                                     await callable.call({
                                       "uid": uid,
-                                      "reason": "Your collector application was rejected by the admin.",
+                                      "reason":
+                                          "Your collector application was rejected by the admin.",
                                     });
 
                                     await _rejectCollectorAndRestoreUser(uid);
 
                                     if (mounted) {
-                                      AdminHelpers.toast(context, "Rejected $name. User restored.");
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Rejected $name. User restored.",
+                                      );
                                       Navigator.pop(context);
                                     }
                                   } catch (_) {
-                                    if (mounted) AdminHelpers.toast(context, "Reject failed. Please try again.");
+                                    if (mounted) {
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Reject failed. Please try again.",
+                                      );
+                                    }
                                   } finally {
-                                    if (mounted) setState(() => _busy = false);
+                                    if (mounted) {
+                                      setState(() => _busy = false);
+                                    }
                                   }
                                 },
                         ),
@@ -666,12 +715,12 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   }
 }
 
-class _DecryptedKyc {
+class _DecryptedEquipmentPhoto {
   final Uint8List bytes;
   final String originalFileName;
   final String storagePath;
 
-  _DecryptedKyc({
+  _DecryptedEquipmentPhoto({
     required this.bytes,
     required this.originalFileName,
     required this.storagePath,
