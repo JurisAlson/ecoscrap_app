@@ -1058,7 +1058,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       if (hasReceipt) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Receipt already created for this pickup.")),
+          const SnackBar(content: Text("Order already created for this pickup.")),
         );
         return;
       }
@@ -1735,12 +1735,12 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                                   ? Icons.receipt
                                   : Icons.receipt_long,
                               title: (currentStop?.hasCollectorReceipt == true)
-                                  ? "RECEIPT SAVED"
-                                  : "RECEIPT",
+                                  ? "BUYING SAVED"
+                                  : "BUYING",
                               subtitle:
                                   (currentStop?.hasCollectorReceipt == true)
                                       ? "Already created"
-                                      : "Create buying receipt",
+                                      : "Create buying Order",
                               bg: Colors.white.withOpacity(0.10),
                               fg: Colors.white,
                               border: Colors.white.withOpacity(0.14),

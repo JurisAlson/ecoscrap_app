@@ -5,7 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'collectors_dashboard.dart';
 import 'dart:ui' as ui;
 
 extension TrackingOpacityFix on Color {
@@ -20,6 +20,11 @@ class CollectorTrackingPage extends StatefulWidget {
   final String destinationTitle;
   final String destinationAddress;
   final bool useCurrentLocationAsOrigin;
+  final bool showChatButton;
+  final bool showCancelButton;
+  final bool showArrivedButton;
+  final String trackingType; // "pickup" or "sell"
+  final String? sellRequestId;
 
   const CollectorTrackingPage({
     super.key,
@@ -28,6 +33,11 @@ class CollectorTrackingPage extends StatefulWidget {
     this.destinationTitle = "Destination",
     this.destinationAddress = "",
     this.useCurrentLocationAsOrigin = false,
+    this.showChatButton = false,
+    this.showCancelButton = false,
+    this.showArrivedButton = false,
+    this.trackingType = "pickup",
+    this.sellRequestId,
   }) : assert(
           requestId != null || fixedDestination != null,
           'Provide either requestId or fixedDestination',
@@ -51,6 +61,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   static const Color _textPrimary = Color(0xFFE2E8F0);
   static const Color _textSecondary = Color(0xFF94A3B8);
   static const Color _textMuted = Color(0xFF64748B);
+  static const String _moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
 
   bool get _isFixedDestinationMode => widget.fixedDestination != null;
   bool get _hasValidRequestId =>
@@ -76,6 +87,22 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
         ? widget.destinationTitle
         : "Pinned / GPS pickup location";
   }
+  String get _sourceLabel =>
+    widget.trackingType == "sell" ? "TRIP TYPE" : "PICKUP SOURCE";
+
+  String get _liveStatusText {
+    if (_collectorLatLng != null) {
+      return _isFixedDestinationMode
+          ? "Live route to ${widget.destinationTitle}"
+          : "$_displayCollectorName is sharing live location";
+    }
+
+    return _isFixedDestinationMode
+        ? "Waiting for your current location"
+        : "Waiting for collector location update";
+  }
+  String _routeDistanceText = "";
+  String _routeDurationText = "";
   
 
   String get _topBarTitle =>
@@ -166,7 +193,118 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
     await _fitMap();
     _initialFitDone = true;
   }
+  Future<void> _onChatPressed() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Chat coming soon.")),
+    );
+  }
+  Future<void> _onArrivedPressed() async {
+    if (widget.sellRequestId == null || widget.sellRequestId!.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Missing sell request ID.")),
+      );
+      return;
+    }
 
+    try {
+      await FirebaseFirestore.instance
+          .collection('Users')
+          .doc(_moresUid)
+          .collection('sell_requests')
+          .doc(widget.sellRequestId!)
+          .update({
+        "status": "arrived",
+        "collectorArrived": true,
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Arrival sent to Mores Scrap.")),
+      );
+
+      // ✅ GO BACK TO COLLECTOR DASHBOARD
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const CollectorsDashboardPage(),
+        ),
+        (route) => false,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to mark arrived: $e")),
+      );
+    }
+  }
+
+  Future<void> _onCancelPressed() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: _sheet,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: const Text(
+          "Cancel trip?",
+          style: TextStyle(color: _textPrimary),
+        ),
+        content: const Text(
+          "Are you sure you want to cancel this trip to Mores Scrap?",
+          style: TextStyle(color: _textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("No"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _danger,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text("Yes, cancel"),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    if (widget.sellRequestId == null || widget.sellRequestId!.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Missing sell request ID.")),
+      );
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('Users')
+          .doc(_moresUid)
+          .collection('sell_requests')
+          .doc(widget.sellRequestId!)
+          .update({
+        "status": "cancelled",
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Trip cancelled.")),
+      );
+
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to cancel trip: $e")),
+      );
+    }
+  }
   Future<void> _initPage() async {
     await _loadCollectorIcon();
     await _initMyLocation();
@@ -336,6 +474,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   Future<void> _buildCollectorRouteToPickup({
     required LatLng collectorLatLng,
     required LatLng pickupLatLng,
+    
   }) async {
     try {
       final callable = _functions.httpsCallable('getDirections');
@@ -347,11 +486,18 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
 
       final data = result.data;
       if (data is! Map) return;
+      final distanceText = (data['distanceText'] ?? '').toString();
+      final durationText = (data['durationText'] ?? '').toString();
+      
 
       final points = data['points'] as String?;
       if (points == null || points.isEmpty) {
         if (!mounted) return;
-        setState(() => _collectorRoutePoints = []);
+        setState(() {
+          _collectorRoutePoints = [];
+          _routeDistanceText = "";
+          _routeDurationText = "";
+        });
         return;
       }
 
@@ -360,11 +506,17 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       if (!mounted) return;
       setState(() {
         _collectorRoutePoints = decoded;
+        _routeDistanceText = distanceText;
+        _routeDurationText = durationText;
       });
     } catch (e) {
       debugPrint("collector route failed: $e");
       if (!mounted) return;
-      setState(() => _collectorRoutePoints = []);
+      setState(() {
+        _collectorRoutePoints = [];
+        _routeDistanceText = "";
+        _routeDurationText = "";
+      });
     }
   }
 
@@ -739,9 +891,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              _collectorLatLng != null
-                                  ? "$_displayCollectorName is sharing live location"
-                                  : "Waiting for collector location update",
+                              _liveStatusText,
                               style: const TextStyle(
                                 color: _textSecondary,
                                 fontWeight: FontWeight.w600,
@@ -769,12 +919,14 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                   const SizedBox(height: 12),
                   _infoTile(
                     icon: Icons.flag_outlined,
-                    label: "PICKUP SOURCE",
-                    value: _pickupSource == "pin"
-                        ? "Pinned location"
-                        : (_pickupSource == "gps"
-                            ? "Current location"
-                            : "Not specified"),
+                    label: _sourceLabel,
+                    value: widget.trackingType == "sell"
+                        ? "Collector to junkshop"
+                        : (_pickupSource == "pin"
+                            ? "Pinned location"
+                            : (_pickupSource == "gps"
+                                ? "Current location"
+                                : "Not specified")),
                     valueColor: _textPrimary,
                   ),
                   if (_landmark.trim().isNotEmpty) ...[
@@ -799,31 +951,97 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                   Row(
                     children: [
                       Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _fitMap,
-                          icon: const Icon(Icons.fit_screen_outlined),
-                          label: const Text("Fit Map"),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _textPrimary,
-                            side: const BorderSide(color: _border),
-                            backgroundColor: _surface,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                          ),
+                        child: _infoTile(
+                          icon: Icons.route_outlined,
+                          label: "DISTANCE",
+                          value: _routeDistanceText.isEmpty ? "Calculating..." : _routeDistanceText,
+                          valueColor: _textPrimary,
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
+                        child: _infoTile(
+                          icon: Icons.schedule_outlined,
+                          label: "ETA",
+                          value: _routeDurationText.isEmpty ? "Calculating..." : _routeDurationText,
+                          valueColor: _textPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _fitMap,
+                      icon: const Icon(Icons.fit_screen_outlined),
+                      label: const Text("Fit Map"),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _textPrimary,
+                        side: const BorderSide(color: _border),
+                        backgroundColor: _surface,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  if (widget.trackingType == "sell") ...[
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        if (widget.showChatButton)
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _onChatPressed,
+                              icon: const Icon(Icons.chat_bubble_outline_rounded),
+                              label: const Text("Chat"),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _textPrimary,
+                                side: const BorderSide(color: _border),
+                                backgroundColor: _surface,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (widget.showChatButton && widget.showCancelButton)
+                          const SizedBox(width: 12),
+                        if (widget.showCancelButton)
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _onCancelPressed,
+                              icon: const Icon(Icons.close_rounded),
+                              label: const Text("Cancel"),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _danger,
+                                side: const BorderSide(color: _border),
+                                backgroundColor: _surface,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    if (widget.showArrivedButton) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
                         child: ElevatedButton.icon(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.check_circle_outline),
-                          label: const Text("Done"),
+                          onPressed: _onArrivedPressed,
+                          icon: const Icon(Icons.location_on_outlined),
+                          label: const Text("Arrived"),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: _accent,
                             foregroundColor: _bg,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            padding: const EdgeInsets.symmetric(vertical: 15),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(16),
                             ),
@@ -832,7 +1050,26 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                         ),
                       ),
                     ],
-                  ),
+                  ] else ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.check_circle_outline),
+                        label: const Text("Done"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _accent,
+                          foregroundColor: _bg,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          elevation: 0,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
