@@ -108,7 +108,7 @@ class _CollectorTransactionPageState extends State<CollectorTransactionPage> {
         children: [
           Expanded(
             child: _segBtn(
-              label: "BUY",
+              label: "COLLECTED",
               selected: _tab == 0,
               onTap: () => setState(() => _tab = 0),
             ),

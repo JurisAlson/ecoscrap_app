@@ -19,6 +19,8 @@ class _CollectorNotificationsPageState
   static const Color primaryColor = Color(0xFF1FA9A7);
   static const Color bgColor = Color(0xFF0F172A);
 
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
   static const List<String> declineReasons = [
     "Too far from my location",
     "Already handling another pickup",
@@ -124,6 +126,74 @@ class _CollectorNotificationsPageState
     }
   }
 
+  Future<void> _clearNotification(String notificationId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('userNotifications')
+          .doc(user.uid)
+          .collection('items')
+          .doc(notificationId)
+          .delete();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Notification cleared.")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to clear notification: $e")),
+      );
+    }
+  }
+
+  Future<void> _clearAllCancelledPickupNotifications() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  try {
+    final snap = await FirebaseFirestore.instance
+        .collection('userNotifications')
+        .doc(user.uid)
+        .collection('items')
+        .get();
+
+    final batch = FirebaseFirestore.instance.batch();
+
+    for (final doc in snap.docs) {
+      final data = doc.data();
+
+      final type = (data['type'] ?? '').toString().toLowerCase();
+      final title = (data['title'] ?? '').toString().toLowerCase();
+      final message = (data['message'] ?? '').toString().toLowerCase();
+
+      final isCancelledPickup =
+          type.contains('cancel') ||
+          title.contains('cancel') ||
+          message.contains('cancel');
+
+      if (isCancelledPickup) {
+        batch.delete(doc.reference);
+      }
+    }
+
+    await batch.commit();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Cancelled pickup notifications cleared.")),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Failed to clear notifications: $e")),
+    );
+  }
+}
+
   Future<void> _declinePickup(String requestId, {required String reason}) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -138,7 +208,8 @@ class _CollectorNotificationsPageState
         final data = snap.data() as Map<String, dynamic>;
         final householdId = (data['householdId'] ?? '').toString().trim();
         final collectorName = (data['collectorName'] ?? 'Collector').toString();
-        final pickupAddress = (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
+        final pickupAddress =
+            (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
 
         tx.update(ref, {
           'status': 'declined',
@@ -186,8 +257,9 @@ class _CollectorNotificationsPageState
     required String requestId,
     required Map<String, dynamic> data,
   }) async {
-    final address = (data['fullAddress'] ?? data['pickupAddress'] ?? 'Unknown address')
-        .toString();
+    final address =
+        (data['fullAddress'] ?? data['pickupAddress'] ?? 'Unknown address')
+            .toString();
     final household = (data['householdName'] ?? 'Household').toString();
     final bagLabel = (data['bagLabel'] ?? '').toString();
     final bagKgNum =
@@ -217,7 +289,6 @@ class _CollectorNotificationsPageState
             "${etaMinutes != null ? "ETA: $etaMinutes min\n" : ""}"
             "Schedule: $scheduleText\n"
             "${source.isNotEmpty ? "Pickup Source: $source\n" : ""}",
-            
           ),
         ),
         actionsAlignment: MainAxisAlignment.spaceBetween,
@@ -610,6 +681,7 @@ class _CollectorNotificationsPageState
         .orderBy('updatedAt', descending: true);
 
     return Scaffold(
+  key: _scaffoldKey,
       backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: bgColor,
@@ -723,8 +795,10 @@ class _CollectorNotificationsPageState
                                         (data['householdName'] ?? 'Household')
                                             .toString();
                                     final address =
-                                        (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
-                                    final phoneNumber = (data['phoneNumber'] ?? '').toString();
+                                        (data['fullAddress'] ?? data['pickupAddress'] ?? '')
+                                            .toString();
+                                    final phoneNumber =
+                                        (data['phoneNumber'] ?? '').toString();
 
                                     final bagLabel =
                                         (data['bagLabel'] ?? '').toString();
@@ -776,8 +850,7 @@ class _CollectorNotificationsPageState
                                                             14),
                                                   ),
                                                   child: const Icon(
-                                                    Icons
-                                                        .local_shipping_outlined,
+                                                    Icons.local_shipping_outlined,
                                                     color: Colors.white,
                                                   ),
                                                 ),
@@ -790,8 +863,8 @@ class _CollectorNotificationsPageState
                                                       Text(
                                                         household,
                                                         maxLines: 1,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
+                                                        overflow:
+                                                            TextOverflow.ellipsis,
                                                         style: const TextStyle(
                                                           color: Colors.white,
                                                           fontWeight:
@@ -800,9 +873,12 @@ class _CollectorNotificationsPageState
                                                       ),
                                                       const SizedBox(height: 4),
                                                       Text(
-                                                        address.isEmpty ? "No address" : address,
+                                                        address.isEmpty
+                                                            ? "No address"
+                                                            : address,
                                                         maxLines: 2,
-                                                        overflow: TextOverflow.ellipsis,
+                                                        overflow:
+                                                            TextOverflow.ellipsis,
                                                         style: TextStyle(
                                                           color: Colors.grey.shade400,
                                                           fontSize: 12,
@@ -949,16 +1025,26 @@ class _CollectorNotificationsPageState
                                             thickness: 1,
                                           ),
                                         ),
+                                        TextButton(
+                                          onPressed: () async {
+                                            await _clearAllCancelledPickupNotifications();
+                                          },
+                                          child: const Text(
+                                            "Clear",
+                                            style: TextStyle(
+                                              color: Colors.redAccent,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   ),
                                   ...notifDocs.map((doc) {
-                                    final n =
-                                        doc.data() as Map<String, dynamic>;
+                                    final n = doc.data() as Map<String, dynamic>;
 
                                     final title =
-                                        (n['title'] ?? 'Notification')
-                                            .toString();
+                                        (n['title'] ?? 'Notification').toString();
                                     final message =
                                         (n['message'] ?? '').toString();
                                     final reason = (n['reason'] ??
@@ -973,15 +1059,47 @@ class _CollectorNotificationsPageState
                                         ? _formatNotifTime(createdAt)
                                         : "";
 
+final type = (n['type'] ?? '').toString().toLowerCase();
+final titleText = (n['title'] ?? '').toString().toLowerCase();
+final messageText = (n['message'] ?? '').toString().toLowerCase();
+
+final isCancelledPickup =
+    type.contains('cancel') ||
+    titleText.contains('cancel') ||
+    messageText.contains('cancel');
+
                                     return Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 12),
+                                      padding: const EdgeInsets.only(bottom: 12),
                                       child: _notifTile(
                                         title: title,
                                         subtitle: message,
                                         timeText: timeText,
                                         status: status,
-                                        trailing: null,
+                                        trailing: isCancelledPickup
+                                            ? TextButton(
+                                                onPressed: () async =>
+                                                    await _clearNotification(
+                                                        doc.id),
+                                                style: TextButton.styleFrom(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 6,
+                                                  ),
+                                                  minimumSize: Size.zero,
+                                                  tapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                ),
+                                                child: const Text(
+                                                  "CLEAR",
+                                                  style: TextStyle(
+                                                    color: Colors.redAccent,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              )
+                                            : null,
                                         onTap: () async {
                                           await showDialog(
                                             context: context,
@@ -1016,8 +1134,7 @@ class _CollectorNotificationsPageState
                                                               FontWeight.bold,
                                                         ),
                                                       ),
-                                                      const SizedBox(
-                                                          height: 18),
+                                                      const SizedBox(height: 18),
                                                       Text(
                                                         message,
                                                         style: const TextStyle(
@@ -1026,8 +1143,7 @@ class _CollectorNotificationsPageState
                                                           height: 1.4,
                                                         ),
                                                       ),
-                                                      const SizedBox(
-                                                          height: 18),
+                                                      const SizedBox(height: 18),
                                                       Row(
                                                         crossAxisAlignment:
                                                             CrossAxisAlignment
@@ -1036,11 +1152,9 @@ class _CollectorNotificationsPageState
                                                           const Text(
                                                             "Reason: ",
                                                             style: TextStyle(
-                                                              color:
-                                                                  Colors.white,
+                                                              color: Colors.white,
                                                               fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
+                                                                  FontWeight.bold,
                                                               fontSize: 15,
                                                             ),
                                                           ),
@@ -1058,8 +1172,7 @@ class _CollectorNotificationsPageState
                                                           ),
                                                         ],
                                                       ),
-                                                      const SizedBox(
-                                                          height: 20),
+                                                      const SizedBox(height: 20),
                                                       Align(
                                                         alignment: Alignment
                                                             .centerRight,
@@ -1067,9 +1180,8 @@ class _CollectorNotificationsPageState
                                                           onPressed: () =>
                                                               Navigator.pop(
                                                                   dialogContext),
-                                                          child: const Text(
-                                                            "Close",
-                                                          ),
+                                                          child:
+                                                              const Text("Close"),
                                                         ),
                                                       ),
                                                     ],
@@ -1089,22 +1201,8 @@ class _CollectorNotificationsPageState
                                         },
                                       ),
                                     );
-                                  }),
+                                  }).toList(),
                                 ],
-
-                                const SizedBox(height: 10),
-                                _notifTile(
-                                  title: "Need help?",
-                                  subtitle:
-                                      "Chat your assigned junkshop anytime.",
-                                  timeText: "",
-                                  status: "read",
-                                  trailing: TextButton(
-                                    onPressed: () async =>
-                                        await _openJunkshopChat(),
-                                    child: const Text("OPEN CHAT"),
-                                  ),
-                                ),
                                 const SizedBox(height: 24),
                               ],
                             );
