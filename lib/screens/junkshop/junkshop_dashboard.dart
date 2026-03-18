@@ -156,75 +156,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   }
 
   Widget _chatNavItem(int index) {
-    final isActive = _activeTabIndex == index;
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-
-    if (uid == null) {
-      return _navItem(index, Icons.chat_bubble_outline, "Chats");
-    }
-
-    final unreadStream = FirebaseFirestore.instance
-        .collection('chat_rooms')
-        .where('junkshopId', isEqualTo: uid)
-        .snapshots();
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: unreadStream,
-      builder: (context, snap) {
-        int unreadCount = 0;
-
-        for (final doc in snap.data?.docs ?? []) {
-          final data = doc.data() as Map<String, dynamic>;
-          final unread = (data['junkshopUnreadCount'] as num?)?.toInt() ?? 0;
-          unreadCount += unread;
-        }
-
-        final hasUnread = unreadCount > 0;
-
-        return GestureDetector(
-          onTap: () => _goToTab(index),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Icon(
-                      Icons.chat_bubble_outline,
-                      color: isActive ? primaryColor : Colors.grey.shade500,
-                    ),
-                    if (hasUnread)
-                      Positioned(
-                        right: -2,
-                        top: -2,
-                        child: Container(
-                          width: 10,
-                          height: 10,
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  "CHATS",
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                    color: isActive ? primaryColor : Colors.grey.shade500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+    return _navItem(index, Icons.chat_bubble_outline, "Chats");
   }
 
   Widget _buildJunkshopNotifBell() {
@@ -387,7 +319,6 @@ final sellRequestsStream = FirebaseFirestore.instance
     .collection('Users')
     .doc(user.uid)
     .collection('sell_requests')
-    .where('status', isEqualTo: 'pending')
     .orderBy('createdAt', descending: true)
     .limit(50)
     .snapshots();
@@ -585,6 +516,19 @@ for (final d in dropSnap.data?.docs ?? []) {
                               (data['collectorId'] ?? '').toString().trim();
                           final kg = ((data['kg'] as num?) ?? 0).toDouble();
                           final seen = data['seen'] == true;
+                          final status = (data['status'] ?? '').toString();
+
+                          final sellTitle = status == 'arrived'
+                              ? (collectorName.isEmpty
+                                  ? "Collector arrived"
+                                  : "$collectorName arrived at Mores Scrap")
+                              : (collectorName.isEmpty
+                                  ? "Incoming collector sell request"
+                                  : "$collectorName is on the way");
+
+                          final sellSubtitle = status == 'arrived'
+                              ? "${kg.toStringAsFixed(2)} kg ready for confirmation"
+                              : "${kg.toStringAsFixed(2)} kg incoming";
 
                           return Container(
                             margin: const EdgeInsets.only(bottom: 12),
@@ -595,79 +539,150 @@ for (final d in dropSnap.data?.docs ?? []) {
                                 color: Colors.white.withOpacity(0.08),
                               ),
                             ),
-child: ListTile(
-  onTap: () async {
-    await FirebaseFirestore.instance
-        .collection('Users')
-        .doc(user.uid)
-        .collection('sell_requests')
-        .doc(docId)
-        .set({
-      'seen': true,
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+                            child: ListTile(
+                              onTap: status == 'arrived'
+                                  ? () async {
+                                      final action = await showDialog<String>(
+                                        context: context,
+                                        builder: (_) => AlertDialog(
+                                          backgroundColor: const Color(0xFF0F172A),
+                                          title: const Text(
+                                            "Confirm arrival",
+                                            style: TextStyle(color: Colors.white),
+                                          ),
+                                          content: Text(
+                                            collectorName.isEmpty
+                                                ? "Did the collector really arrive at Mores Scrap?"
+                                                : "Did $collectorName really arrive at Mores Scrap?",
+                                            style: const TextStyle(color: Colors.white70),
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context, 'dismiss'),
+                                              child: const Text(
+                                                "NOT HERE",
+                                                style: TextStyle(color: Colors.redAccent),
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context, 'proceed'),
+                                              child: const Text(
+                                                "PROCEED",
+                                                style: TextStyle(color: Colors.greenAccent),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
 
-    if (!context.mounted) return;
-    Navigator.pop(context);
+                                      if (action == 'dismiss') {
+                                        await FirebaseFirestore.instance
+                                            .collection('Users')
+                                            .doc(user.uid)
+                                            .collection('sell_requests')
+                                            .doc(docId)
+                                            .set({
+                                          'seen': true,
+                                          'status': 'dismissed',
+                                          'updatedAt': FieldValue.serverTimestamp(),
+                                        }, SetOptions(merge: true));
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => receipt.ReceiptScreen(
-          shopID: user.uid,
-          prefillCollectorName:
-              collectorName.isEmpty ? null : collectorName,
-          prefillCollectorId:
-              collectorId.isEmpty ? null : collectorId,
-          sellRequestId: docId,
-          prefillSourceType: "collector",
-        ),
-      ),
-    );
-  },
-  leading: Container(
-    width: 44,
-    height: 44,
-    decoration: BoxDecoration(
-      color: seen
-          ? Colors.white.withOpacity(0.08)
-          : Colors.orange.withOpacity(0.15),
-      borderRadius: BorderRadius.circular(14),
-    ),
-    child: Icon(
-      Icons.local_shipping_outlined,
-      color: seen ? Colors.white70 : Colors.orangeAccent,
-    ),
-  ),
-  title: Text(
-    collectorName.isEmpty
-        ? "Collector sell request"
-        : "$collectorName wants to sell",
-    style: const TextStyle(
-      color: Colors.white,
-      fontWeight: FontWeight.bold,
-    ),
-  ),
-  subtitle: Text(
-    "${kg.toStringAsFixed(2)} kg for receipt entry",
-    style: TextStyle(
-      color: Colors.grey.shade400,
-      fontSize: 12,
-    ),
-  ),
-  trailing: Text(
-    dt == null ? "" : hhmm(dt),
-    style: TextStyle(
-      color: Colors.grey.shade500,
-      fontSize: 11,
-    ),
-  ),
-),
-                            
-                           
-                              );
-                            }
+                                        if (!context.mounted) return;
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text("Sell request dismissed.")),
+                                        );
+                                        return;
+                                      }
 
+                                      if (action != 'proceed') return;
+
+                                      await FirebaseFirestore.instance
+                                          .collection('Users')
+                                          .doc(user.uid)
+                                          .collection('sell_requests')
+                                          .doc(docId)
+                                          .set({
+                                        'seen': true,
+                                        'status': 'confirmed',
+                                        'junkshopConfirmedArrival': true,
+                                        'updatedAt': FieldValue.serverTimestamp(),
+                                      }, SetOptions(merge: true));
+
+                                      if (!context.mounted) return;
+                                      Navigator.pop(context);
+
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => receipt.ReceiptScreen(
+                                            shopID: user.uid,
+                                            prefillCollectorName:
+                                                collectorName.isEmpty ? null : collectorName,
+                                            prefillCollectorId:
+                                                collectorId.isEmpty ? null : collectorId,
+                                            sellRequestId: docId,
+                                            prefillSourceType: "collector",
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  : () async {
+                                      await FirebaseFirestore.instance
+                                          .collection('Users')
+                                          .doc(user.uid)
+                                          .collection('sell_requests')
+                                          .doc(docId)
+                                          .set({
+                                        'seen': true,
+                                        'updatedAt': FieldValue.serverTimestamp(),
+                                      }, SetOptions(merge: true));
+                                    },
+                              leading: Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  color: status == 'arrived'
+                                      ? Colors.green.withOpacity(0.15)
+                                      : seen
+                                          ? Colors.white.withOpacity(0.08)
+                                          : Colors.orange.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Icon(
+                                  status == 'arrived'
+                                      ? Icons.check_circle_outline
+                                      : Icons.local_shipping_outlined,
+                                  color: status == 'arrived'
+                                      ? Colors.greenAccent
+                                      : seen
+                                          ? Colors.white70
+                                          : Colors.orangeAccent,
+                                ),
+                              ),
+                              title: Text(
+                                sellTitle,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              subtitle: Text(
+                                sellSubtitle,
+                                style: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              trailing: Text(
+                                dt == null ? "" : hhmm(dt),
+                                style: TextStyle(
+                                  color: Colors.grey.shade500,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          );
+                        }
                         final status = (data['status'] ?? 'en_route').toString();
                         final title = dropoffTitleFromStatus(status);
                         final message = dropoffMessageFromData(data);
@@ -684,86 +699,137 @@ child: ListTile(
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(color: Colors.white.withOpacity(0.08)),
                           ),
-child: ListTile(
-  onTap: status == 'arrived'
-      ? () async {
-          await FirebaseFirestore.instance
-              .collection('dropoff_requests')
-              .doc(docId)
-              .set({
-            'readByJunkshop': true,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+                          child: ListTile(
+                            onTap: status == 'arrived'
+                                ? () async {
+                                    final action = await showDialog<String>(
+                                      context: context,
+                                      builder: (_) => AlertDialog(
+                                        backgroundColor: const Color(0xFF0F172A),
+                                        title: const Text(
+                                          "Confirm arrival",
+                                          style: TextStyle(color: Colors.white),
+                                        ),
+                                        content: Text(
+                                          householdName.isEmpty
+                                              ? "Has the resident really arrived?"
+                                              : "Has $householdName really arrived at the junkshop?",
+                                          style: const TextStyle(color: Colors.white70),
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, 'dismiss'),
+                                            child: const Text(
+                                              "NOT HERE",
+                                              style: TextStyle(color: Colors.redAccent),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, 'proceed'),
+                                            child: const Text(
+                                              "PROCEED",
+                                              style: TextStyle(color: Colors.greenAccent),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
 
-          if (!context.mounted) return;
-          Navigator.pop(context);
+                                    if (action == 'dismiss') {
+                                      await FirebaseFirestore.instance
+                                          .collection('dropoff_requests')
+                                          .doc(docId)
+                                          .set({
+                                        'clearedByJunkshop': true,
+                                        'updatedAt': FieldValue.serverTimestamp(),
+                                      }, SetOptions(merge: true));
 
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => receipt.ReceiptScreen(
-                shopID: user.uid,
-                prefillCollectorName:
-                    householdName.isEmpty ? null : householdName,
-                prefillCollectorId:
-                    householdId.isEmpty ? null : householdId,
-                prefillSourceType: "household",
-                sellRequestId: docId,
-              ),
-            ),
-          );
-        }
-      : null,
-  leading: Container(
-    width: 44,
-    height: 44,
-    decoration: BoxDecoration(
-      color: readByJunkshop
-          ? Colors.white.withOpacity(0.08)
-          : status == 'cancelled'
-              ? Colors.red.withOpacity(0.15)
-              : status == 'arrived'
-                  ? Colors.green.withOpacity(0.15)
-                  : Colors.blue.withOpacity(0.15),
-      borderRadius: BorderRadius.circular(14),
-    ),
-    child: Icon(
-      status == 'cancelled'
-          ? Icons.cancel_outlined
-          : status == 'arrived'
-              ? Icons.check_circle_outline
-              : Icons.store_mall_directory_outlined,
-      color: readByJunkshop
-          ? Colors.white70
-          : status == 'cancelled'
-              ? Colors.redAccent
-              : status == 'arrived'
-                  ? Colors.greenAccent
-                  : Colors.lightBlueAccent,
-    ),
-  ),
-  title: Text(
-    title,
-    style: const TextStyle(
-      color: Colors.white,
-      fontWeight: FontWeight.bold,
-    ),
-  ),
-  subtitle: Text(
-    message,
-    style: TextStyle(
-      color: Colors.grey.shade400,
-      fontSize: 12,
-    ),
-  ),
-  trailing: Text(
-    dt == null ? "" : hhmm(dt),
-    style: TextStyle(
-      color: Colors.grey.shade500,
-      fontSize: 11,
-    ),
-  ),
-),
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text("Drop-off notification dismissed.")),
+                                      );
+                                      return;
+                                    }
+
+                                    if (action != 'proceed') return;
+
+                                    await FirebaseFirestore.instance
+                                        .collection('dropoff_requests')
+                                        .doc(docId)
+                                        .set({
+                                      'readByJunkshop': true,
+                                      'updatedAt': FieldValue.serverTimestamp(),
+                                    }, SetOptions(merge: true));
+
+                                    if (!context.mounted) return;
+                                    Navigator.pop(context);
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => receipt.ReceiptScreen(
+                                          shopID: user.uid,
+                                          prefillCollectorName:
+                                              householdName.isEmpty ? null : householdName,
+                                          prefillCollectorId:
+                                              householdId.isEmpty ? null : householdId,
+                                          prefillSourceType: "household",
+                                          sellRequestId: docId,
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                : null,
+              leading: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: readByJunkshop
+                      ? Colors.white.withOpacity(0.08)
+                      : status == 'cancelled'
+                          ? Colors.red.withOpacity(0.15)
+                          : status == 'arrived'
+                              ? Colors.green.withOpacity(0.15)
+                              : Colors.blue.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  status == 'cancelled'
+                      ? Icons.cancel_outlined
+                      : status == 'arrived'
+                          ? Icons.check_circle_outline
+                          : Icons.store_mall_directory_outlined,
+                  color: readByJunkshop
+                      ? Colors.white70
+                      : status == 'cancelled'
+                          ? Colors.redAccent
+                          : status == 'arrived'
+                              ? Colors.greenAccent
+                              : Colors.lightBlueAccent,
+                              ),
+                            ),
+                            title: Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Text(
+                              message,
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: Text(
+                              dt == null ? "" : hhmm(dt),
+                              style: TextStyle(
+                                color: Colors.grey.shade500,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
                         );
                       },
                     );

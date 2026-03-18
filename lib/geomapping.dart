@@ -89,6 +89,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   bool get _isDelivering => _tripStage == TripStage.delivering;
   bool get _rideActive => _tripStage == TripStage.delivering;
 
+  
+
   LatLng get _originLatLng {
     final p = _currentPosition;
     if (p == null) return _defaultCenter;
@@ -169,23 +171,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     await _mapController?.setMapStyle(_darkMapStyle);
   }
 
-  Future<void> _deleteDropoffChat(String requestId) async {
-  final db = FirebaseFirestore.instance;
-  final chatRef = db.collection('chats').doc('dropoff_$requestId');
-
-  try {
-    final messages = await chatRef.collection('messages').get();
-    for (final doc in messages.docs) {
-      await doc.reference.delete();
-    }
-
-    await chatRef.delete();
-  } catch (e) {
-    debugPrint('Failed to delete dropoff chat: $e');
-  }
-}
-
-
   Future<void> _openDropoffChat() async {
   final user = FirebaseAuth.instance.currentUser;
   final requestId = _activeDropoffRequestId;
@@ -216,6 +201,22 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     );
   } catch (e) {
     _snack("Failed to open chat.");
+  }
+}
+
+Future<void> _deleteDropoffChat(String requestId) async {
+  final db = FirebaseFirestore.instance;
+  final chatRef = db.collection('chats').doc('dropoff_$requestId');
+
+  try {
+    final messages = await chatRef.collection('messages').get();
+    for (final doc in messages.docs) {
+      await doc.reference.delete();
+    }
+
+    await chatRef.delete();
+  } catch (e) {
+    debugPrint('Failed to delete dropoff chat: $e');
   }
 }
 
@@ -614,6 +615,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       _activePickupRequestId = null;
       _dropoffStatus = "en_route";
     });
+    
 
     final dropoffId = await _createDropoffRequest();
 
@@ -647,6 +649,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         'updatedAt': FieldValue.serverTimestamp(),
         'readByJunkshop': false,
       });
+
+      await _deleteDropoffChat(requestId);
 
       if (!mounted) return;
       setState(() {
@@ -730,6 +734,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
           .collection('dropoff_requests')
           .doc(requestId)
           .update(payload);
+
+      await _deleteDropoffChat(requestId);
 
       if (!mounted) return;
       setState(() {

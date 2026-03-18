@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
-
 import 'collector_transaction_page.dart';
 import '../chat/screens/chat_page.dart';
 import '../chat/services/chat_services.dart';
@@ -835,32 +834,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     );
   }
 
-  Future<void> _openGoogleMapsNavigation() async {
-    final stop = _currentStop;
-    if (stop == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No active stop selected.")),
-      );
-      return;
-    }
-
-    final url = Uri.parse(
-      "https://www.google.com/maps/dir/?api=1"
-      "&destination=${stop.pickupLocation.latitude},${stop.pickupLocation.longitude}"
-      "&travelmode=driving",
-    );
-
-    if (await canLaunchUrl(url)) {
-      await launchUrl(url, mode: LaunchMode.externalApplication);
-    } else {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Could not open Google Maps.")),
-      );
-    }
-  }
-
   Future<void> _openJunkshopChat() async {
     final stop = _currentStop;
     if (stop == null) return;
@@ -1085,7 +1058,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       if (hasReceipt) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Receipt already created for this pickup.")),
+          const SnackBar(content: Text("Order already created for this pickup.")),
         );
         return;
       }
@@ -1743,16 +1716,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 10),
-                          _actionWide(
-                            icon: Icons.map_outlined,
-                            title: "NAVIGATE",
-                            subtitle: "Open Google Maps",
-                            bg: Colors.white.withOpacity(0.10),
-                            fg: Colors.white,
-                            border: Colors.white.withOpacity(0.14),
-                            onTap: _openGoogleMapsNavigation,
-                          ),
+                        
                           const SizedBox(height: 10),
                           if (currentStop?.phoneNumber.trim().isNotEmpty == true)
                             _actionWide(
@@ -1771,12 +1735,12 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                                   ? Icons.receipt
                                   : Icons.receipt_long,
                               title: (currentStop?.hasCollectorReceipt == true)
-                                  ? "RECEIPT SAVED"
-                                  : "RECEIPT",
+                                  ? "BUYING SAVED"
+                                  : "BUYING",
                               subtitle:
                                   (currentStop?.hasCollectorReceipt == true)
                                       ? "Already created"
-                                      : "Create buying receipt",
+                                      : "Create buying Order",
                               bg: Colors.white.withOpacity(0.10),
                               fg: Colors.white,
                               border: Colors.white.withOpacity(0.14),

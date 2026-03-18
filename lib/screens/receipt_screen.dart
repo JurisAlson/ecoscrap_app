@@ -583,6 +583,13 @@ double get _sellMaxKg {
       DocumentReference<Map<String, dynamic>>? dropoffReqRef;
       DocumentSnapshot<Map<String, dynamic>>? dropoffReqSnap;
 
+      String? collectorIdFromSellRequest;
+      String? collectorTransactionIdFromSellRequest;
+      double collectorKgFromSellRequest = 0.0;
+
+      DocumentReference<Map<String, dynamic>>? collectorInventoryRef;
+      DocumentSnapshot<Map<String, dynamic>>? collectorInventorySnap;
+
       if (fromCollectorSellRequest && widget.sellRequestId != null) {
         sellReqRef = db
             .collection('Users')
@@ -625,12 +632,31 @@ double get _sellMaxKg {
           throw Exception("This sell request was already processed.");
         }
 
-        final collectorIdFromSellRequest =
+        collectorIdFromSellRequest =
             (sellReqData['collectorId'] ?? '').toString().trim();
 
-        if (collectorIdFromSellRequest.isEmpty) {
+        collectorTransactionIdFromSellRequest =
+            (sellReqData['collectorTransactionId'] ?? '').toString().trim();
+
+        collectorKgFromSellRequest =
+            ((sellReqData['kg'] as num?) ?? 0).toDouble();
+
+        if (collectorIdFromSellRequest == null ||
+            collectorIdFromSellRequest!.isEmpty) {
           throw Exception("Missing collectorId in sell request.");
         }
+
+        if (collectorKgFromSellRequest <= 0) {
+          throw Exception("Missing or invalid kg in sell request.");
+        }
+
+        collectorInventoryRef = db
+            .collection('Users')
+            .doc(collectorIdFromSellRequest)
+            .collection('inventory')
+            .doc('summary');
+
+        collectorInventorySnap = await trx.get(collectorInventoryRef);
       }
 
       if (fromHouseholdDropoff &&
@@ -750,6 +776,33 @@ double get _sellMaxKg {
           });
         }
       }
+      if (fromCollectorSellRequest &&
+          collectorIdFromSellRequest != null &&
+          collectorIdFromSellRequest!.isNotEmpty &&
+          collectorInventoryRef != null &&
+          collectorInventorySnap != null) {
+        final currentCollectorKg = collectorInventorySnap!.exists
+            ? (((collectorInventorySnap!.data() as Map<String, dynamic>)['totalKg']
+                        as num?) ??
+                    0)
+                .toDouble()
+            : 0.0;
+
+        if (currentCollectorKg < collectorKgFromSellRequest) {
+          throw Exception(
+            "Collector inventory is too low. Available: ${_formatKg(currentCollectorKg)}",
+          );
+        }
+
+        trx.set(
+          collectorInventoryRef!,
+          {
+            'totalKg': FieldValue.increment(-collectorKgFromSellRequest),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
 
       final grossAmount = _totalAmount;
       final transportCost = isSell ? _transportCost : 0.0;
@@ -808,6 +861,27 @@ double get _sellMaxKg {
           SetOptions(merge: true),
         );
       }
+      if (fromCollectorSellRequest &&
+          collectorIdFromSellRequest != null &&
+          collectorIdFromSellRequest!.isNotEmpty &&
+          collectorTransactionIdFromSellRequest != null &&
+          collectorTransactionIdFromSellRequest!.isNotEmpty) {
+        final collectorTxnRef = db
+            .collection('Users')
+            .doc(collectorIdFromSellRequest)
+            .collection('transactions')
+            .doc(collectorTransactionIdFromSellRequest);
+
+        trx.set(
+          collectorTxnRef,
+          {
+            'status': 'completed',
+            'receiptTransactionId': txRef.id,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
 
       if (fromHouseholdDropoff &&
           widget.sellRequestId != null &&
@@ -821,6 +895,15 @@ double get _sellMaxKg {
             'receiptTransactionId': txRef.id,
             'processedAt': FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+        trx.set(
+          db.collection('chats').doc('dropoff_${widget.sellRequestId}'),
+          {
+            'active': false,
+            'status': 'completed',
+            'lastMessageAt': FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),
         );

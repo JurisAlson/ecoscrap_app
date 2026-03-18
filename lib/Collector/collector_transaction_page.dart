@@ -402,31 +402,60 @@ class _BuyFormState extends State<_BuyForm> {
   @override
   Widget build(BuildContext context) {
     final requestId = widget.requestId;
-    if (requestId == null || requestId.trim().isEmpty) {
+    final hasRequest = requestId != null && requestId.trim().isNotEmpty;
+
+    final collectorId = FirebaseAuth.instance.currentUser?.uid;
+    if (collectorId == null) {
       return _empty(
-        title: "No pickup selected",
-        body: "Open BUY from the ARRIVED pickup screen to create a receipt.",
+        title: "Not signed in",
+        body: "Please sign in to continue.",
       );
     }
 
+    final historyStream = FirebaseFirestore.instance
+        .collection('Users')
+        .doc(collectorId)
+        .collection('transactions')
+        .where('kind', isEqualTo: 'buy')
+        .orderBy('createdAt', descending: true)
+        .limit(10)
+        .snapshots();
+
+    if (!hasRequest) {
+      return StreamBuilder<QuerySnapshot>(
+        stream: historyStream,
+        builder: (context, historySnap) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 16),
+                _historySection(historySnap),
+              ],
+            ),
+          );
+        },
+      );
+    }
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('requests')
           .doc(requestId)
           .snapshots(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
+      builder: (context, requestSnap) {
+        if (requestSnap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (!snap.hasData || !snap.data!.exists) {
+        if (!requestSnap.hasData || !requestSnap.data!.exists) {
           return _empty(
             title: "Request not found",
             body: "The pickup request no longer exists.",
           );
         }
 
-        final data = snap.data!.data() as Map<String, dynamic>? ?? {};
+        final data = requestSnap.data!.data() as Map<String, dynamic>? ?? {};
 
         final householdName = (data['householdName'] ?? "Household").toString();
         final address = _TransactionUi.pickupAddress(data);
@@ -437,131 +466,180 @@ class _BuyFormState extends State<_BuyForm> {
           requestData: data,
         );
         final alreadyReceipted = data['hasCollectorReceipt'] == true;
-
         final totalAmount = bagKg * buyPricePerKg;
 
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _TransactionUi.glassCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _TransactionUi.label("Household"),
-                    const SizedBox(height: 8),
-                    Text(
-                      householdName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+        return StreamBuilder<QuerySnapshot>(
+          stream: historyStream,
+          builder: (context, historySnap) {
+            final historyDocs = historySnap.data?.docs ?? [];
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _TransactionUi.glassCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: primaryColor.withOpacity(0.14),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: const Icon(
+                                Icons.receipt_long_rounded,
+                                color: primaryColor,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "Current Transaction",
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    "Review the selected pickup before saving.",
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        _sectionTitle("Household"),
+                        const SizedBox(height: 8),
+                        Text(
+                          householdName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (address.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            address,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        _sectionTitle("Collector"),
+                        const SizedBox(height: 8),
+                        Text(
+                          collectorName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _TransactionUi.glassCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          "Payment Breakdown",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        _infoRow("Bag size", bagLabel),
+                        const SizedBox(height: 10),
+                        _infoRow("Locked weight", "${bagKg.toStringAsFixed(2)} kg"),
+                        const SizedBox(height: 10),
+                        _infoRow(
+                          "Price per kg",
+                          "₱${buyPricePerKg.toStringAsFixed(2)}",
+                        ),
+                        const Divider(color: Colors.white24, height: 22),
+                        _infoRow(
+                          "Total payment",
+                          "₱${totalAmount.toStringAsFixed(2)}",
+                          highlight: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (alreadyReceipted) ...[
+                    const SizedBox(height: 12),
+                    _TransactionUi.glassCard(
+                      child: Row(
+                        children: const [
+                          Icon(Icons.check_circle, color: Colors.greenAccent),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "Receipt already saved for this pickup.",
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    if (address.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        address,
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 56,
+                    child: ElevatedButton(
+                      onPressed: (_saving || alreadyReceipted || bagKg <= 0)
+                          ? null
+                          : () => _saveBuyReceipt(data),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primaryColor,
+                        disabledBackgroundColor: Colors.white24,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                      ),
+                      child: Text(
+                        _saving
+                            ? "SAVING..."
+                            : alreadyReceipted
+                                ? "TRANSACTION ALREADY SAVED"
+                                : "SAVE TRANSACTION",
                         style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.1,
                         ),
                       ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _TransactionUi.glassCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _TransactionUi.label("Collector"),
-                    const SizedBox(height: 8),
-                    Text(
-                      collectorName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      "Weight is locked based on the household bag size selection.",
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _TransactionUi.glassCard(
-                child: Column(
-                  children: [
-                    _infoRow("Bag size", bagLabel),
-                    const SizedBox(height: 10),
-                    _infoRow("Locked weight", "${bagKg.toStringAsFixed(2)} kg"),
-                    const SizedBox(height: 10),
-                    _infoRow(
-                      "Price per kg",
-                      "₱${buyPricePerKg.toStringAsFixed(2)}",
-                    ),
-                    const SizedBox(height: 10),
-                    _infoRow(
-                      "Total payment",
-                      "₱${totalAmount.toStringAsFixed(2)}",
-                      highlight: true,
-                    ),
-                  ],
-                ),
-              ),
-              if (alreadyReceipted) ...[
-                const SizedBox(height: 12),
-                _TransactionUi.glassCard(
-                  child: Row(
-                    children: const [
-                      Icon(Icons.check_circle, color: Colors.greenAccent),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          "Receipt already saved for this pickup.",
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: (_saving || alreadyReceipted || bagKg <= 0)
-                      ? null
-                      : () => _saveBuyReceipt(data),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    disabledBackgroundColor: Colors.white24,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
                     ),
                   ),
-                  child: Text(
-                    _saving
-                        ? "SAVING..."
-                        : alreadyReceipted
-                            ? "TRANSACTION ALREADY SAVED"
-                            : "SAVE",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                ),
+                  const SizedBox(height: 22),
+                  _historySection(historySnap),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -582,6 +660,212 @@ class _BuyFormState extends State<_BuyForm> {
         ),
       ],
     );
+  }
+    Widget _sectionTitle(String text) {
+    return Text(
+      text.toUpperCase(),
+      style: const TextStyle(
+        color: Color(0xFF94A3B8),
+        fontSize: 10,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 1.1,
+      ),
+    );
+  }
+
+  Widget _historyCard({
+    required String householdName,
+    required String bagLabel,
+    required double kg,
+    required double pricePerKg,
+    required double totalAmount,
+    required Timestamp? createdAt,
+  }) {
+    return _TransactionUi.glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: primaryColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.shopping_bag_rounded,
+                  color: primaryColor,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      householdName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatDate(createdAt),
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.greenAccent.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: Colors.greenAccent.withOpacity(0.18),
+                  ),
+                ),
+                child: const Text(
+                  "PAID",
+                  style: TextStyle(
+                    color: Colors.greenAccent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withOpacity(0.05)),
+            ),
+            child: Column(
+              children: [
+                _infoRow("Bag size", bagLabel),
+                const SizedBox(height: 10),
+                _infoRow("Weight", "${kg.toStringAsFixed(2)} kg"),
+                const SizedBox(height: 10),
+                _infoRow("Per kg", "₱${pricePerKg.toStringAsFixed(2)}"),
+                const Divider(color: Colors.white24, height: 22),
+                _infoRow(
+                  "Total payment",
+                  "₱${totalAmount.toStringAsFixed(2)}",
+                  highlight: true,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _historySection(AsyncSnapshot<QuerySnapshot> historySnap) {
+    final historyDocs = historySnap.data?.docs ?? [];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: const [
+            Icon(Icons.history_rounded, color: Colors.white70, size: 20),
+            SizedBox(width: 8),
+            Text(
+              "Recent Collected History",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          "Your latest saved buy transactions.",
+          style: TextStyle(
+            color: Colors.white60,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (historySnap.connectionState == ConnectionState.waiting)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (historyDocs.isEmpty)
+          _TransactionUi.glassCard(
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Center(
+                child: Text(
+                  "No transaction history yet.",
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+            ),
+          )
+        else
+          ...historyDocs.map((doc) {
+            final item = doc.data() as Map<String, dynamic>;
+            final household =
+                (item['householdName'] ?? 'Household').toString();
+            final bag = (item['bagLabel'] ?? 'Bag').toString();
+            final kg = ((item['kg'] as num?) ?? 0).toDouble();
+            final price = ((item['pricePerKg'] as num?) ?? 0).toDouble();
+            final total = ((item['totalAmount'] as num?) ?? 0).toDouble();
+            final createdAt = item['createdAt'] as Timestamp?;
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _historyCard(
+                householdName: household,
+                bagLabel: bag,
+                kg: kg,
+                pricePerKg: price,
+                totalAmount: total,
+                createdAt: createdAt,
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
+  String _formatDate(Timestamp? timestamp) {
+    if (timestamp == null) return "Date unavailable";
+
+    final dt = timestamp.toDate();
+
+    final months = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ];
+
+    final hour = dt.hour > 12
+        ? dt.hour - 12
+        : dt.hour == 0
+            ? 12
+            : dt.hour;
+
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final suffix = dt.hour >= 12 ? "PM" : "AM";
+
+    return "${months[dt.month - 1]} ${dt.day}, ${dt.year} • $hour:$minute $suffix";
   }
 
   Widget _empty({required String title, required String body}) {
@@ -629,8 +913,8 @@ class _SellFormState extends State<_SellForm> {
   static const String moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
 
   // Replace with real Mores Scrap coordinates
-  static const double moresLat = 14.5995;
-  static const double moresLng = 120.9842;
+  static const double moresLat = 14.198630;
+  static const double moresLng = 121.117270;
 
   final TextEditingController _kgCtrl = TextEditingController();
   bool _saving = false;
@@ -702,33 +986,28 @@ class _SellFormState extends State<_SellForm> {
           );
         }
 
-        trx.set(
-          inventoryRef,
-          {
-            "totalKg": FieldValue.increment(-sellKg),
-            "updatedAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
         trx.set(sellReqRef, {
           "kind": "collector_sell_to_junkshop",
           "type": "sell",
-          "status": "pending",
+          "status": "incoming",
           "seen": false,
           "junkshopUid": moresUid,
           "junkshopName": "Mores Scrap",
           "sourceType": "collector",
           "collectorId": collectorId,
           "collectorName": collectorName,
+          "collectorTransactionId": txnRef.id,
           "kg": sellKg,
+          "collectorArrived": false,
+          "junkshopConfirmedArrival": false,
           "createdAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
         });
 
         trx.set(txnRef, {
           "kind": "sell_request",
-          "status": "pending",
+          "status": "incoming",
+          "sellRequestId": sellReqRef.id,
           "junkshopUid": moresUid,
           "junkshopName": "Mores Scrap",
           "kg": sellKg,
@@ -747,10 +1026,15 @@ class _SellFormState extends State<_SellForm> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => const CollectorTrackingPage(
-            fixedDestination: LatLng(moresLat, moresLng),
+          builder: (_) => CollectorTrackingPage(
+            fixedDestination: const LatLng(moresLat, moresLng),
             destinationTitle: "Mores Scrap",
             destinationAddress: "Mores Scrap",
+            trackingType: "sell",
+            showChatButton: true,
+            showCancelButton: true,
+            showArrivedButton: true,
+            sellRequestId: sellReqRef.id,
           ),
         ),
       );
@@ -793,7 +1077,7 @@ class _SellFormState extends State<_SellForm> {
             style: TextStyle(color: Colors.white),
           ),
           content: Text(
-            "You are about to send ${sellKg.toStringAsFixed(2)} kg to Mores Scrap.\n\nThis will deduct the amount from your inventory immediately.",
+            "You are about to notify Mores Scrap that you are bringing ${sellKg.toStringAsFixed(2)} kg.\n\nYour inventory will only be deducted after arrival is confirmed and the receipt is processed.",
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
