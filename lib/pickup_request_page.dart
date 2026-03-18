@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'waiting_collector_page.dart';
-import 'household/household_order_page.dart';
 import 'household/household_dashboard.dart';
 
 class PickupRequestPage extends StatefulWidget {
