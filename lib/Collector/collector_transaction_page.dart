@@ -629,8 +629,8 @@ class _SellFormState extends State<_SellForm> {
   static const String moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
 
   // Replace with real Mores Scrap coordinates
-  static const double moresLat = 14.5995;
-  static const double moresLng = 120.9842;
+  static const double moresLat = 14.198630;
+  static const double moresLng = 121.117270;
 
   final TextEditingController _kgCtrl = TextEditingController();
   bool _saving = false;
