@@ -898,6 +898,15 @@ double get _sellMaxKg {
           },
           SetOptions(merge: true),
         );
+        trx.set(
+          db.collection('chats').doc('dropoff_${widget.sellRequestId}'),
+          {
+            'active': false,
+            'status': 'completed',
+            'lastMessageAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
       }
     });
 
