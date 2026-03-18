@@ -19,79 +19,89 @@
       with WidgetsBindingObserver {
     static const Color primaryColor = Color(0xFF1FA9A7);
     static const Color bgColor = Color(0xFF0F172A);
-    static const int maxActivePickups = 5;
+    static const double maxCapacityKg = 20.0;
 
     final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
     int _tabIndex = 0;
 
-    Future<void> _acceptPickup(String requestId) async {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
+    double _getRequestKg(Map<String, dynamic> data) {
+      final value = data['bagKg'];
+      if (value is num) return value.toDouble();
+      if (value is String) return double.tryParse(value) ?? 0.0;
+      return 0.0;
+    }
 
-      final db = FirebaseFirestore.instance;
-      final requestRef = db.collection('requests').doc(requestId);
+  Future<void> _acceptPickup(String requestId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-      try {
-        final activeDocs = await db
-            .collection('requests')
-            .where('type', isEqualTo: 'pickup')
-            .where('collectorId', isEqualTo: user.uid)
-            .where('active', isEqualTo: true)
-            .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
-            .get();
+    final db = FirebaseFirestore.instance;
+    final requestRef = db.collection('requests').doc(requestId);
 
-        if (activeDocs.docs.length >= maxActivePickups) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                "You can only accept up to $maxActivePickups active pickups.",
-              ),
-            ),
-          );
-          return;
+    try {
+      final activeDocs = await db
+          .collection('requests')
+          .where('type', isEqualTo: 'pickup')
+          .where('collectorId', isEqualTo: user.uid)
+          .where('active', isEqualTo: true)
+          .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
+          .get();
+
+      double currentActiveKg = 0.0;
+      for (final doc in activeDocs.docs) {
+        currentActiveKg += _getRequestKg(doc.data());
+      }
+
+      await db.runTransaction((tx) async {
+        final requestSnap = await tx.get(requestRef);
+        if (!requestSnap.exists) {
+          throw Exception("Request not found.");
         }
 
-        await db.runTransaction((tx) async {
-          final requestSnap = await tx.get(requestRef);
-          if (!requestSnap.exists) {
-            throw Exception("Request not found.");
-          }
+        final data = requestSnap.data() as Map<String, dynamic>;
+        final status = (data['status'] ?? '').toString().toLowerCase();
+        final collectorId = (data['collectorId'] ?? '').toString();
+        final requestKg = _getRequestKg(data);
 
-          final data = requestSnap.data() as Map<String, dynamic>;
-          final status = (data['status'] ?? '').toString().toLowerCase();
-          final collectorId = (data['collectorId'] ?? '').toString();
+        if (!['pending', 'scheduled'].contains(status)) {
+          throw Exception("This pickup is no longer available.");
+        }
 
-          if (!['pending', 'scheduled'].contains(status)) {
-            throw Exception("This pickup is no longer available.");
-          }
+        if (collectorId.isNotEmpty && collectorId != user.uid) {
+          throw Exception("This pickup was already accepted by another collector.");
+        }
 
-          if (collectorId.isNotEmpty && collectorId != user.uid) {
-            throw Exception("This pickup was already accepted by another collector.");
-          }
+        if ((currentActiveKg + requestKg) > maxCapacityKg) {
+          throw Exception(
+            "Capacity exceeded. "
+            "Current load: ${currentActiveKg.toStringAsFixed(1)} kg, "
+            "request: ${requestKg.toStringAsFixed(1)} kg, "
+            "max: ${maxCapacityKg.toStringAsFixed(1)} kg.",
+          );
+        }
 
-          tx.update(requestRef, {
-            'status': 'accepted',
-            'active': true,
-            'collectorId': user.uid,
-            'acceptedAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-            'queueNumber': activeDocs.docs.length + 1,
-          });
+        tx.update(requestRef, {
+          'status': 'accepted',
+          'active': true,
+          'collectorId': user.uid,
+          'acceptedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+          'queueNumber': activeDocs.docs.length + 1,
         });
+      });
 
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Pickup accepted.")),
-        );
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Accept failed: $e")),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Pickup accepted.")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Accept failed: $e")),
+      );
     }
+  }
 
     Future<void> _declinePickup(String requestId) async {
       final user = FirebaseAuth.instance.currentUser;
@@ -584,16 +594,6 @@
               collectorId: user.uid,
               onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
               notifBell: _buildCollectorNotifBell(),
-              onOpenOrders: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => _CollectorMapTab(
-                      collectorId: user.uid,
-                    ),
-                  ),
-                );
-              },
             ),
 
             const CollectorTransactionPage(embedded: true),
@@ -675,13 +675,11 @@
       required this.collectorId,
       required this.onOpenProfile,
       required this.notifBell,
-      required this.onOpenOrders,
     });
 
     final Widget notifBell;
     final String collectorId;
     final VoidCallback onOpenProfile;
-    final VoidCallback onOpenOrders;
 
     static const Color primaryColor = Color(0xFF1FA9A7);
     static const Color surfaceColor = Color(0xFF111827);
@@ -697,7 +695,8 @@
           .collection('requests')
           .where('type', isEqualTo: 'pickup')
           .where('collectorId', isEqualTo: collectorId)
-          .where('active', isEqualTo: true);
+          .where('active', isEqualTo: true)
+          .where('status', whereIn: ['accepted', 'arrived', 'scheduled']);
 
       final completedTodayQuery = FirebaseFirestore.instance
           .collection('requests')
@@ -708,7 +707,31 @@
       return StreamBuilder<QuerySnapshot>(
         stream: activeQuery.snapshots(),
         builder: (context, activeSnap) {
-          final activeCount = activeSnap.data?.docs.length ?? 0;
+          final activeDocs = activeSnap.data?.docs ?? [];
+          final activeCount = activeDocs.length;
+
+          double activeKg = 0.0;
+          for (final doc in activeDocs) {
+            final data = doc.data() as Map<String, dynamic>;
+            final value = data['bagKg'];
+            if (value is num) activeKg += value.toDouble();
+            if (value is String) activeKg += double.tryParse(value) ?? 0.0;
+          }
+
+          final remainingKg = (20.0 - activeKg).clamp(0.0, 20.0);
+          final activeRequestIds = activeDocs.map((d) => d.id).toList();
+
+          void openActiveMap() {
+            if (activeRequestIds.isEmpty) return;
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => CollectorPickupMapPage(
+                  requestIds: activeRequestIds,
+                ),
+              ),
+            );
+          }
 
           return StreamBuilder<QuerySnapshot>(
             stream: completedTodayQuery.snapshots(),
@@ -842,8 +865,8 @@
                                 Expanded(
                                   child: Text(
                                     activeCount == 0
-                                        ? "You have no active pickups at the moment."
-                                        : "You currently have $activeCount active pickup${activeCount == 1 ? '' : 's'}.",
+                                      ? "You have no accepted active pickups at the moment."
+                                      : "You currently have $activeCount active pickup${activeCount == 1 ? '' : 's'} with a total load of ${activeKg.toStringAsFixed(1)} kg.",
                                     style: const TextStyle(
                                       color: Colors.white70,
                                       fontSize: 12,
@@ -867,6 +890,7 @@
                             title: "Active",
                             value: "$activeCount",
                             icon: Icons.local_shipping_outlined,
+                            onTap: activeRequestIds.isEmpty ? null : openActiveMap,
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -880,8 +904,8 @@
                         const SizedBox(width: 10),
                         Expanded(
                           child: _summaryCard(
-                            title: "Limit",
-                            value: "20",
+                            title: "Remaining",
+                            value: "${remainingKg.toStringAsFixed(1)} kg",
                             icon: Icons.layers_outlined,
                           ),
                         ),
@@ -894,7 +918,7 @@
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        onPressed: onOpenOrders,
+                        onPressed: activeRequestIds.isEmpty ? null : openActiveMap,
                         icon: const Icon(Icons.map_outlined),
                         label: const Text("Open Active Pickups"),
                         style: ElevatedButton.styleFrom(
@@ -973,8 +997,9 @@
       required String title,
       required String value,
       required IconData icon,
+      VoidCallback? onTap,
     }) {
-      return Container(
+      final child = Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         decoration: BoxDecoration(
           color: cardColor,
@@ -1006,6 +1031,14 @@
             ),
           ],
         ),
+      );
+
+      if (onTap == null) return child;
+
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: child,
       );
     }
   }
@@ -1060,8 +1093,7 @@
           .where('collectorId', isEqualTo: collectorId)
           .where('active', isEqualTo: true)
           .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
-          .orderBy('acceptedAt', descending: false)
-          .limit(5);
+          .orderBy('acceptedAt', descending: false);
 
       return Scaffold(
         backgroundColor: bgColor,
@@ -1145,7 +1177,7 @@
                               ),
                               const Spacer(),
                               Text(
-                                "${docs.length}/5 active",
+                                "${docs.length} active",
                                 style: const TextStyle(
                                   color: textMuted,
                                   fontSize: 12,
@@ -1597,470 +1629,588 @@
   }
 
   class _CollectorLogsHome extends StatelessWidget {
-    const _CollectorLogsHome({
-      required this.collectorId,
-    });
+  const _CollectorLogsHome({
+    required this.collectorId,
+  });
 
-    final String collectorId;
+  final String collectorId;
 
-    @override
-    Widget build(BuildContext context) {
-      final activeQuery = FirebaseFirestore.instance
-          .collection('requests')
-          .where('type', isEqualTo: 'pickup')
-          .where('collectorId', isEqualTo: collectorId)
-          .where('active', isEqualTo: true)
-          .orderBy('updatedAt', descending: true)
-          .limit(10);
+  Future<void> _clearHistory(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-      final historyQuery = FirebaseFirestore.instance
-          .collection('requests')
-          .where('type', isEqualTo: 'pickup')
-          .where('collectorId', isEqualTo: collectorId)
-          .where('active', isEqualTo: false)
-          .orderBy('updatedAt', descending: true)
-          .limit(25);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text(
+          "Clear history?",
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          "This will hide your old collector history items.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              "Cancel",
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              "Clear",
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
 
-      final resumeQuery = FirebaseFirestore.instance
-          .collection('requests')
-          .where('type', isEqualTo: 'pickup')
-          .where('collectorId', isEqualTo: collectorId)
-          .where('active', isEqualTo: true)
-          .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
-          .orderBy('acceptedAt', descending: false)
-          .limit(5);
+    if (confirmed != true) return;
 
-      return StreamBuilder<QuerySnapshot>(
-        stream: activeQuery.snapshots(),
-        builder: (context, activeSnap) {
-          if (activeSnap.connectionState == ConnectionState.waiting) {
-            return const Padding(
-              padding: EdgeInsets.only(top: 24),
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
+    final now = Timestamp.now();
 
-          if (activeSnap.hasError) {
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                "Error loading logs: ${activeSnap.error}",
-                style: const TextStyle(color: Colors.white70),
-              ),
-            );
-          }
+    await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+      'lastHistoryClearedAt': now,
+    }, SetOptions(merge: true));
 
-          final activeDocs = activeSnap.data?.docs ?? [];
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("History cleared.")),
+    );
+  }
 
-          return StreamBuilder<QuerySnapshot>(
-            stream: historyQuery.snapshots(),
-            builder: (context, historySnap) {
-              if (historySnap.connectionState == ConnectionState.waiting) {
-                return const Padding(
-                  padding: EdgeInsets.only(top: 24),
-                  child: Center(child: CircularProgressIndicator()),
-                );
-              }
+  @override
+  Widget build(BuildContext context) {
+    final activeQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
+        .orderBy('updatedAt', descending: true)
+        .limit(10);
 
-              if (historySnap.hasError) {
-                return Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    "Error loading logs: ${historySnap.error}",
-                    style: const TextStyle(color: Colors.white70),
-                  ),
-                );
-              }
+    final historyQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: false)
+        .orderBy('updatedAt', descending: true)
+        .limit(25);
 
-              final historyDocs = historySnap.data?.docs ?? [];
+    final resumeQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
+        .orderBy('acceptedAt', descending: false);
 
-              if (activeDocs.isEmpty && historyDocs.isEmpty) {
-                return const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text("No logs yet.", style: TextStyle(color: Colors.white70)),
-                );
-              }
+    final userDocStream = FirebaseFirestore.instance
+        .collection('Users')
+        .doc(collectorId)
+        .snapshots();
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  StreamBuilder<QuerySnapshot>(
-                    stream: resumeQuery.snapshots(),
-                    builder: (context, resumeSnap) {
-                      final docs = resumeSnap.data?.docs ?? [];
-                      if (docs.isEmpty) return const SizedBox.shrink();
+    return StreamBuilder<DocumentSnapshot>(
+      stream: userDocStream,
+      builder: (context, userSnap) {
+        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+        final clearedAt = userData['lastHistoryClearedAt'] as Timestamp?;
 
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 14),
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: Colors.white.withOpacity(0.10)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              "Resume active pickups",
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
+        return StreamBuilder<QuerySnapshot>(
+          stream: activeQuery.snapshots(),
+          builder: (context, activeSnap) {
+            if (activeSnap.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+
+            if (activeSnap.hasError) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  "Error loading logs: ${activeSnap.error}",
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              );
+            }
+
+            final activeDocs = activeSnap.data?.docs ?? [];
+
+            return StreamBuilder<QuerySnapshot>(
+              stream: historyQuery.snapshots(),
+              builder: (context, historySnap) {
+                if (historySnap.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+
+                if (historySnap.hasError) {
+                  return Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      "Error loading logs: ${historySnap.error}",
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  );
+                }
+
+                final rawHistoryDocs = historySnap.data?.docs ?? [];
+
+                final historyDocs = clearedAt == null
+                    ? rawHistoryDocs
+                    : rawHistoryDocs.where((doc) {
+                        final data = doc.data() as Map<String, dynamic>;
+                        final ts = data['updatedAt'] as Timestamp?;
+                        if (ts == null) return true;
+                        return ts.toDate().isAfter(clearedAt.toDate());
+                      }).toList();
+
+                if (activeDocs.isEmpty && historyDocs.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text(
+                      "No logs yet.",
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  );
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    StreamBuilder<QuerySnapshot>(
+                      stream: resumeQuery.snapshots(),
+                      builder: (context, resumeSnap) {
+                        final docs = resumeSnap.data?.docs ?? [];
+                        if (docs.isEmpty) return const SizedBox.shrink();
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 14),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.10),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                "Resume active pickups",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              "${docs.length} active pickup(s)",
-                              style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
-                            ),
-                            const SizedBox(height: 10),
-                            for (final doc in docs) ...[
-                              Builder(
-                                builder: (_) {
-                                  final data = doc.data() as Map<String, dynamic>;
-                                  final status =
-                                      (data['status'] ?? '').toString().toLowerCase();
-                                  final name =
-                                      (data['householdName'] ?? 'Household').toString();
-                                  final address =
-                                      (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString();
-                                  final phoneNumber = (data['phoneNumber'] ?? '').toString();
+                              const SizedBox(height: 6),
+                              Text(
+                                "${docs.length} active pickup(s)",
+                                style: TextStyle(
+                                  color: Colors.grey.shade300,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              for (final doc in docs) ...[
+                                Builder(
+                                  builder: (_) {
+                                    final data =
+                                        doc.data() as Map<String, dynamic>;
+                                    final status =
+                                        (data['status'] ?? '')
+                                            .toString()
+                                            .toLowerCase();
+                                    final name =
+                                        (data['householdName'] ?? 'Household')
+                                            .toString();
+                                    final address =
+                                        (data['fullAddress'] ??
+                                                data['pickupAddress'] ??
+                                                '')
+                                            .toString();
+                                    final phoneNumber =
+                                        (data['phoneNumber'] ?? '').toString();
 
-                                  return Container(
-                                    margin: const EdgeInsets.only(bottom: 10),
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.05),
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(color: Colors.white.withOpacity(0.08)),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.place_outlined,
-                                            color: Colors.greenAccent),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                "$name • $status",
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                              if (address.isNotEmpty)
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 10),
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.05),
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: Colors.white.withOpacity(0.08),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.place_outlined,
+                                            color: Colors.greenAccent,
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
                                                 Text(
-                                                  address,
-                                                  style: TextStyle(
-                                                    color: Colors.grey.shade400,
-                                                    fontSize: 11,
+                                                  "$name • $status",
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600,
                                                   ),
                                                 ),
-                                              if (phoneNumber.isNotEmpty)
-                                              Text(
-                                                "Mobile: $phoneNumber",
-                                                style: TextStyle(
-                                                  color: Colors.grey.shade300,
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),  
-                                            ],
+                                                if (address.isNotEmpty)
+                                                  Text(
+                                                    address,
+                                                    style: TextStyle(
+                                                      color:
+                                                          Colors.grey.shade400,
+                                                      fontSize: 11,
+                                                    ),
+                                                  ),
+                                                if (phoneNumber.isNotEmpty)
+                                                  Text(
+                                                    "Mobile: $phoneNumber",
+                                                    style: TextStyle(
+                                                      color:
+                                                          Colors.grey.shade300,
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
                                           ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                width: double.infinity,
+                                height: 46,
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    final requestIds =
+                                        docs.map((d) => d.id).toList();
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => CollectorPickupMapPage(
+                                          requestIds: requestIds,
                                         ),
-                                      ],
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.map_outlined,
+                                    size: 18,
+                                  ),
+                                  label: const Text(
+                                    "OPEN ALL ON MAP",
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 0.3,
                                     ),
-                                  );
-                                },
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    elevation: 0,
+                                    backgroundColor: const Color(0xFF1FA9A7),
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ],
-                            const SizedBox(height: 8),
-
-                            SizedBox(
-                              width: double.infinity,
-                              height: 46,
-                              child: ElevatedButton.icon(
-                                onPressed: () {
-                                  final requestIds = docs.map((d) => d.id).toList();
-
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => CollectorPickupMapPage(
-                                        requestIds: requestIds,
-                                      ),
-                                    ),
-                                  );
-                                },
-                                icon: const Icon(Icons.map_outlined, size: 18),
-                                label: const Text(
-                                  "OPEN ALL ON MAP",
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 0.3,
-                                  ),
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  elevation: 0,
-                                  backgroundColor: const Color(0xFF1FA9A7), // same teal as your UI
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      "Active",
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (activeDocs.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 10),
+                        child: Text(
+                          "No active pickups.",
+                          style: TextStyle(color: Colors.white54),
                         ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    "Active",
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
+                      )
+                    else
+                      for (final d in activeDocs) _buildLogCard(d),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        const Text(
+                          "History",
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        const Spacer(),
+                        if (historyDocs.isNotEmpty)
+                          TextButton.icon(
+                          onPressed: () => _clearHistory(context),
+                          icon: const Icon(Icons.done_all, size: 18),
+                          label: const Text("Clear"),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.redAccent,
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (activeDocs.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.only(bottom: 10),
-                      child: Text("No active pickups.", style: TextStyle(color: Colors.white54)),
-                    )
-                  else
-                    for (final d in activeDocs) _buildLogCard(d),
-                  const SizedBox(height: 14),
-                  const Text(
-                    "History",
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (historyDocs.isEmpty)
-                    const Text("No history yet.", style: TextStyle(color: Colors.white54))
-                  else
-                    for (final d in historyDocs) _buildLogCard(d),
-                ],
-              );
-            },
-          );
-        },
-      );
-    }
+                    const SizedBox(height: 8),
+                    if (historyDocs.isEmpty)
+                      const Text(
+                        "No history yet.",
+                        style: TextStyle(color: Colors.white54),
+                      )
+                    else
+                      for (final d in historyDocs) _buildLogCard(d),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
 
-    static Widget _buildLogCard(QueryDocumentSnapshot d) {
-      final data = d.data() as Map<String, dynamic>;
-      final status = (data['status'] ?? '').toString().toLowerCase();
+  static Widget _buildLogCard(QueryDocumentSnapshot d) {
+    final data = d.data() as Map<String, dynamic>;
+    final status = (data['status'] ?? '').toString().toLowerCase();
 
-      final name = (data['householdName'] ??
-              (data['household'] is Map ? (data['household']['name']) : null) ??
-              data['name'] ??
-              "Unknown")
-          .toString();
-      final phoneNumber = (data['phoneNumber'] ?? '').toString();
-      final title = _statusToTitle(status);
-      final ts = _pickBestTimestamp(data, status);
-      final timeText = _formatTimestamp(ts);
+    final name = (data['householdName'] ??
+            (data['household'] is Map ? (data['household']['name']) : null) ??
+            data['name'] ??
+            "Unknown")
+        .toString();
+    final phoneNumber = (data['phoneNumber'] ?? '').toString();
+    final title = _statusToTitle(status);
+    final ts = _pickBestTimestamp(data, status);
+    final timeText = _formatTimestamp(ts);
 
-      return _logCard(
-        title: title,
-        subtitle: phoneNumber.isNotEmpty
-            ? "Name: $name\nMobile: $phoneNumber"
-            : "Name: $name",
-        time: timeText,
-        icon: _statusToIcon(status),
-        iconBg: _statusToIconBg(status),
-        iconColor: _statusToIconColor(status),
-      );
-    }
+    return _logCard(
+      title: title,
+      subtitle: phoneNumber.isNotEmpty
+          ? "Name: $name\nMobile: $phoneNumber"
+          : "Name: $name",
+      time: timeText,
+      icon: _statusToIcon(status),
+      iconBg: _statusToIconBg(status),
+      iconColor: _statusToIconColor(status),
+    );
+  }
 
-    static String _statusToTitle(String status) {
-      switch (status) {
-        case 'completed_pending_household':
-          return "Waiting for household confirmation";
-        case 'confirmed':
-          return "Pickup confirmed";
-        case 'completed':
-          return "Pickup completed";
-        case 'accepted':
-          return "Pickup request accepted";
-        case 'pending':
-          return "Pickup request received";
-        case 'cancelled':
-        case 'canceled':
-          return "Pickup cancelled";
-        default:
-          return status.isEmpty ? "Pickup update" : "Pickup $status";
-      }
-    }
-
-    static IconData _statusToIcon(String status) {
-      switch (status) {
-        case 'completed':
-          return Icons.check_circle_outline;
-        case 'accepted':
-          return Icons.thumb_up_alt_outlined;
-        case 'transferred':
-          return Icons.local_shipping_outlined;
-        case 'pending':
-          return Icons.schedule_outlined;
-        case 'cancelled':
-        case 'canceled':
-          return Icons.cancel_outlined;
-        default:
-          return Icons.receipt_long;
-      }
-    }
-
-    static Color _statusToIconBg(String status) {
-      switch (status) {
-        case 'completed':
-          return Colors.green.withOpacity(0.15);
-        case 'accepted':
-          return Colors.blue.withOpacity(0.15);
-        case 'transferred':
-          return Colors.orange.withOpacity(0.15);
-        case 'pending':
-          return Colors.white.withOpacity(0.10);
-        case 'cancelled':
-        case 'canceled':
-          return Colors.red.withOpacity(0.15);
-        default:
-          return Colors.green.withOpacity(0.15);
-      }
-    }
-
-    static Color _statusToIconColor(String status) {
-      switch (status) {
-        case 'completed':
-          return Colors.green;
-        case 'accepted':
-          return Colors.lightBlueAccent;
-        case 'transferred':
-          return Colors.orangeAccent;
-        case 'pending':
-          return Colors.white70;
-        case 'cancelled':
-        case 'canceled':
-          return Colors.redAccent;
-        default:
-          return Colors.green;
-      }
-    }
-
-    static Timestamp? _pickBestTimestamp(Map<String, dynamic> data, String status) {
-      Timestamp? t(dynamic v) => v is Timestamp ? v : null;
-
-      if (status == 'accepted') {
-        return t(data['acceptedAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
-      }
-      if (status == 'completed') {
-        return t(data['completedAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
-      }
-      if (status == 'transferred') {
-        return t(data['transferredAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
-      }
-      return t(data['updatedAt']) ?? t(data['createdAt']);
-    }
-
-    static String _formatTimestamp(Timestamp? ts) {
-      if (ts == null) return "—";
-      final dt = ts.toDate();
-      final now = DateTime.now();
-
-      final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
-      final yesterday =
-          dt.year == now.year && dt.month == now.month && dt.day == now.day - 1;
-
-      String two(int n) => n.toString().padLeft(2, '0');
-
-      int hour = dt.hour % 12;
-      if (hour == 0) hour = 12;
-      final ampm = dt.hour >= 12 ? "PM" : "AM";
-      final time = "$hour:${two(dt.minute)} $ampm";
-
-      if (sameDay) return "Today • $time";
-      if (yesterday) return "Yesterday • $time";
-
-      const months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec"
-      ];
-      final m = months[dt.month - 1];
-      return "$m ${dt.day} • $time";
-    }
-
-    static Widget _logCard({
-      required String title,
-      required String subtitle,
-      required String time,
-      required IconData icon,
-      required Color iconBg,
-      required Color iconColor,
-    }) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.white.withOpacity(0.08)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: iconBg,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Icon(icon, color: iconColor),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-            Text(
-              time,
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-            ),
-          ],
-        ),
-      );
+  static String _statusToTitle(String status) {
+    switch (status) {
+      case 'completed_pending_household':
+        return "Waiting for household confirmation";
+      case 'confirmed':
+        return "Pickup confirmed";
+      case 'completed':
+        return "Pickup completed";
+      case 'accepted':
+        return "Pickup request accepted";
+      case 'pending':
+        return "Pickup request received";
+      case 'cancelled':
+      case 'canceled':
+        return "Pickup cancelled";
+      default:
+        return status.isEmpty ? "Pickup update" : "Pickup $status";
     }
   }
+
+  static IconData _statusToIcon(String status) {
+    switch (status) {
+      case 'completed':
+        return Icons.check_circle_outline;
+      case 'accepted':
+        return Icons.thumb_up_alt_outlined;
+      case 'transferred':
+        return Icons.local_shipping_outlined;
+      case 'pending':
+        return Icons.schedule_outlined;
+      case 'cancelled':
+      case 'canceled':
+        return Icons.cancel_outlined;
+      default:
+        return Icons.receipt_long;
+    }
+  }
+
+  static Color _statusToIconBg(String status) {
+    switch (status) {
+      case 'completed':
+        return Colors.green.withOpacity(0.15);
+      case 'accepted':
+        return Colors.blue.withOpacity(0.15);
+      case 'transferred':
+        return Colors.orange.withOpacity(0.15);
+      case 'pending':
+        return Colors.white.withOpacity(0.10);
+      case 'cancelled':
+      case 'canceled':
+        return Colors.red.withOpacity(0.15);
+      default:
+        return Colors.green.withOpacity(0.15);
+    }
+  }
+
+  static Color _statusToIconColor(String status) {
+    switch (status) {
+      case 'completed':
+        return Colors.green;
+      case 'accepted':
+        return Colors.lightBlueAccent;
+      case 'transferred':
+        return Colors.orangeAccent;
+      case 'pending':
+        return Colors.white70;
+      case 'cancelled':
+      case 'canceled':
+        return Colors.redAccent;
+      default:
+        return Colors.green;
+    }
+  }
+
+  static Timestamp? _pickBestTimestamp(Map<String, dynamic> data, String status) {
+    Timestamp? t(dynamic v) => v is Timestamp ? v : null;
+
+    if (status == 'accepted') {
+      return t(data['acceptedAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
+    }
+    if (status == 'completed') {
+      return t(data['completedAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
+    }
+    if (status == 'transferred') {
+      return t(data['transferredAt']) ?? t(data['updatedAt']) ?? t(data['createdAt']);
+    }
+    return t(data['updatedAt']) ?? t(data['createdAt']);
+  }
+
+  static String _formatTimestamp(Timestamp? ts) {
+    if (ts == null) return "—";
+    final dt = ts.toDate();
+    final now = DateTime.now();
+
+    final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
+    final yesterday =
+        dt.year == now.year && dt.month == now.month && dt.day == now.day - 1;
+
+    String two(int n) => n.toString().padLeft(2, '0');
+
+    int hour = dt.hour % 12;
+    if (hour == 0) hour = 12;
+    final ampm = dt.hour >= 12 ? "PM" : "AM";
+    final time = "$hour:${two(dt.minute)} $ampm";
+
+    if (sameDay) return "Today • $time";
+    if (yesterday) return "Yesterday • $time";
+
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
+    final m = months[dt.month - 1];
+    return "$m ${dt.day} • $time";
+  }
+
+  static Widget _logCard({
+    required String title,
+    required String subtitle,
+    required String time,
+    required IconData icon,
+    required Color iconBg,
+    required Color iconColor,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: iconBg,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: iconColor),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            time,
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+}

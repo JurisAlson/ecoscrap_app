@@ -991,10 +991,17 @@ service cloud.firestore {
               "completedAt",
               "updatedAt",
               "junkshopId",
-              "junkshopName"
+              "junkshopName",
+              "sharingLiveLocation" // ✅ added
             ])
         && request.resource.data.status == "completed"
         && request.resource.data.active == false
+
+        // ✅ allow optional but enforce false if present
+        && (
+          !("sharingLiveLocation" in request.resource.data)
+          || request.resource.data.sharingLiveLocation == false
+        )
       )
             // collector marks receipt saved
       || (

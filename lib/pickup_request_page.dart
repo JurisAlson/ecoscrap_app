@@ -3,6 +3,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'waiting_collector_page.dart';
+import 'household/household_order_page.dart';
+import 'household/household_dashboard.dart';
 
 class PickupRequestPage extends StatefulWidget {
   final LatLng pickupLatLng;
@@ -471,7 +473,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
       if (!mounted) return;
 
-        final waitResult = await Navigator.push(
+      final waitResult = await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => WaitingCollectorPage(
@@ -484,10 +486,14 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
       if (!mounted) return;
 
-      if (waitResult == true) {
-        Navigator.pop(context, docRef.id);
-      } else {
-        Navigator.pop(context, null);
+      if (waitResult == 'accepted') {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const DashboardPage(initialTabIndex: 2),
+          ),
+          (route) => false,
+        );
       }
     } catch (e) {
       if (mounted) _snack("Pickup failed: $e", bg: _danger);
