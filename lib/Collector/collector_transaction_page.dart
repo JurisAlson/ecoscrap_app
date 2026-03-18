@@ -2,6 +2,8 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'collector_tracking_page.dart';
 
 class CollectorTransactionPage extends StatefulWidget {
   final String? requestId;
@@ -559,8 +561,11 @@ class _SellForm extends StatefulWidget {
 
 class _SellFormState extends State<_SellForm> {
   static const Color primaryColor = Color(0xFF1FA9A7);
-
   static const String moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
+
+  // Replace with real Mores Scrap coordinates
+  static const double moresLat = 14.5995;
+  static const double moresLng = 120.9842;
 
   final TextEditingController _kgCtrl = TextEditingController();
   bool _saving = false;
@@ -593,7 +598,7 @@ class _SellFormState extends State<_SellForm> {
     }
 
     final collectorId = user.uid;
-    final collectorName = user.displayName ?? "Collector";
+    final collectorName = user?.displayName ?? "Collector";
 
     setState(() => _saving = true);
 
@@ -631,7 +636,7 @@ class _SellFormState extends State<_SellForm> {
           );
         }
 
-        // deduct collector inventory immediately
+        // Deduct collector inventory immediately
         trx.set(
           inventoryRef,
           {
@@ -641,7 +646,7 @@ class _SellFormState extends State<_SellForm> {
           SetOptions(merge: true),
         );
 
-        // create notification/request for junkshop
+        // Create notification/request for junkshop
         trx.set(sellReqRef, {
           "kind": "collector_sell_to_junkshop",
           "type": "sell",
@@ -657,7 +662,7 @@ class _SellFormState extends State<_SellForm> {
           "updatedAt": FieldValue.serverTimestamp(),
         });
 
-        // local transaction history
+        // Local transaction history
         trx.set(txnRef, {
           "kind": "sell_request",
           "status": "pending",
@@ -674,6 +679,17 @@ class _SellFormState extends State<_SellForm> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Sell request sent to Mores Scrap.")),
+      );
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const CollectorTrackingPage(
+            fixedDestination: LatLng(moresLat, moresLng),
+            destinationTitle: "Mores Scrap",
+            destinationAddress: "Mores Scrap",
+          ),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -793,7 +809,6 @@ class _SellFormState extends State<_SellForm> {
                 ),
               ),
               const SizedBox(height: 12),
-
               _glassCard(
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -814,7 +829,6 @@ class _SellFormState extends State<_SellForm> {
                 ),
               ),
               const SizedBox(height: 12),
-
               _glassCard(
                 child: TextField(
                   controller: _kgCtrl,
@@ -823,9 +837,7 @@ class _SellFormState extends State<_SellForm> {
                   decoration: _inputDecoration("Kg to sell to Mores Scrap"),
                 ),
               ),
-
               const SizedBox(height: 16),
-
               SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -845,7 +857,6 @@ class _SellFormState extends State<_SellForm> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 10),
               const Text(
                 "Note: This deducts from your total inventory immediately.",

@@ -549,7 +549,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
 
   Widget _buildSubdivisionDropdown() {
     return DropdownButtonFormField<String>(
-      value: _selectedSubdivision,
+      initialValue: _selectedSubdivision,
       dropdownColor: const Color(0xFF1E293B),
       style: const TextStyle(color: Colors.white),
       iconEnabledColor: Colors.white70,
