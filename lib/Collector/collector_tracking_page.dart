@@ -43,7 +43,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   static const Color _surface = Color(0xFF162235);
   static const Color _surfaceAlt = Color(0xFF1B2A40);
   static const Color _border = Color(0xFF26364F);
-  static const Color _accent = Color(0xFF10B981);
+  static const Color _accent = Color(0xFF1FA9A7);
   static const Color _blue = Color(0xFF60A5FA);
   static const Color _warning = Color(0xFFF59E0B);
   static const Color _danger = Color(0xFFEF4444);
@@ -76,6 +76,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
         ? widget.destinationTitle
         : "Pinned / GPS pickup location";
   }
+  
 
   String get _topBarTitle =>
       _isFixedDestinationMode ? "Route to ${widget.destinationTitle}" : "Track Collector";
@@ -129,6 +130,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
 
   double _collectorHeading = 0;
   BitmapDescriptor? _collectorIcon;
+  BitmapDescriptor? _householdMarkerIcon; 
 
   @override
   void initState() {
@@ -175,6 +177,34 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       _listenToRequest();
     }
   }
+  Future<BitmapDescriptor> _iconToMarker({
+    required IconData icon,
+    required Color iconColor,
+    required Color backgroundColor,
+    required Color borderColor,
+    double size = 112,
+    double iconSize = 54,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    final painter = _TrackingMarkerPainter(
+      icon: icon,
+      iconColor: iconColor,
+      backgroundColor: backgroundColor,
+      borderColor: borderColor,
+      size: size,
+      iconSize: iconSize,
+    );
+
+    painter.paint(canvas, Size(size, size));
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+  }
 
   @override
   void dispose() {
@@ -194,31 +224,25 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
 
   Future<void> _loadCollectorIcon() async {
     try {
-      final data = await rootBundle.load('assets/icons/Rider.png');
-      final codec = await ui.instantiateImageCodec(
-        data.buffer.asUint8List(),
-        targetWidth: 120,
+      _collectorIcon = await _iconToMarker(
+        icon: Icons.shopping_cart_rounded,
+        iconColor: Colors.white,
+        backgroundColor: _accent,
+        borderColor: Colors.white.withOpacity(0.18),
       );
-      final frame = await codec.getNextFrame();
-      final byteData =
-          await frame.image.toByteData(format: ui.ImageByteFormat.png);
 
-      if (byteData == null) {
-        debugPrint("❌ byteData is null");
-        return;
+      _householdMarkerIcon = await _iconToMarker(
+        icon: Icons.house_rounded,
+        iconColor: Colors.white,
+        backgroundColor: const Color(0xFF334155),
+        borderColor: Colors.white.withOpacity(0.18),
+      );
+
+      if (mounted) {
+        setState(() {});
       }
-
-      final bytes = byteData.buffer.asUint8List();
-      final icon = BitmapDescriptor.bytes(bytes);
-
-      if (!mounted) return;
-      setState(() {
-        _collectorIcon = icon;
-      });
-
-      debugPrint("✅ Collector icon loaded successfully");
     } catch (e) {
-      debugPrint("❌ Failed to load collector icon: $e");
+      debugPrint("❌ Failed to build marker icons: $e");
     }
   }
 
@@ -455,45 +479,38 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
           markerId: const MarkerId('pickup'),
           position: _pickupLatLng!,
           infoWindow: InfoWindow(title: _pickupMarkerTitle),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+          icon: _householdMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
+          zIndex: 1,
         ),
       );
     }
 
-    if (_collectorLatLng != null && _collectorIcon != null) {
+    if (_collectorLatLng != null) {
       markers.add(
         Marker(
           markerId: const MarkerId('collector'),
           position: _collectorLatLng!,
-          infoWindow: const InfoWindow(title: 'COLLECTOR CUSTOM'),
-          icon: _collectorIcon!,
+          infoWindow: InfoWindow(title: _displayCollectorName),
+          icon: _collectorIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          zIndex: 3,
         ),
       );
     }
-
-    debugPrint(
-      'pickup=${_pickupLatLng != null}, '
-      'collector=${_collectorLatLng != null}, '
-      'me=${_myLatLng != null}, '
-      'iconLoaded=${_collectorIcon != null}',
-    );
 
     return markers;
   }
 
   Set<Polyline> _buildPolylines() {
-    if (_collectorRoutePoints.isEmpty) return {};
+    if (_collectorRoutePoints.isEmpty) return <Polyline>{};
 
     return {
       Polyline(
-        polylineId: const PolylineId('collector_route'),
+        polylineId: const PolylineId("collector_route"),
         points: _collectorRoutePoints,
-        width: 7,
-        color: _accent,
-        startCap: Cap.roundCap,
-        endCap: Cap.roundCap,
-        jointType: JointType.round,
-        geodesic: true,
+        width: 5,
+        color: _blue,
       ),
     };
   }
@@ -896,7 +913,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
 
   @override
   Widget build(BuildContext context) {
-    final initialTarget = _pickupLatLng ?? const LatLng(14.18695, 121.11299);
+    final initialTarget = _pickupLatLng ?? const LatLng(14.198630, 121.117270);
 
     return Scaffold(
       backgroundColor: _bg,
@@ -947,5 +964,62 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
         ],
       ),
     );
+  }
+}
+class _TrackingMarkerPainter {
+  final IconData icon;
+  final Color iconColor;
+  final Color backgroundColor;
+  final Color borderColor;
+  final double size;
+  final double iconSize;
+
+  _TrackingMarkerPainter({
+    required this.icon,
+    required this.iconColor,
+    required this.backgroundColor,
+    required this.borderColor,
+    required this.size,
+    required this.iconSize,
+  });
+
+  void paint(Canvas canvas, Size s) {
+    final center = Offset(s.width / 2, s.height / 2);
+    final radius = s.width / 2.6;
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.28)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+
+    canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
+
+    final fillPaint = Paint()..color = backgroundColor;
+    canvas.drawCircle(center, radius, fillPaint);
+
+    final borderPaint = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4;
+
+    canvas.drawCircle(center, radius, borderPaint);
+
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    textPainter.text = TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        fontSize: iconSize,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+        color: iconColor,
+      ),
+    );
+    textPainter.layout();
+
+    final iconOffset = Offset(
+      center.dx - textPainter.width / 2,
+      center.dy - textPainter.height / 2,
+    );
+
+    textPainter.paint(canvas, iconOffset);
   }
 }
