@@ -684,86 +684,137 @@ child: ListTile(
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(color: Colors.white.withOpacity(0.08)),
                           ),
-child: ListTile(
-  onTap: status == 'arrived'
-      ? () async {
-          await FirebaseFirestore.instance
-              .collection('dropoff_requests')
-              .doc(docId)
-              .set({
-            'readByJunkshop': true,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+                          child: ListTile(
+                            onTap: status == 'arrived'
+                                ? () async {
+                                    final action = await showDialog<String>(
+                                      context: context,
+                                      builder: (_) => AlertDialog(
+                                        backgroundColor: const Color(0xFF0F172A),
+                                        title: const Text(
+                                          "Confirm arrival",
+                                          style: TextStyle(color: Colors.white),
+                                        ),
+                                        content: Text(
+                                          householdName.isEmpty
+                                              ? "Has the resident really arrived?"
+                                              : "Has $householdName really arrived at the junkshop?",
+                                          style: const TextStyle(color: Colors.white70),
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, 'dismiss'),
+                                            child: const Text(
+                                              "NOT HERE",
+                                              style: TextStyle(color: Colors.redAccent),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, 'proceed'),
+                                            child: const Text(
+                                              "PROCEED",
+                                              style: TextStyle(color: Colors.greenAccent),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
 
-          if (!context.mounted) return;
-          Navigator.pop(context);
+                                    if (action == 'dismiss') {
+                                      await FirebaseFirestore.instance
+                                          .collection('dropoff_requests')
+                                          .doc(docId)
+                                          .set({
+                                        'clearedByJunkshop': true,
+                                        'updatedAt': FieldValue.serverTimestamp(),
+                                      }, SetOptions(merge: true));
 
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => receipt.ReceiptScreen(
-                shopID: user.uid,
-                prefillCollectorName:
-                    householdName.isEmpty ? null : householdName,
-                prefillCollectorId:
-                    householdId.isEmpty ? null : householdId,
-                prefillSourceType: "household",
-                sellRequestId: docId,
-              ),
-            ),
-          );
-        }
-      : null,
-  leading: Container(
-    width: 44,
-    height: 44,
-    decoration: BoxDecoration(
-      color: readByJunkshop
-          ? Colors.white.withOpacity(0.08)
-          : status == 'cancelled'
-              ? Colors.red.withOpacity(0.15)
-              : status == 'arrived'
-                  ? Colors.green.withOpacity(0.15)
-                  : Colors.blue.withOpacity(0.15),
-      borderRadius: BorderRadius.circular(14),
-    ),
-    child: Icon(
-      status == 'cancelled'
-          ? Icons.cancel_outlined
-          : status == 'arrived'
-              ? Icons.check_circle_outline
-              : Icons.store_mall_directory_outlined,
-      color: readByJunkshop
-          ? Colors.white70
-          : status == 'cancelled'
-              ? Colors.redAccent
-              : status == 'arrived'
-                  ? Colors.greenAccent
-                  : Colors.lightBlueAccent,
-    ),
-  ),
-  title: Text(
-    title,
-    style: const TextStyle(
-      color: Colors.white,
-      fontWeight: FontWeight.bold,
-    ),
-  ),
-  subtitle: Text(
-    message,
-    style: TextStyle(
-      color: Colors.grey.shade400,
-      fontSize: 12,
-    ),
-  ),
-  trailing: Text(
-    dt == null ? "" : hhmm(dt),
-    style: TextStyle(
-      color: Colors.grey.shade500,
-      fontSize: 11,
-    ),
-  ),
-),
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text("Drop-off notification dismissed.")),
+                                      );
+                                      return;
+                                    }
+
+                                    if (action != 'proceed') return;
+
+                                    await FirebaseFirestore.instance
+                                        .collection('dropoff_requests')
+                                        .doc(docId)
+                                        .set({
+                                      'readByJunkshop': true,
+                                      'updatedAt': FieldValue.serverTimestamp(),
+                                    }, SetOptions(merge: true));
+
+                                    if (!context.mounted) return;
+                                    Navigator.pop(context);
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => receipt.ReceiptScreen(
+                                          shopID: user.uid,
+                                          prefillCollectorName:
+                                              householdName.isEmpty ? null : householdName,
+                                          prefillCollectorId:
+                                              householdId.isEmpty ? null : householdId,
+                                          prefillSourceType: "household",
+                                          sellRequestId: docId,
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                : null,
+              leading: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: readByJunkshop
+                      ? Colors.white.withOpacity(0.08)
+                      : status == 'cancelled'
+                          ? Colors.red.withOpacity(0.15)
+                          : status == 'arrived'
+                              ? Colors.green.withOpacity(0.15)
+                              : Colors.blue.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  status == 'cancelled'
+                      ? Icons.cancel_outlined
+                      : status == 'arrived'
+                          ? Icons.check_circle_outline
+                          : Icons.store_mall_directory_outlined,
+                  color: readByJunkshop
+                      ? Colors.white70
+                      : status == 'cancelled'
+                          ? Colors.redAccent
+                          : status == 'arrived'
+                              ? Colors.greenAccent
+                              : Colors.lightBlueAccent,
+                              ),
+                            ),
+                            title: Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Text(
+                              message,
+                              style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: Text(
+                              dt == null ? "" : hhmm(dt),
+                              style: TextStyle(
+                                color: Colors.grey.shade500,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
                         );
                       },
                     );

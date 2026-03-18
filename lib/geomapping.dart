@@ -89,6 +89,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   bool get _isDelivering => _tripStage == TripStage.delivering;
   bool get _rideActive => _tripStage == TripStage.delivering;
 
+  
+
   LatLng get _originLatLng {
     final p = _currentPosition;
     if (p == null) return _defaultCenter;
@@ -614,6 +616,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       _activePickupRequestId = null;
       _dropoffStatus = "en_route";
     });
+    
 
     final dropoffId = await _createDropoffRequest();
 
