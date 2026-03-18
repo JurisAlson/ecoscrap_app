@@ -51,7 +51,37 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   static const Color _textPrimary = Color(0xFFE2E8F0);
   static const Color _textSecondary = Color(0xFF94A3B8);
   static const Color _textMuted = Color(0xFF64748B);
+
   bool get _isFixedDestinationMode => widget.fixedDestination != null;
+  bool get _hasValidRequestId =>
+      widget.requestId != null && widget.requestId!.trim().isNotEmpty;
+
+  String get _displayCollectorName =>
+      _collectorName.isEmpty ? "Collector" : _collectorName;
+
+  String get _displayAddress {
+    final parts = [
+      if (_street.trim().isNotEmpty) _street.trim(),
+      if (_subdivision.trim().isNotEmpty) _subdivision.trim(),
+    ];
+    return parts.join(", ");
+  }
+
+  String get _locationSectionLabel =>
+      _isFixedDestinationMode ? "DESTINATION" : "PICKUP LOCATION";
+
+  String get _locationSectionValue {
+    if (_displayAddress.isNotEmpty) return _displayAddress;
+    return _isFixedDestinationMode
+        ? widget.destinationTitle
+        : "Pinned / GPS pickup location";
+  }
+
+  String get _topBarTitle =>
+      _isFixedDestinationMode ? "Route to ${widget.destinationTitle}" : "Track Collector";
+
+  String get _pickupMarkerTitle =>
+      _isFixedDestinationMode ? widget.destinationTitle : 'PICKUP';
 
   static const String _darkMapStyle = r'''
 [
@@ -107,44 +137,44 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   }
 
   Future<void> _setupFixedDestinationMode() async {
-  final destination = widget.fixedDestination;
-  if (destination == null) return;
+    final destination = widget.fixedDestination;
+    if (destination == null) return;
 
-  if (!mounted) return;
-  setState(() {
-    _pickupLatLng = destination;
-    _collectorLatLng = _myLatLng; // reuse existing marker/route logic
-    _collectorName = "You";
-    _status = "ongoing";
-    _pickupSource = "fixed_destination";
-    _street = widget.destinationAddress;
-    _subdivision = "";
-    _landmark = "";
-    _phoneNumber = "";
-    _loading = false;
-  });
+    if (!mounted) return;
+    setState(() {
+      _pickupLatLng = destination;
+      _collectorLatLng = _myLatLng;
+      _collectorName = "You";
+      _status = "ongoing";
+      _pickupSource = "fixed_destination";
+      _street = widget.destinationAddress;
+      _subdivision = "";
+      _landmark = "";
+      _phoneNumber = "";
+      _loading = false;
+    });
 
-  if (_collectorLatLng != null) {
-    await _buildCollectorRouteToPickup(
-      collectorLatLng: _collectorLatLng!,
-      pickupLatLng: _pickupLatLng!,
-    );
+    if (_collectorLatLng != null) {
+      await _buildCollectorRouteToPickup(
+        collectorLatLng: _collectorLatLng!,
+        pickupLatLng: _pickupLatLng!,
+      );
+    }
+
+    await _fitMap();
+    _initialFitDone = true;
   }
 
-  await _fitMap();
-  _initialFitDone = true;
-}
+  Future<void> _initPage() async {
+    await _loadCollectorIcon();
+    await _initMyLocation();
 
-Future<void> _initPage() async {
-  await _loadCollectorIcon();
-  await _initMyLocation();
-
-  if (_isFixedDestinationMode) {
-    _setupFixedDestinationMode();
-  } else {
-    _listenToRequest();
+    if (_isFixedDestinationMode) {
+      await _setupFixedDestinationMode();
+    } else {
+      _listenToRequest();
+    }
   }
-}
 
   @override
   void dispose() {
@@ -170,7 +200,8 @@ Future<void> _initPage() async {
         targetWidth: 120,
       );
       final frame = await codec.getNextFrame();
-      final byteData = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      final byteData =
+          await frame.image.toByteData(format: ui.ImageByteFormat.png);
 
       if (byteData == null) {
         debugPrint("❌ byteData is null");
@@ -178,7 +209,6 @@ Future<void> _initPage() async {
       }
 
       final bytes = byteData.buffer.asUint8List();
-
       final icon = BitmapDescriptor.bytes(bytes);
 
       if (!mounted) return;
@@ -195,11 +225,11 @@ Future<void> _initPage() async {
   void _listenToRequest() {
     _requestSub?.cancel();
 
-    if (widget.requestId == null || widget.requestId!.trim().isEmpty) {
-  if (!mounted) return;
-  setState(() => _loading = false);
-  return;
-}
+    if (!_hasValidRequestId) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
 
     _requestSub = FirebaseFirestore.instance
         .collection('requests')
@@ -272,11 +302,11 @@ Future<void> _initPage() async {
       } else if (previousCollectorWasNull && _collectorLatLng != null) {
         await _fitMap();
       }
+
       debugPrint('request data: $data');
       debugPrint('collectorLiveLocation: ${data['collectorLiveLocation']}');
       debugPrint('collectorLocation: ${data['collectorLocation']}');
     });
-    
   }
 
   Future<void> _buildCollectorRouteToPickup({
@@ -424,9 +454,7 @@ Future<void> _initPage() async {
         Marker(
           markerId: const MarkerId('pickup'),
           position: _pickupLatLng!,
-          infoWindow: InfoWindow(
-  title: _isFixedDestinationMode ? widget.destinationTitle : 'PICKUP',
-),
+          infoWindow: InfoWindow(title: _pickupMarkerTitle),
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
         ),
       );
@@ -443,21 +471,11 @@ Future<void> _initPage() async {
       );
     }
 
-    // if (_myLatLng != null) {
-    //   markers.add(
-    //     Marker(
-    //       markerId: const MarkerId('me'),
-    //       position: _myLatLng!,
-    //       infoWindow: const InfoWindow(title: 'ME'),
-    //       icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-    //     ),
-    //   );
-    // }
     debugPrint(
       'pickup=${_pickupLatLng != null}, '
       'collector=${_collectorLatLng != null}, '
       'me=${_myLatLng != null}, '
-      'iconLoaded=${_collectorIcon != null}'
+      'iconLoaded=${_collectorIcon != null}',
     );
 
     return markers;
@@ -480,35 +498,35 @@ Future<void> _initPage() async {
     };
   }
 
-String get _statusLabel {
-  if (_isFixedDestinationMode) {
-    return "Heading to ${widget.destinationTitle}";
-  }
+  String get _statusLabel {
+    if (_isFixedDestinationMode) {
+      return "Heading to ${widget.destinationTitle}";
+    }
 
-  switch (_status) {
-    case 'pending':
-      return 'Waiting for collector';
-    case 'scheduled':
-      return 'Pickup scheduled';
-    case 'accepted':
-      return 'Collector accepted your request';
-    case 'confirmed':
-      return 'Pickup confirmed';
-    case 'ongoing':
-      return 'Collector is on the way';
-    case 'arrived':
-      return 'Collector arrived';
-    case 'completed':
-      return 'Pickup completed';
-    case 'cancelled':
-    case 'canceled':
-      return 'Pickup cancelled';
-    case 'declined':
-      return 'Pickup declined';
-    default:
-      return _status.isEmpty ? 'Tracking pickup' : _status.toUpperCase();
+    switch (_status) {
+      case 'pending':
+        return 'Waiting for collector';
+      case 'scheduled':
+        return 'Pickup scheduled';
+      case 'accepted':
+        return 'Collector accepted your request';
+      case 'confirmed':
+        return 'Pickup confirmed';
+      case 'ongoing':
+        return 'Collector is on the way';
+      case 'arrived':
+        return 'Collector arrived';
+      case 'completed':
+        return 'Pickup completed';
+      case 'cancelled':
+      case 'canceled':
+        return 'Pickup cancelled';
+      case 'declined':
+        return 'Pickup declined';
+      default:
+        return _status.isEmpty ? 'Tracking pickup' : _status.toUpperCase();
+    }
   }
-}
 
   Color get _statusColor {
     switch (_status) {
@@ -614,11 +632,11 @@ String get _statusLabel {
                     size: 18,
                   ),
                   const SizedBox(width: 10),
-Expanded(
-  child: Text(
-    _isFixedDestinationMode ? "Route to ${widget.destinationTitle}" : "Track Collector",
+                  Expanded(
+                    child: Text(
+                      _topBarTitle,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: const TextStyle(
                         color: _textPrimary,
                         fontSize: 15,
                         fontWeight: FontWeight.w900,
@@ -644,11 +662,6 @@ Expanded(
   }
 
   Widget _statusPanel() {
-    final address = [
-      if (_street.trim().isNotEmpty) _street.trim(),
-      if (_subdivision.trim().isNotEmpty) _subdivision.trim(),
-    ].join(", ");
-
     return DraggableScrollableSheet(
       initialChildSize: 0.33,
       minChildSize: 0.20,
@@ -710,7 +723,7 @@ Expanded(
                             const SizedBox(height: 4),
                             Text(
                               _collectorLatLng != null
-                                  ? "${_collectorName.isEmpty ? 'Collector' : _collectorName} is sharing live location"
+                                  ? "$_displayCollectorName is sharing live location"
                                   : "Waiting for collector location update",
                               style: const TextStyle(
                                 color: _textSecondary,
@@ -726,20 +739,16 @@ Expanded(
                   _infoTile(
                     icon: Icons.person_outline,
                     label: "COLLECTOR",
-                    value: _collectorName.isEmpty ? "Collector" : _collectorName,
+                    value: _displayCollectorName,
                     valueColor: _textPrimary,
                   ),
                   const SizedBox(height: 12),
-_infoTile(
-  icon: Icons.place_outlined,
-  label: _isFixedDestinationMode ? "DESTINATION" : "PICKUP LOCATION",
-  value: address.isEmpty
-      ? (_isFixedDestinationMode
-          ? widget.destinationTitle
-          : "Pinned / GPS pickup location")
-      : address,
-  valueColor: _textPrimary,
-),
+                  _infoTile(
+                    icon: Icons.place_outlined,
+                    label: _locationSectionLabel,
+                    value: _locationSectionValue,
+                    valueColor: _textPrimary,
+                  ),
                   const SizedBox(height: 12),
                   _infoTile(
                     icon: Icons.flag_outlined,
@@ -887,8 +896,7 @@ _infoTile(
 
   @override
   Widget build(BuildContext context) {
-    final initialTarget =
-        _pickupLatLng ?? const LatLng(14.18695, 121.11299);
+    final initialTarget = _pickupLatLng ?? const LatLng(14.18695, 121.11299);
 
     return Scaffold(
       backgroundColor: _bg,
