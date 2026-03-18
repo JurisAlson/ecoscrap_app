@@ -232,7 +232,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       debugPrint("❌ Failed to mark chat read: $e");
     }
   }
-    Future<void> _startLiveLocationSharing() async {
+  Future<void> _startLiveLocationSharing() async {
     final stop = _currentStop;
     if (stop == null) return;
 
@@ -241,13 +241,32 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         status == 'accepted' || status == 'arrived' || status == 'scheduled';
 
     if (!shouldShare) return;
-    if (_isSendingLiveLocation) return;
 
     final hasPermission = await _ensureLocationPermission();
     if (!hasPermission) return;
 
     _isSendingLiveLocation = true;
 
+    // ✅ WRITE IMMEDIATELY (THIS FIXES YOUR ISSUE)
+    final position = await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.best,
+    );
+
+    await FirebaseFirestore.instance
+        .collection('requests')
+        .doc(stop.requestId)
+        .set({
+      'collectorLiveLocation': GeoPoint(
+        position.latitude,
+        position.longitude,
+      ),
+      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      'collectorHeading': position.heading,
+      'collectorSpeedMps': position.speed,
+      'sharingLiveLocation': true,
+    }, SetOptions(merge: true));
+
+    // ✅ THEN START STREAM
     _liveLocationSub?.cancel();
     _liveLocationSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -258,26 +277,22 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       final currentStop = _currentStop;
       if (currentStop == null) return;
 
-      try {
-        await FirebaseFirestore.instance
-            .collection('requests')
-            .doc(currentStop.requestId)
-            .set({
-          'collectorLiveLocation': GeoPoint(
-            position.latitude,
-            position.longitude,
-          ),
-          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          'collectorHeading': position.heading,
-          'collectorSpeedMps': position.speed,
-          'sharingLiveLocation': true,
-        }, SetOptions(merge: true));
-      } catch (e) {
-        debugPrint('❌ live location update failed: $e');
-      }
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(currentStop.requestId)
+          .set({
+        'collectorLiveLocation': GeoPoint(
+          position.latitude,
+          position.longitude,
+        ),
+        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+        'collectorHeading': position.heading,
+        'collectorSpeedMps': position.speed,
+        'sharingLiveLocation': true,
+      }, SetOptions(merge: true));
     });
   }
-  
+    
   Future<void> _stopLiveLocationSharing({bool clearFirestore = false}) async {
     await _liveLocationSub?.cancel();
     _liveLocationSub = null;
@@ -329,15 +344,43 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   Future<bool> _ensureLocationPermission() async {
     final enabled = await Geolocator.isLocationServiceEnabled();
-    if (!enabled) return false;
+    debugPrint("📍 Location service enabled: $enabled");
 
-    var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
+    if (!enabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please turn on location services.")),
+        );
+      }
+      return false;
     }
 
-    if (perm == LocationPermission.denied ||
-        perm == LocationPermission.deniedForever) {
+    var perm = await Geolocator.checkPermission();
+    debugPrint("📍 Current permission: $perm");
+
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+      debugPrint("📍 Requested permission result: $perm");
+    }
+
+    if (perm == LocationPermission.denied) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Location permission denied.")),
+        );
+      }
+      return false;
+    }
+
+    if (perm == LocationPermission.deniedForever) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Location permission permanently denied. Open app settings."),
+          ),
+        );
+      }
+      await Geolocator.openAppSettings();
       return false;
     }
 
@@ -898,7 +941,7 @@ Future<void> _openJunkshopChat() async {
       setState(() {
         _currentStopIndex = nextIndex;
       });
-
+      await _startLiveLocationSharing();
       await _ensureJunkshopChatIfNeeded();
       await _buildMultiStopRoute();
       await _focusCameraOnCurrentStop();
@@ -950,6 +993,7 @@ Future<void> _openJunkshopChat() async {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Marked as completed.")),
         );
+        await _stopLiveLocationSharing(clearFirestore: true);
 
         await _moveToNextStopAfterComplete();
       } on FirebaseException catch (e) {
@@ -1006,12 +1050,15 @@ Future<void> _openJunkshopChat() async {
   
   @override
   void dispose() {
-    _liveLocationSub?.cancel();
+    _stopLiveLocationSharing(clearFirestore: true);
+    _map?.dispose();
     super.dispose();
   }
 
   Future<void> _goToStop(int index) async {
     if (index < 0 || index >= _stops.length) return;
+
+    await _stopLiveLocationSharing();
 
     setState(() {
       _currentStopIndex = index;

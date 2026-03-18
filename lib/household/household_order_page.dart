@@ -10,49 +10,68 @@ class HouseholdOrderPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      return const Center(
-        child: Text("Not logged in.", style: TextStyle(color: Colors.white)),
-      );
-    }
 
-    final query = FirebaseFirestore.instance
-        .collection('requests')
-        .where('type', isEqualTo: 'pickup')
-        .where('householdId', isEqualTo: user.uid)
-        .where('active', isEqualTo: true)
-        .orderBy('updatedAt', descending: true)
-        .limit(1);
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F172A),
+        elevation: 0,
+        title: const Text(
+          "Current Order",
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: user == null
+          ? const Center(
+              child: Text(
+                "Not logged in.",
+                style: TextStyle(color: Colors.white),
+              ),
+            )
+          : StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('requests')
+                  .where('type', isEqualTo: 'pickup')
+                  .where('householdId', isEqualTo: user.uid)
+                  .where('active', isEqualTo: true)
+                  .orderBy('updatedAt', descending: true)
+                  .limit(1)
+                  .snapshots(),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
+                }
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snap.hasError) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              "Error loading order: ${snap.error}",
-              style: const TextStyle(color: Colors.white70),
+                if (snap.hasError) {
+                  return Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      "Error loading order: ${snap.error}",
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  );
+                }
+
+                final docs = snap.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return const _EmptyOrderState();
+                }
+
+                final d = docs.first;
+                final data = d.data() as Map<String, dynamic>;
+
+                return _OrderCard(
+                  requestId: d.id,
+                  data: data,
+                );
+              },
             ),
-          );
-        }
-
-        final docs = snap.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return const _EmptyOrderState();
-        }
-
-        final d = docs.first;
-        final data = d.data() as Map<String, dynamic>;
-
-        return _OrderCard(
-          requestId: d.id,
-          data: data,
-        );
-      },
     );
   }
 }

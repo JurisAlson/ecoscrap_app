@@ -25,6 +25,14 @@ class _CollectorNotificationsPageState
     "Cannot complete right now",
     "Other",
   ];
+  static const double maxCapacityKg = 20.0;
+
+  double _getRequestKg(Map<String, dynamic> data) {
+    final value = data['bagKg'];
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0.0;
+    return 0.0;
+  }
 
   final ChatService _chat = ChatService();
 
@@ -53,6 +61,19 @@ class _CollectorNotificationsPageState
     final ref = db.collection('requests').doc(requestId);
 
     try {
+      final activeDocs = await db
+          .collection('requests')
+          .where('type', isEqualTo: 'pickup')
+          .where('collectorId', isEqualTo: user.uid)
+          .where('active', isEqualTo: true)
+          .where('status', whereIn: ['accepted', 'arrived', 'scheduled'])
+          .get();
+
+      double currentActiveKg = 0.0;
+      for (final doc in activeDocs.docs) {
+        currentActiveKg += _getRequestKg(doc.data());
+      }
+
       await db.runTransaction((tx) async {
         final currentSnap = await tx.get(ref);
         if (!currentSnap.exists) throw "Request not found";
@@ -63,25 +84,32 @@ class _CollectorNotificationsPageState
         final currentStatus =
             (currentData['status'] ?? '').toString().toLowerCase();
         final currentActive = currentData['active'] == true;
+        final requestKg = _getRequestKg(currentData);
 
         if (!currentActive) throw "Request not active";
+
         if (!(currentStatus == 'pending' || currentStatus == 'scheduled')) {
           throw "Request is no longer available";
         }
+
         if (currentCollectorId.isNotEmpty && currentCollectorId != user.uid) {
           throw "Already assigned";
         }
 
+        if ((currentActiveKg + requestKg) > maxCapacityKg) {
+          throw "Capacity exceeded. "
+              "Current load: ${currentActiveKg.toStringAsFixed(1)} kg, "
+              "request: ${requestKg.toStringAsFixed(1)} kg, "
+              "max: ${maxCapacityKg.toStringAsFixed(1)} kg.";
+        }
 
-        final update = <String, dynamic>{
+        tx.update(ref, {
           'collectorId': user.uid,
           'status': 'accepted',
           'active': true,
           'acceptedAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
-        };
-
-        tx.update(ref, update);
+        });
       });
 
       if (!mounted) return;
@@ -577,6 +605,7 @@ class _CollectorNotificationsPageState
         .collection('requests')
         .where('type', isEqualTo: 'pickup')
         .where('collectorId', isEqualTo: user.uid)
+        .where('active', isEqualTo: true)
         .where('status', whereIn: ['pending', 'scheduled'])
         .orderBy('updatedAt', descending: true);
 

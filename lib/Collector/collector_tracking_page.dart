@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:ui';
-import 'package:geolocator/geolocator.dart';  
+import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 extension TrackingOpacityFix on Color {
   Color o(double opacity) =>
@@ -24,7 +27,6 @@ class CollectorTrackingPage extends StatefulWidget {
 }
 
 class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
-  // ===== Theme =====
   static const Color _bg = Color(0xFF0B1220);
   static const Color _sheet = Color(0xFF121C2E);
   static const Color _surface = Color(0xFF162235);
@@ -83,14 +85,19 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   bool _initialFitDone = false;
   bool _loading = true;
 
+  double _collectorHeading = 0;
   BitmapDescriptor? _collectorIcon;
 
   @override
   void initState() {
     super.initState();
+    _initPage();
+  }
+
+  Future<void> _initPage() async {
+    await _loadCollectorIcon();
     _listenToRequest();
-    _initMyLocation();
-    BitmapDescriptor? collectorIcon;
+    await _initMyLocation();
   }
 
   @override
@@ -110,10 +117,33 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   }
 
   Future<void> _loadCollectorIcon() async {
-    _collectorIcon = await BitmapDescriptor.fromAssetImage(
-      const ImageConfiguration(size: Size(48, 48)),
-      'assets/icons/Rider.png',
-    );
+    try {
+      final data = await rootBundle.load('assets/icons/Rider.png');
+      final codec = await ui.instantiateImageCodec(
+        data.buffer.asUint8List(),
+        targetWidth: 120,
+      );
+      final frame = await codec.getNextFrame();
+      final byteData = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) {
+        debugPrint("❌ byteData is null");
+        return;
+      }
+
+      final bytes = byteData.buffer.asUint8List();
+
+      final icon = BitmapDescriptor.bytes(bytes);
+
+      if (!mounted) return;
+      setState(() {
+        _collectorIcon = icon;
+      });
+
+      debugPrint("✅ Collector icon loaded successfully");
+    } catch (e) {
+      debugPrint("❌ Failed to load collector icon: $e");
+    }
   }
 
   void _listenToRequest() {
@@ -133,7 +163,17 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       final data = doc.data() ?? {};
 
       final pickupGp = data['pickupLocation'];
-      final collectorGp = data['collectorLocation'];
+      final collectorGp =
+          data['collectorLiveLocation'] ?? data['collectorLocation'];
+
+      final headingRaw = data['collectorHeading'];
+      double heading = 0;
+      if (headingRaw is num) {
+        heading = headingRaw.toDouble();
+      }
+
+      debugPrint('collectorGp: $collectorGp');
+      debugPrint('headingRaw: $headingRaw');
 
       LatLng? pickup;
       LatLng? collector;
@@ -158,6 +198,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
         _subdivision = (data['subdivision'] ?? '').toString();
         _landmark = (data['landmark'] ?? '').toString();
         _phoneNumber = (data['phoneNumber'] ?? '').toString();
+        _collectorHeading = heading;
         _loading = false;
       });
 
@@ -179,7 +220,11 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       } else if (previousCollectorWasNull && _collectorLatLng != null) {
         await _fitMap();
       }
+      debugPrint('request data: $data');
+      debugPrint('collectorLiveLocation: ${data['collectorLiveLocation']}');
+      debugPrint('collectorLocation: ${data['collectorLocation']}');
     });
+    
   }
 
   Future<void> _buildCollectorRouteToPickup({
@@ -327,56 +372,56 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
         Marker(
           markerId: const MarkerId('pickup'),
           position: _pickupLatLng!,
-          infoWindow: const InfoWindow(
-            title: 'Pickup Location',
-            snippet: 'Household pickup point',
-          ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueOrange,
-          ),
+          infoWindow: const InfoWindow(title: 'PICKUP'),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
         ),
       );
     }
 
-    if (_collectorLatLng != null) {
+    if (_collectorLatLng != null && _collectorIcon != null) {
       markers.add(
         Marker(
           markerId: const MarkerId('collector'),
           position: _collectorLatLng!,
-          infoWindow: InfoWindow(
-            title: _collectorName,
-            snippet: 'Approaching pickup location',
-          ),
-          icon: _collectorIcon ?? BitmapDescriptor.defaultMarker,
+          infoWindow: const InfoWindow(title: 'COLLECTOR CUSTOM'),
+          icon: _collectorIcon!,
         ),
       );
     }
-    if (_myLatLng != null) {
-      markers.add(
-        Marker(
-          markerId: const MarkerId('me'),
-          position: _myLatLng!,
-          infoWindow: const InfoWindow(
-            title: 'Your Location',
-          ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueAzure,
-          ),
-        ),
-      );
-    }
+
+    // if (_myLatLng != null) {
+    //   markers.add(
+    //     Marker(
+    //       markerId: const MarkerId('me'),
+    //       position: _myLatLng!,
+    //       infoWindow: const InfoWindow(title: 'ME'),
+    //       icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+    //     ),
+    //   );
+    // }
+    debugPrint(
+      'pickup=${_pickupLatLng != null}, '
+      'collector=${_collectorLatLng != null}, '
+      'me=${_myLatLng != null}, '
+      'iconLoaded=${_collectorIcon != null}'
+    );
 
     return markers;
   }
 
   Set<Polyline> _buildPolylines() {
     if (_collectorRoutePoints.isEmpty) return {};
+
     return {
       Polyline(
         polylineId: const PolylineId('collector_route'),
         points: _collectorRoutePoints,
-        width: 6,
-        color: _blue,
+        width: 7,
+        color: _accent,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+        jointType: JointType.round,
+        geodesic: true,
       ),
     };
   }
@@ -579,7 +624,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
                   Row(
                     children: [
                       Container(
@@ -620,9 +664,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                       ),
                     ],
                   ),
-
                   const SizedBox(height: 18),
-
                   _infoTile(
                     icon: Icons.person_outline,
                     label: "COLLECTOR",
@@ -642,10 +684,11 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                     label: "PICKUP SOURCE",
                     value: _pickupSource == "pin"
                         ? "Pinned location"
-                        : (_pickupSource == "gps" ? "Current location" : "Not specified"),
+                        : (_pickupSource == "gps"
+                            ? "Current location"
+                            : "Not specified"),
                     valueColor: _textPrimary,
                   ),
-
                   if (_landmark.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     _infoTile(
@@ -655,7 +698,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                       valueColor: _textPrimary,
                     ),
                   ],
-
                   if (_phoneNumber.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     _infoTile(
@@ -665,9 +707,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
                       valueColor: _textPrimary,
                     ),
                   ],
-
                   const SizedBox(height: 18),
-
                   Row(
                     children: [
                       Expanded(
@@ -813,7 +853,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
               polylines: _buildPolylines(),
             ),
           ),
-
           Positioned(
             top: 0,
             left: 0,
@@ -832,7 +871,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
               ),
             ),
           ),
-
           _topBar(),
           _statusPanel(),
           _loadingOverlay(),
