@@ -80,15 +80,32 @@ class ChatListPage extends StatelessWidget {
                 final data = d.data() as Map<String, dynamic>;
                 final chatType = (data['type'] ?? '').toString();
 
+                // 👇 KEEP YOUR ORIGINAL FILTER
+                bool matchesType = false;
+
                 if (type == "pickup") {
-                  return chatType == "pickup";
+                  matchesType = chatType == "pickup";
+                } else if (type == "junkshop") {
+                  matchesType = chatType == "junkshop" || chatType == "dropoff";
+                } else {
+                  matchesType = chatType == type;
                 }
 
-                if (type == "junkshop") {
-                  return chatType == "junkshop" || chatType == "dropoff";
+                if (!matchesType) return false;
+
+                // ✅ NEW: HIDE FINISHED DROPOFF CHATS
+                if (chatType == "dropoff") {
+                  final active = data['active'];
+                  final status = (data['status'] ?? '').toString();
+
+                  if (active == false ||
+                      status == "completed" ||
+                      status == "cancelled") {
+                    return false; // 🚫 hide chat
+                  }
                 }
 
-                return chatType == type;
+                return true;
               }).toList();
 
               if (docs.isEmpty) {
