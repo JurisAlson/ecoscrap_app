@@ -1045,4 +1045,4 @@ class _ScanTile extends StatelessWidget {
       ),
     );
   }
-}
+} 

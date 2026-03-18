@@ -6,12 +6,12 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 
+import 'package:ecoscrap_app/security/admin_public_key.dart';
 import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
 import 'package:ecoscrap_app/security/kyc_shared_key.dart';
-import 'package:ecoscrap_app/security/admin_public_key.dart';
 
 class CollectorAccountCreation extends StatefulWidget {
   const CollectorAccountCreation({super.key});
@@ -22,17 +22,8 @@ class CollectorAccountCreation extends StatefulWidget {
 }
 
 class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
-  final _formKey = GlobalKey<FormState>();
-  final _name = TextEditingController();
-
-  PlatformFile? _pickedFile;
+  PlatformFile? _equipmentPhoto;
   bool _loading = false;
-
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
 
   void _toast(String msg, {bool error = false}) {
     if (!mounted) return;
@@ -75,23 +66,27 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     );
   }
 
-  Future<void> _pickIdFile() async {
+  Future<void> _pickEquipmentPhoto() async {
     await _showInfoDialog(
-      title: "Upload Government ID (Required)",
-      icon: Icons.verified_user_outlined,
+      title: "Upload Collection Device Photo",
+      icon: Icons.photo_camera_back_outlined,
       message:
-          "Accepted IDs:\n"
-          "• Driver’s License\n"
-          "• National ID\n"
-          "• Voter’s ID\n"
-          "• Other valid Government-issued ID\n\n"
-          "Accepted file types: JPG, PNG, PDF (max 10MB).\n"
-          "Please upload a clear photo/scan.",
+          "Please upload 1 clear photo of your collection device.\n\n"
+          "The photo must:\n"
+          "• Show the whole device\n"
+          "• Show the capacity/container area\n"
+          "• Clearly show that it can carry at least 20KG of plastic materials\n\n"
+          "Accepted examples:\n"
+          "• Kulong-kulong\n"
+          "• Sidecar\n"
+          "• Kariton\n"
+          "• Other collection device\n\n"
+          "Accepted file types: JPG, PNG (max 10MB).",
     );
 
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
+      allowedExtensions: ['jpg', 'jpeg', 'png'],
       withData: false,
     );
 
@@ -109,21 +104,19 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     }
 
     final ext = (file.extension ?? "").toLowerCase();
-    if (!['jpg', 'jpeg', 'png', 'pdf'].contains(ext)) {
-      _toast("Invalid file type. Use JPG/PNG/PDF only.", error: true);
+    if (!['jpg', 'jpeg', 'png'].contains(ext)) {
+      _toast("Invalid file type. Use JPG/PNG only.", error: true);
       return;
     }
 
-    setState(() => _pickedFile = file);
+    setState(() => _equipmentPhoto = file);
 
     await _showInfoDialog(
-      title: "File Selected",
+      title: "Photo Selected",
       icon: Icons.check_circle_outline,
       message:
           "Selected: ${file.name}\n\n"
-          "Security note:\n"
-          "Your ID will be encrypted and used ONLY for verification.\n"
-          "We do not use it for any other purpose.",
+          "Your photo will be used only for verification.",
     );
   }
 
@@ -133,7 +126,21 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     return List.generate(len, (_) => chars[r.nextInt(chars.length)]).join();
   }
 
-  Future<void> _uploadEncryptedKyc({
+  String _readRegisteredName(Map<String, dynamic> data) {
+    return (data["name"] ??
+            data["Name"] ??
+            data["fullName"] ??
+            data["FullName"] ??
+            data["residentName"] ??
+            data["ResidentName"] ??
+            data["displayName"] ??
+            data["DisplayName"] ??
+            "")
+        .toString()
+        .trim();
+  }
+
+  Future<Map<String, dynamic>> _uploadEncryptedEquipmentPhoto({
     required String uid,
     required Uint8List fileBytes,
     required String originalFileName,
@@ -158,7 +165,11 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     );
 
     final encryptedName = "$originalFileName.enc";
-    final storagePath = "kyc/$uid/$encryptedName";
+    final storagePath = "collector_equipment/$uid/$encryptedName";
+
+    debugPrint("UPLOAD PATH: $storagePath");
+    debugPrint("UPLOAD SIZE: ${enc.cipherText.length}");
+    debugPrint("UPLOAD TYPE: application/octet-stream");
 
     final ref = FirebaseStorage.instance.ref(storagePath);
     await ref.putData(
@@ -166,29 +177,25 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
       SettableMetadata(contentType: "application/octet-stream"),
     );
 
-    final db = FirebaseFirestore.instance;
-    await db.collection("collectorKYC").doc(uid).set({
-      "uid": uid,
-      "status": "pending",
-      "hasKycFile": true,
+    debugPrint("UPLOAD DONE");
+
+    return {
       "storagePath": storagePath,
       "originalFileName": originalFileName,
       "ephPubKeyB64": base64Encode(ephPubBytes),
       "saltB64": base64Encode(Uint8List.fromList(salt)),
       "nonceB64": base64Encode(enc.nonce),
       "macB64": base64Encode(enc.macBytes),
-      "submittedAt": FieldValue.serverTimestamp(),
-      "updatedAt": FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      "uploadedAt": FieldValue.serverTimestamp(),
+    };
   }
 
   Future<void> _submitCollector() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    if (!_formKey.currentState!.validate()) return;
 
-    if (_pickedFile == null) {
-      _toast("Government ID is required before submitting.", error: true);
+    if (_equipmentPhoto == null) {
+      _toast("Please upload the required device photo.", error: true);
       return;
     }
 
@@ -197,101 +204,127 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     Reference? uploadedEncryptedRef;
 
     try {
+      debugPrint("SUBMIT START");
+
       final uid = user.uid;
       final email = user.email ?? "";
 
       final db = FirebaseFirestore.instance;
       final userRef = db.collection("Users").doc(uid);
       final reqRef = db.collection("collectorRequests").doc(uid);
-      final kycRef = db.collection("collectorKYC").doc(uid);
+      final equipmentRef = db.collection("collectorEquipment").doc(uid);
 
       final snap0 = await userRef.get();
       final existing0 = snap0.data() ?? {};
+      debugPrint("USER DOC DATA: $existing0");
+
       final status0 =
           (existing0["collectorStatus"] ?? "").toString().toLowerCase();
 
       if (status0 == "pending") {
+        debugPrint("STOP: already pending");
         _toast("You already have a pending collector request.", error: true);
         return;
       }
 
-      final ext = (_pickedFile!.extension ?? "").toLowerCase();
-      final normalizedExt = (ext == "jpeg") ? "jpg" : ext;
+      final registeredName = _readRegisteredName(existing0);
+      debugPrint("REGISTERED NAME: $registeredName");
 
+      if (registeredName.isEmpty) {
+        debugPrint("STOP: registered name empty");
+        _toast(
+          "Registered resident name not found. Please complete your resident profile first.",
+          error: true,
+        );
+        return;
+      }
+
+      final ext = (_equipmentPhoto!.extension ?? "").toLowerCase();
+      final normalizedExt = ext == "jpeg" ? "jpg" : ext;
       final rid = _randId();
-      final kycFileName = "kyc_$rid.$normalizedExt";
+      final photoFileName = "equipment_$rid.$normalizedExt";
 
-      final bytes = await File(_pickedFile!.path!).readAsBytes();
+      final bytes = await File(_equipmentPhoto!.path!).readAsBytes();
 
-      await _uploadEncryptedKyc(
+      debugPrint("STEP 1: upload encrypted photo");
+      final photoMeta = await _uploadEncryptedEquipmentPhoto(
         uid: uid,
         fileBytes: Uint8List.fromList(bytes),
-        originalFileName: kycFileName,
+        originalFileName: photoFileName,
       );
+      debugPrint("STEP 1 OK");
 
-      final storagePath = "kyc/$uid/$kycFileName.enc";
-      uploadedEncryptedRef = FirebaseStorage.instance.ref(storagePath);
+      uploadedEncryptedRef =
+          FirebaseStorage.instance.ref(photoMeta["storagePath"] as String);
 
-      await db.runTransaction((tx) async {
-        final userSnap = await tx.get(userRef);
-        final existing = userSnap.data() ?? {};
+      debugPrint("STEP 2: write collectorEquipment");
+      await equipmentRef.set(
+        {
+          "uid": uid,
+          "residentName": registeredName,
+          "status": "pending",
+          "minimumRequiredCapacityKg": 20,
+          "photo": photoMeta,
+          "submittedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      debugPrint("STEP 2 OK");
 
-        final status =
-            (existing["collectorStatus"] ?? "").toString().toLowerCase();
+      debugPrint("STEP 3: write collectorRequests");
+      await reqRef.set(
+        {
+          "collectorUid": uid,
+          "publicName": registeredName,
+          "emailDisplay": email,
+          "hasEquipmentPhoto": true,
+          "minimumRequiredCapacityKg": 20,
+          "status": "pending",
+          "submittedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      debugPrint("STEP 3 OK");
 
-        if (status == "pending") {
-          throw Exception("Already has pending request");
-        }
-
-        tx.set(
-          userRef,
-          {
-            "uid": uid,
-            "emailDisplay": email,
-            "name": _name.text.trim(),
-            "collectorVerified": false,
-            "collectorStatus": "pending",
-            "collectorSubmittedAt": FieldValue.serverTimestamp(),
-            "collectorUpdatedAt": FieldValue.serverTimestamp(),
-            "collectorActive": false,
-            if (!existing.containsKey("createdAt"))
-              "createdAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
-        tx.set(
-          reqRef,
-          {
-            "collectorUid": uid,
-            "publicName": _name.text.trim(),
-            "hasKycFile": true,
-            "status": "pending",
-            "submittedAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
-        tx.set(
-          kycRef,
-          {
-            "status": "pending",
-            "updatedAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      });
+      debugPrint("STEP 4: write Users");
+      await userRef.set(
+        {
+          "uid": uid,
+          "emailDisplay": email,
+          "name": registeredName,
+          "collectorVerified": false,
+          "collectorStatus": "pending",
+          "collectorSubmittedAt": FieldValue.serverTimestamp(),
+          "collectorUpdatedAt": FieldValue.serverTimestamp(),
+          "collectorActive": false,
+          if (!existing0.containsKey("createdAt") &&
+              !existing0.containsKey("CreatedAt"))
+            "createdAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      debugPrint("STEP 4 OK");
 
       _toast("Submitted! Pending admin review.");
       if (mounted) Navigator.pop(context);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint("SUBMIT ERROR: $e");
+      debugPrint("STACK: $st");
+
+      if (e is FirebaseException) {
+        debugPrint("FIREBASE CODE: ${e.code}");
+        debugPrint("FIREBASE MESSAGE: ${e.message}");
+      }
+
       if (uploadedEncryptedRef != null) {
         try {
           await uploadedEncryptedRef.delete();
         } catch (_) {}
       }
+
       _toast("Failed: $e", error: true);
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -311,144 +344,164 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _HeroHeader(),
-                const SizedBox(height: 14),
-                _InfoCard(
-                  title: "Why Plastic Collectors are important",
-                  icon: Icons.recycling,
-                  children: const [
-                    Text(
-                      "Plastic collectors help keep communities clean, reduce waste in rivers and oceans, and support responsible recycling.",
-                      style: TextStyle(color: Colors.white70, height: 1.35),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _HeroHeader(),
+              const SizedBox(height: 14),
+              _InfoCard(
+                title: "Why Plastic Collectors are Important",
+                icon: Icons.recycling,
+                children: const [
+                  Text(
+                    "Plastic collectors help keep communities clean, reduce waste in rivers and oceans, and support responsible recycling.",
+                    style: TextStyle(color: Colors.white70, height: 1.35),
+                  ),
+                  SizedBox(height: 10),
+                  _Bullet(text: "Cleaner barangays and streets"),
+                  _Bullet(text: "Less plastic pollution"),
+                  _Bullet(text: "Better recycling and recovery"),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const _SectionTitle("Collection Device Verification"),
+              const SizedBox(height: 10),
+              const _InfoCard(
+                title: "Required Device Capacity",
+                icon: Icons.scale_outlined,
+                children: [
+                  Text(
+                    "The collection device must be able to carry at least 20KG of plastic materials.",
+                    style: TextStyle(color: Colors.white70, height: 1.35),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const _InfoCard(
+                title: "How to Take the Picture",
+                icon: Icons.camera_alt_outlined,
+                children: [
+                  _Bullet(text: "Take 1 clear picture of your collection device"),
+                  _Bullet(text: "(kulong-kulong, kariton, sidecar, or similar)"),
+                  _Bullet(text: "Make sure the whole device is visible"),
+                  _Bullet(
+                    text:
+                        "Take the photo from an angle where the size can be seen clearly",
+                  ),
+                  _Bullet(
+                    text:
+                        "Avoid dark, blurry, or cropped photos for faster verification",
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                height: 190,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.08),
+                  ),
+                ),
+                child: const Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.add_photo_alternate_outlined,
+                      size: 42,
+                      color: Colors.white38,
                     ),
                     SizedBox(height: 10),
-                    _Bullet(text: "Cleaner barangays & streets"),
-                    _Bullet(text: "Less plastic pollution"),
-                    _Bullet(text: "Better recycling and recovery"),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                const _SectionTitle("Your Details"),
-                const SizedBox(height: 10),
-                _buildTextField(_name, "Full Name", Icons.person),
-                const SizedBox(height: 14),
-                const _SectionTitle("Verification"),
-                const SizedBox(height: 10),
-                const _InfoCard(
-                  title: "Accepted Government IDs",
-                  icon: Icons.badge_outlined,
-                  children: [
-                    _Bullet(text: "Driver’s License"),
-                    _Bullet(text: "National ID"),
-                    _Bullet(text: "Voter’s ID"),
-                    _Bullet(text: "Other valid Government-issued ID"),
-                    SizedBox(height: 10),
                     Text(
-                      "File types: JPG, PNG, PDF (max 10MB). Upload a clear photo/scan.",
-                      style: TextStyle(color: Colors.white70, height: 1.35),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                const _InfoCard(
-                  title: "Your Security is our Priority",
-                  icon: Icons.lock_outline,
-                  children: [
-                    Text(
-                      "Your ID is encrypted and will be used ONLY for verification purposes. "
-                      "It will not be used for any other purpose or shared publicly.",
-                      style: TextStyle(color: Colors.white70, height: 1.35),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                _UploadTile(
-                  pickedFileName: _pickedFile?.name,
-                  onTap: _loading ? null : _pickIdFile,
-                  onRemove: _loading || _pickedFile == null
-                      ? null
-                      : () => setState(() => _pickedFile = null),
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  height: 54,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1FA9A7),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                      "Template / Example Picture Here",
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700,
                       ),
-                      elevation: 0,
                     ),
-                    onPressed: _loading ? null : _submitCollector,
-                    child: _loading
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2.4,
-                            ),
-                          )
-                        : const Text(
-                            "Submit Application",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
+                    SizedBox(height: 6),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 18),
+                      child: Text(
+                        "Place your sample image here so users can follow the correct angle and framing.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white54,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              const _InfoCard(
+                title: "Accepted Device Examples",
+                icon: Icons.local_shipping_outlined,
+                children: [
+                  _Bullet(text: "Kulong-kulong"),
+                  _Bullet(text: "Sidecar"),
+                  _Bullet(text: "Kariton"),
+                  _Bullet(text: "Other collection device"),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _UploadTile(
+                title: "Upload Device Photo (Required)",
+                subtitle: _equipmentPhoto?.name ??
+                    "JPG / PNG • Max 10MB • Whole device must be visible",
+                pickedFileName: _equipmentPhoto?.name,
+                onTap: _loading ? null : _pickEquipmentPhoto,
+                onRemove: _loading || _equipmentPhoto == null
+                    ? null
+                    : () => setState(() => _equipmentPhoto = null),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                height: 54,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1FA9A7),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: _loading ? null : _submitCollector,
+                  child: _loading
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2.4,
                           ),
-                  ),
+                        )
+                      : const Text(
+                          "Submit Application",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                 ),
-                const SizedBox(height: 10),
-                const Text(
-                  "By submitting, you confirm that the information provided is true and correct.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white38,
-                    fontSize: 12,
-                    height: 1.3,
-                  ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                "By submitting, you confirm that this is the collection device you will use and that it can carry at least 20KG of plastic materials.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: 12,
+                  height: 1.3,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildTextField(
-    TextEditingController controller,
-    String label,
-    IconData icon,
-  ) {
-    return TextFormField(
-      controller: controller,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.06),
-        labelText: label,
-        labelStyle: const TextStyle(color: Colors.white70),
-        prefixIcon: Icon(icon, color: const Color(0xFF1FA9A7)),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.white.withOpacity(0.10)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFF1FA9A7), width: 1.6),
-        ),
-      ),
-      validator: (v) => (v == null || v.trim().isEmpty) ? "Required" : null,
     );
   }
 }
@@ -456,6 +509,8 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
 // ========================= UI Components =========================
 
 class _HeroHeader extends StatelessWidget {
+  const _HeroHeader();
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -498,7 +553,7 @@ class _HeroHeader extends StatelessWidget {
                 ),
                 SizedBox(height: 6),
                 Text(
-                  "Submit your application for admin verification.",
+                  "Upload a clear photo of your collection device for admin verification.",
                   style: TextStyle(color: Colors.white70, height: 1.35),
                 ),
               ],
@@ -603,11 +658,15 @@ class _Bullet extends StatelessWidget {
 }
 
 class _UploadTile extends StatelessWidget {
+  final String title;
+  final String subtitle;
   final String? pickedFileName;
   final VoidCallback? onTap;
   final VoidCallback? onRemove;
 
   const _UploadTile({
+    required this.title,
+    required this.subtitle,
     required this.pickedFileName,
     required this.onTap,
     required this.onRemove,
@@ -649,9 +708,7 @@ class _UploadTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    hasFile
-                        ? "Government ID selected"
-                        : "Upload Government ID (Required)",
+                    title,
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
@@ -659,7 +716,7 @@ class _UploadTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    hasFile ? pickedFileName! : "JPG / PNG / PDF • Max 10MB",
+                    hasFile ? pickedFileName! : subtitle,
                     style: const TextStyle(color: Colors.white70),
                   ),
                 ],
