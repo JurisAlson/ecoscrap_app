@@ -1379,7 +1379,17 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
     const a = String(after.status || after.adminStatus || "").trim().toLowerCase();
     if (a === b) return;
 
-    // approved
+    let email = "";
+    try {
+      const authUser = await admin.auth().getUser(uid);
+      email = String(authUser.email || "").trim();
+    } catch (e) {
+      logger.warn("notifyCollectorAdminDecision: failed to get auth email", {
+        uid,
+        err: String(e),
+      });
+    }
+
     if (a === "adminapproved" || a === "approved") {
       await sendPushToUser(
         uid,
@@ -1387,11 +1397,25 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
         "Your collector application has been approved by the admin.",
         { type: "collector_admin_approved" }
       );
-      logger.info("Collector approved notification sent", { uid });
+
+      if (email) {
+        await admin.firestore().collection("mail").add({
+          to: email,
+          message: {
+            subject: "EcoScrap Collector Application Approved",
+            html: `
+              <h2>EcoScrap</h2>
+              <p>Your collector application has been approved by the admin.</p>
+              <p>You may now continue using the app as a collector.</p>
+            `,
+          },
+        });
+      }
+
+      logger.info("Collector approved notification sent", { uid, emailQueued: !!email });
       return;
     }
 
-    // rejected
     if (a === "rejected") {
       const reason = String(after.adminRejectReason || after.rejectReason || "").trim();
 
@@ -1403,7 +1427,27 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
           : "Your collector application was rejected by the admin.",
         { type: "collector_admin_rejected" }
       );
-      logger.info("Collector rejected notification sent", { uid });
+
+      if (email) {
+        await admin.firestore().collection("mail").add({
+          to: email,
+          message: {
+            subject: "EcoScrap Collector Application Rejected",
+            html: reason.length > 0
+              ? `
+                <h2>EcoScrap</h2>
+                <p>Your collector application was rejected.</p>
+                <p><strong>Reason:</strong> ${reason}</p>
+              `
+              : `
+                <h2>EcoScrap</h2>
+                <p>Your collector application was rejected by the admin.</p>
+              `,
+          },
+        });
+      }
+
+      logger.info("Collector rejected notification sent", { uid, emailQueued: !!email });
       return;
     }
   }
@@ -1429,12 +1473,39 @@ export const notifyResidentAdminApproved = onDocumentUpdated(
 
     if (a !== "adminapproved" && a !== "approved") return;
 
+    let email = "";
+    try {
+      const authUser = await admin.auth().getUser(uid);
+      email = String(authUser.email || "").trim();
+    } catch (e) {
+      logger.warn("notifyResidentAdminApproved: failed to get auth email", {
+        uid,
+        err: String(e),
+      });
+    }
+
     await sendPushToUser(
       uid,
       "Resident approved ✅",
       "Your residency request has been approved.",
       { type: "resident_admin_approved" }
     );
+
+    if (email) {
+      await admin.firestore().collection("mail").add({
+        to: email,
+        message: {
+          subject: "EcoScrap Resident Registration Approved",
+          html: `
+            <h2>EcoScrap</h2>
+            <p>Your residency request has been approved.</p>
+            <p>You may now continue using the app.</p>
+          `,
+        },
+      });
+    }
+
+    logger.info("Resident approved notification sent", { uid, emailQueued: !!email });
   }
 );
 
