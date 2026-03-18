@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -10,8 +11,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'collector_transaction_page.dart';
-
-// ✅ chat imports
 import '../chat/screens/chat_page.dart';
 import '../chat/services/chat_services.dart';
 
@@ -103,14 +102,16 @@ class PickupStop {
       householdId: (data['householdId'] ?? '').toString(),
       collectorId: (data['collectorId'] ?? '').toString(),
       householdName: (data['householdName'] ?? 'Household').toString(),
-      pickupAddress: (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString(),
+      pickupAddress:
+          (data['fullAddress'] ?? data['pickupAddress'] ?? '').toString(),
       pickupLocation: gp,
       status: (data['status'] ?? '').toString(),
       bagLabel: (data['bagLabel'] ?? '').toString(),
       bagKg: parsedBagKg,
       phoneNumber: (data['phoneNumber'] ?? '').toString(),
       hasCollectorReceipt: data['hasCollectorReceipt'] == true,
-      acceptedAt: data['acceptedAt'] is Timestamp ? data['acceptedAt'] as Timestamp : null,
+      acceptedAt:
+          data['acceptedAt'] is Timestamp ? data['acceptedAt'] as Timestamp : null,
     );
   }
 }
@@ -143,9 +144,120 @@ class CollectorPickupMapPage extends StatefulWidget {
 
 class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   static const Color _bg = Color(0xFF0F172A);
+  static const Color _card = Color(0xFF111928);
   static const Color _accent = Color(0xFF1FA9A7);
   static const String _junkshopUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
   static const String _junkshopName = "Mores Scrap";
+
+  static const String _darkMapStyle = '''
+[
+  {
+    "elementType": "geometry",
+    "stylers": [{ "color": "#0b1220" }]
+  },
+  {
+    "elementType": "labels.icon",
+    "stylers": [{ "visibility": "off" }]
+  },
+  {
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#8b9bb4" }]
+  },
+  {
+    "elementType": "labels.text.stroke",
+    "stylers": [{ "color": "#0b1220" }]
+  },
+  {
+    "featureType": "administrative",
+    "elementType": "geometry",
+    "stylers": [{ "color": "#1e293b" }]
+  },
+  {
+    "featureType": "administrative.country",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#cbd5e1" }]
+  },
+  {
+    "featureType": "administrative.land_parcel",
+    "stylers": [{ "visibility": "off" }]
+  },
+  {
+    "featureType": "administrative.locality",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#cbd5e1" }]
+  },
+  {
+    "featureType": "poi",
+    "elementType": "geometry",
+    "stylers": [{ "color": "#111827" }]
+  },
+  {
+    "featureType": "poi",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#94a3b8" }]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "geometry",
+    "stylers": [{ "color": "#0f1f1d" }]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#6ee7b7" }]
+  },
+  {
+    "featureType": "road",
+    "elementType": "geometry",
+    "stylers": [{ "color": "#1f2937" }]
+  },
+  {
+    "featureType": "road",
+    "elementType": "geometry.stroke",
+    "stylers": [{ "color": "#0f172a" }]
+  },
+  {
+    "featureType": "road",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#cbd5e1" }]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "geometry",
+    "stylers": [{ "color": "#243244" }]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "geometry.stroke",
+    "stylers": [{ "color": "#111827" }]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#f8fafc" }]
+  },
+  {
+    "featureType": "transit",
+    "elementType": "geometry",
+    "stylers": [{ "color": "#111827" }]
+  },
+  {
+    "featureType": "transit.station",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#cbd5e1" }]
+  },
+  {
+    "featureType": "water",
+    "elementType": "geometry",
+    "stylers": [{ "color": "#07111f" }]
+  },
+  {
+    "featureType": "water",
+    "elementType": "labels.text.fill",
+    "stylers": [{ "color": "#7dd3fc" }]
+  }
+]
+''';
 
   final ChatService _chat = ChatService();
   final FirebaseFunctions _functions =
@@ -154,10 +266,14 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   GoogleMapController? _map;
   Position? _pos;
 
+  BitmapDescriptor? _collectorMarkerIcon;
+  BitmapDescriptor? _householdMarkerIcon;
+
   bool _topExpanded = false;
   bool _loadingStops = true;
   bool _loadingRoute = false;
   bool _junkshopChatEnsured = false;
+  bool _isSendingLiveLocation = false;
 
   List<PickupStop> _stops = [];
   int _currentStopIndex = 0;
@@ -168,28 +284,85 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   int? _durationValueSec;
 
   StreamSubscription<Position>? _liveLocationSub;
-  bool _isSendingLiveLocation = false;
 
   @override
   void initState() {
     super.initState();
-    _initPage();
+    _setupPage();
+  }
+
+  Future<void> _setupPage() async {
+    await _loadMarkerIcons();
+    await _initPage();
   }
 
   PickupStop? get _currentStop {
     if (_stops.isEmpty) return null;
-    if (_currentStopIndex < 0 || _currentStopIndex >= _stops.length) return null;
+    if (_currentStopIndex < 0 || _currentStopIndex >= _stops.length) {
+      return null;
+    }
     return _stops[_currentStopIndex];
   }
-
-  LatLng? get _currentPickupLatLng => _currentStop?.latLng;
 
   LatLng? get _originLatLng {
     if (_pos == null) return null;
     return LatLng(_pos!.latitude, _pos!.longitude);
-    }
+  }
 
   String _two(int n) => n.toString().padLeft(2, '0');
+
+  Future<BitmapDescriptor> _iconToMarker({
+    required IconData icon,
+    required Color iconColor,
+    required Color backgroundColor,
+    required Color borderColor,
+    double size = 112,
+    double iconSize = 54,
+  }) async {
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    final painter = _MarkerPainter(
+      icon: icon,
+      iconColor: iconColor,
+      backgroundColor: backgroundColor,
+      borderColor: borderColor,
+      size: size,
+      iconSize: iconSize,
+    );
+
+    painter.paint(canvas, Size(size, size));
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ImageByteFormat.png);
+
+    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+  }
+
+  Future<void> _loadMarkerIcons() async {
+    try {
+      _collectorMarkerIcon = await _iconToMarker(
+        icon: Icons.shopping_cart_rounded,
+        iconColor: Colors.white,
+        backgroundColor: _accent,
+        borderColor: Colors.white.withOpacity(0.18),
+      );
+
+      _householdMarkerIcon = await _iconToMarker(
+        icon: Icons.house_rounded,
+        iconColor: Colors.white,
+        backgroundColor: const Color(0xFF334155),
+        borderColor: Colors.white.withOpacity(0.18),
+      );
+
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      debugPrint("❌ Failed to build marker icons: $e");
+    }
+  }
 
   String _formatPickupSchedule(Map<String, dynamic> data) {
     final type = (data['pickupType'] ?? '').toString();
@@ -224,14 +397,13 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     try {
       await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
-        'lastReadBy': {
-          me: FieldValue.serverTimestamp(),
-        },
+        'lastReadBy': {me: FieldValue.serverTimestamp()},
       }, SetOptions(merge: true));
     } catch (e) {
       debugPrint("❌ Failed to mark chat read: $e");
     }
   }
+
   Future<void> _startLiveLocationSharing() async {
     final stop = _currentStop;
     if (stop == null) return;
@@ -247,27 +419,28 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     _isSendingLiveLocation = true;
 
-    // ✅ WRITE IMMEDIATELY (THIS FIXES YOUR ISSUE)
     final position = await Geolocator.getCurrentPosition(
       desiredAccuracy: LocationAccuracy.best,
     );
+
+    if (mounted) {
+      setState(() {
+        _pos = position;
+      });
+    }
 
     await FirebaseFirestore.instance
         .collection('requests')
         .doc(stop.requestId)
         .set({
-      'collectorLiveLocation': GeoPoint(
-        position.latitude,
-        position.longitude,
-      ),
+      'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
       'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
       'collectorHeading': position.heading,
       'collectorSpeedMps': position.speed,
       'sharingLiveLocation': true,
     }, SetOptions(merge: true));
 
-    // ✅ THEN START STREAM
-    _liveLocationSub?.cancel();
+    await _liveLocationSub?.cancel();
     _liveLocationSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.best,
@@ -277,22 +450,30 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       final currentStop = _currentStop;
       if (currentStop == null) return;
 
-      await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(currentStop.requestId)
-          .set({
-        'collectorLiveLocation': GeoPoint(
-          position.latitude,
-          position.longitude,
-        ),
-        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-        'collectorHeading': position.heading,
-        'collectorSpeedMps': position.speed,
-        'sharingLiveLocation': true,
-      }, SetOptions(merge: true));
+      try {
+        await FirebaseFirestore.instance
+            .collection('requests')
+            .doc(currentStop.requestId)
+            .set({
+          'collectorLiveLocation':
+              GeoPoint(position.latitude, position.longitude),
+          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+          'collectorHeading': position.heading,
+          'collectorSpeedMps': position.speed,
+          'sharingLiveLocation': true,
+        }, SetOptions(merge: true));
+
+        if (mounted) {
+          setState(() {
+            _pos = position;
+          });
+        }
+      } catch (e) {
+        debugPrint("❌ live location write failed: $e");
+      }
     });
   }
-    
+
   Future<void> _stopLiveLocationSharing({bool clearFirestore = false}) async {
     await _liveLocationSub?.cancel();
     _liveLocationSub = null;
@@ -315,6 +496,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       debugPrint('❌ stop live location sharing failed: $e');
     }
   }
+
   Future<void> _initPage() async {
     await _initLocation();
     await _loadStops();
@@ -344,7 +526,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   Future<bool> _ensureLocationPermission() async {
     final enabled = await Geolocator.isLocationServiceEnabled();
-    debugPrint("📍 Location service enabled: $enabled");
 
     if (!enabled) {
       if (mounted) {
@@ -356,11 +537,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
 
     var perm = await Geolocator.checkPermission();
-    debugPrint("📍 Current permission: $perm");
 
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
-      debugPrint("📍 Requested permission result: $perm");
     }
 
     if (perm == LocationPermission.denied) {
@@ -376,7 +555,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Location permission permanently denied. Open app settings."),
+            content: Text(
+              "Location permission permanently denied. Open app settings.",
+            ),
           ),
         );
       }
@@ -399,35 +580,27 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       }
 
       final ids = widget.requestIds.toSet().toList();
-
       final futures = ids.map(
-        (id) => FirebaseFirestore.instance
-            .collection('requests')
-            .doc(id)
-            .get(),
+        (id) => FirebaseFirestore.instance.collection('requests').doc(id).get(),
       );
 
       final docs = await Future.wait(futures);
 
       final loadedStops = <PickupStop>[];
       for (final doc in docs) {
-        final typedDoc = doc;
-        final stop = PickupStop.fromDoc(typedDoc);
-        if (stop != null) {
-          loadedStops.add(stop);
-        }
+        final stop = PickupStop.fromDoc(doc);
+        if (stop != null) loadedStops.add(stop);
       }
 
       if (_originLatLng != null && loadedStops.isNotEmpty) {
-        loadedStops
-          .sort((a, b) {
-            final aAccepted = a.acceptedAt?.toDate();
-            final bAccepted = b.acceptedAt?.toDate();
-            if (aAccepted == null && bAccepted == null) return 0;
-            if (aAccepted == null) return 1;
-            if (bAccepted == null) return -1;
-            return aAccepted.compareTo(bAccepted);
-          });
+        loadedStops.sort((a, b) {
+          final aAccepted = a.acceptedAt?.toDate();
+          final bAccepted = b.acceptedAt?.toDate();
+          if (aAccepted == null && bAccepted == null) return 0;
+          if (aAccepted == null) return 1;
+          if (bAccepted == null) return -1;
+          return aAccepted.compareTo(bAccepted);
+        });
 
         final ordered = _orderStopsNearest(
           start: _originLatLng!,
@@ -495,7 +668,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     if (!(s == "accepted" || s == "arrived" || s == "scheduled")) return;
 
     final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-    final collectorUid = stop.collectorId.trim().isNotEmpty ? stop.collectorId.trim() : me;
+    final collectorUid =
+        stop.collectorId.trim().isNotEmpty ? stop.collectorId.trim() : me;
     if (collectorUid.isEmpty) return;
 
     try {
@@ -510,7 +684,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
-  Future<RouteSegment?> _getRouteSegment(LatLng origin, LatLng destination) async {
+  Future<RouteSegment?> _getRouteSegment(
+      LatLng origin, LatLng destination) async {
     try {
       final callable = _functions.httpsCallable('getDirections');
       final result = await callable.call({
@@ -545,6 +720,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       return null;
     }
   }
+
   Future<void> _callCurrentStop() async {
     final stop = _currentStop;
     if (stop == null || stop.phoneNumber.trim().isEmpty) {
@@ -578,7 +754,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     final routePoints = <LatLng>[];
     int totalDurationSec = 0;
     final distanceParts = <String>[];
-    final durationParts = <String>[];
 
     LatLng current = _originLatLng!;
 
@@ -598,7 +773,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
       totalDurationSec += segment.durationSec;
       if (segment.distanceText.isNotEmpty) distanceParts.add(segment.distanceText);
-      if (segment.durationText.isNotEmpty) durationParts.add(segment.durationText);
 
       current = stop.latLng;
     }
@@ -687,85 +861,85 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
-Future<void> _openJunkshopChat() async {
-  final stop = _currentStop;
-  if (stop == null) return;
+  Future<void> _openJunkshopChat() async {
+    final stop = _currentStop;
+    if (stop == null) return;
 
-  final s = stop.status.toLowerCase();
-  final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
+    final s = stop.status.toLowerCase();
+    final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
 
-  if (!canChat) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Junkshop chat is available once pickup is accepted."),
-      ),
-    );
-    return;
-  }
+    if (!canChat) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Junkshop chat is available once pickup is accepted."),
+        ),
+      );
+      return;
+    }
 
-  final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-  var collectorUid = stop.collectorId.trim();
+    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    var collectorUid = stop.collectorId.trim();
 
-  if (me.isEmpty) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Collector ID not loaded yet.")),
-    );
-    return;
-  }
+    if (me.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Collector ID not loaded yet.")),
+      );
+      return;
+    }
 
-  if (collectorUid.isEmpty) {
-    collectorUid = me;
-    try {
-      await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(stop.requestId)
-          .update({
-        'collectorId': me,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-
-      final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
-      if (idx != -1 && mounted) {
-        setState(() {
-          _stops[idx] = _stops[idx].copyWith(collectorId: me);
+    if (collectorUid.isEmpty) {
+      collectorUid = me;
+      try {
+        await FirebaseFirestore.instance
+            .collection('requests')
+            .doc(stop.requestId)
+            .update({
+          'collectorId': me,
+          'updatedAt': FieldValue.serverTimestamp(),
         });
+
+        final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
+        if (idx != -1 && mounted) {
+          setState(() {
+            _stops[idx] = _stops[idx].copyWith(collectorId: me);
+          });
+        }
+      } catch (e) {
+        debugPrint("❌ Failed to write collectorId for junkshop chat: $e");
       }
+    }
+
+    try {
+      await _chat.ensureJunkshopChatForRequest(
+        requestId: stop.requestId,
+        junkshopUid: _junkshopUid,
+        collectorUid: collectorUid,
+      );
+
+      final chatId = "junkshop_pickup_${stop.requestId}";
+      await _markChatRead(chatId);
+
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatPage(
+            chatId: chatId,
+            title: _junkshopName,
+            otherUserId: _junkshopUid,
+          ),
+        ),
+      );
     } catch (e) {
-      debugPrint("❌ Failed to write collectorId for junkshop chat: $e");
+      debugPrint("❌ Failed to open junkshop chat: $e");
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to open junkshop chat: $e")),
+      );
     }
   }
-
-  try {
-    await _chat.ensureJunkshopChatForRequest(
-      requestId: stop.requestId,
-      junkshopUid: _junkshopUid,
-      collectorUid: collectorUid,
-    );
-
-    final chatId = "junkshop_pickup_${stop.requestId}";
-    await _markChatRead(chatId);
-
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatPage(
-          chatId: chatId,
-          title: _junkshopName,
-          otherUserId: _junkshopUid,
-        ),
-      ),
-    );
-  } catch (e) {
-    debugPrint("❌ Failed to open junkshop chat: $e");
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Failed to open junkshop chat: $e")),
-    );
-  }
-}
 
   Future<void> _openPickupChat() async {
     final stop = _currentStop;
@@ -844,48 +1018,47 @@ Future<void> _openJunkshopChat() async {
   }
 
   Future<void> _openStopChat(PickupStop stop) async {
-  final s = stop.status.toLowerCase();
-  final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
+    final s = stop.status.toLowerCase();
+    final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
 
-  if (!canChat) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Chat is available once pickup is accepted.")),
+    if (!canChat) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Chat is available once pickup is accepted.")),
+      );
+      return;
+    }
+
+    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final householdUid = stop.householdId.trim();
+    var collectorUid = stop.collectorId.trim();
+
+    if (me.isEmpty || householdUid.isEmpty) return;
+
+    if (collectorUid.isEmpty) {
+      collectorUid = me;
+    }
+
+    final chatId = await _chat.ensurePickupChat(
+      requestId: stop.requestId,
+      householdUid: householdUid,
+      collectorUid: collectorUid,
     );
-    return;
-  }
 
-  final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-  final householdUid = stop.householdId.trim();
-  var collectorUid = stop.collectorId.trim();
+    await _markChatRead(chatId);
 
-  if (me.isEmpty || householdUid.isEmpty) return;
-
-  if (collectorUid.isEmpty) {
-    collectorUid = me;
-  }
-
-  final chatId = await _chat.ensurePickupChat(
-    requestId: stop.requestId,
-    householdUid: householdUid,
-    collectorUid: collectorUid,
-  );
-
-  await _markChatRead(chatId);
-
-  if (!mounted) return;
-
-  Navigator.push(
-    context,
-    MaterialPageRoute(
-      builder: (_) => ChatPage(
-        chatId: chatId,
-        title: stop.householdName.isEmpty ? "Household" : stop.householdName,
-        otherUserId: householdUid,
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatPage(
+          chatId: chatId,
+          title: stop.householdName.isEmpty ? "Household" : stop.householdName,
+          otherUserId: householdUid,
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Future<void> _openCollectorReceipt() async {
     final stop = _currentStop;
@@ -916,9 +1089,7 @@ Future<void> _openJunkshopChat() async {
         );
         return;
       }
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
 
     if (!mounted) return;
     Navigator.push(
@@ -941,6 +1112,7 @@ Future<void> _openJunkshopChat() async {
       setState(() {
         _currentStopIndex = nextIndex;
       });
+
       await _startLiveLocationSharing();
       await _ensureJunkshopChatIfNeeded();
       await _buildMultiStopRoute();
@@ -950,12 +1122,24 @@ Future<void> _openJunkshopChat() async {
       if (!mounted || stop == null) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Moved to next stop: ${stop.householdName}"),
-        ),
+        SnackBar(content: Text("Moved to next stop: ${stop.householdName}")),
       );
     } else {
-      Navigator.pop(context);
+      await _stopLiveLocationSharing(clearFirestore: true);
+
+      if (!mounted) return;
+      setState(() {
+        _stops = [];
+        _currentStopIndex = 0;
+        _route = [];
+        _distanceText = "";
+        _durationText = "";
+        _durationValueSec = null;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("All pickup stops completed.")),
+      );
     }
   }
 
@@ -980,8 +1164,6 @@ Future<void> _openJunkshopChat() async {
           'sharingLiveLocation': false,
         });
 
-        // await _chat.cleanupPickupChats(stop.requestId);
-
         final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
         if (idx != -1 && mounted) {
           setState(() {
@@ -993,8 +1175,8 @@ Future<void> _openJunkshopChat() async {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Marked as completed.")),
         );
-        await _stopLiveLocationSharing(clearFirestore: true);
 
+        await _stopLiveLocationSharing(clearFirestore: true);
         await _moveToNextStopAfterComplete();
       } on FirebaseException catch (e) {
         debugPrint("❌ Complete failed: ${e.code} | ${e.message}");
@@ -1047,10 +1229,10 @@ Future<void> _openJunkshopChat() async {
       );
     }
   }
-  
+
   @override
   void dispose() {
-    _stopLiveLocationSharing(clearFirestore: true);
+    unawaited(_stopLiveLocationSharing(clearFirestore: true));
     _map?.dispose();
     super.dispose();
   }
@@ -1070,16 +1252,16 @@ Future<void> _openJunkshopChat() async {
     await _startLiveLocationSharing();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final currentStop = _currentStop;
-
-    final markers = <Marker>{
+  Set<Marker> _buildMarkers() {
+    return <Marker>{
       if (_pos != null)
         Marker(
           markerId: const MarkerId("me"),
           position: LatLng(_pos!.latitude, _pos!.longitude),
-          infoWindow: const InfoWindow(title: "You"),
+          infoWindow: const InfoWindow(title: "You / Collector"),
+          icon: _collectorMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          zIndex: 3,
         ),
       ..._stops.asMap().entries.map((entry) {
         final index = entry.key;
@@ -1093,21 +1275,178 @@ Future<void> _openJunkshopChat() async {
             title: "Stop ${index + 1}: ${stop.householdName}",
             snippet: stop.pickupAddress,
           ),
+          icon: _householdMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
           zIndex: isCurrent ? 2 : 1,
         );
       }),
     };
+  }
 
-    final polylines = _route.isEmpty
-        ? <Polyline>{}
-        : {
-            Polyline(
-              polylineId: const PolylineId("route"),
-              points: _route,
-              width: 6,
-              color: _accent,
+  Set<Polyline> _buildPolylines() {
+    if (_route.isEmpty) return <Polyline>{};
+
+    return {
+      Polyline(
+        polylineId: const PolylineId("route"),
+        points: _route,
+        width: 6,
+        color: _accent,
+      ),
+    };
+  }
+
+  Widget _buildEmptyLiveState() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                _circularButton(
+                  Icons.arrow_back,
+                  onTap: () {
+                    if (Navigator.of(context).canPop()) Navigator.pop(context);
+                  },
+                ),
+              ],
             ),
-          };
+            const Spacer(),
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 320),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.52),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.18),
+                        blurRadius: 18,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 58,
+                        height: 58,
+                        decoration: BoxDecoration(
+                          color: _accent.withOpacity(0.14),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: _accent.withOpacity(0.35)),
+                        ),
+                        child: const Icon(
+                          Icons.local_shipping_outlined,
+                          color: _accent,
+                          size: 28,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        "No active pickups",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        "New pickup requests will appear here automatically.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.68),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          height: 1.35,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(14),
+                          border:
+                              Border.all(color: Colors.white.withOpacity(0.08)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.sync,
+                              size: 15,
+                              color: Colors.white.withOpacity(0.82),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text(
+                              "Waiting for assignments",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const Spacer(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentStop = _currentStop;
+    final markers = _buildMarkers();
+    final polylines = _buildPolylines();
+
+    if (!_loadingStops && _stops.isEmpty) {
+      return Scaffold(
+        backgroundColor: _bg,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: GoogleMap(
+                initialCameraPosition: CameraPosition(
+                  target: _pos != null
+                      ? LatLng(_pos!.latitude, _pos!.longitude)
+                      : const LatLng(14.5995, 120.9842),
+                  zoom: 13,
+                ),
+                onMapCreated: (c) async {
+                  _map = c;
+                  await _map?.setMapStyle(_darkMapStyle);
+                },
+                myLocationEnabled: _pos != null,
+                markers: markers,
+                zoomControlsEnabled: false,
+                mapToolbarEnabled: false,
+                myLocationButtonEnabled: false,
+              ),
+            ),
+            _buildEmptyLiveState(),
+          ],
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: _bg,
@@ -1119,15 +1458,18 @@ Future<void> _openJunkshopChat() async {
                 target: currentStop?.latLng ?? const LatLng(14.5995, 120.9842),
                 zoom: 15,
               ),
-              onMapCreated: (c) => _map = c,
+              onMapCreated: (c) async {
+                _map = c;
+                await _map?.setMapStyle(_darkMapStyle);
+              },
               myLocationEnabled: _pos != null,
               markers: markers,
               polylines: polylines,
               zoomControlsEnabled: false,
               mapToolbarEnabled: false,
+              myLocationButtonEnabled: false,
             ),
           ),
-
           Positioned(
             top: 0,
             left: 0,
@@ -1142,33 +1484,43 @@ Future<void> _openJunkshopChat() async {
                       _circularButton(
                         Icons.arrow_back,
                         onTap: () {
-                          if (Navigator.of(context).canPop()) Navigator.pop(context);
+                          if (Navigator.of(context).canPop()) {
+                            Navigator.pop(context);
+                          }
                         },
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: GestureDetector(
-                          onTap: () => setState(() => _topExpanded = !_topExpanded),
+                          onTap: () =>
+                              setState(() => _topExpanded = !_topExpanded),
                           child: AnimatedSize(
                             duration: const Duration(milliseconds: 180),
                             curve: Curves.easeOut,
                             alignment: Alignment.topCenter,
                             child: ConstrainedBox(
                               constraints: BoxConstraints(
-                                maxHeight: _topExpanded ? 180 : 56,
+                                maxHeight: _topExpanded ? 190 : 56,
                               ),
                               child: _glass(
                                 radius: 16,
                                 blur: 12,
                                 opacity: 0.55,
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
+                                ),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Row(
                                       children: [
-                                        const Icon(Icons.local_shipping, size: 18, color: _accent),
+                                        const Icon(
+                                          Icons.local_shipping,
+                                          size: 18,
+                                          color: _accent,
+                                        ),
                                         const SizedBox(width: 10),
                                         Expanded(
                                           child: Text(
@@ -1185,7 +1537,9 @@ Future<void> _openJunkshopChat() async {
                                         ),
                                         const SizedBox(width: 8),
                                         Icon(
-                                          _topExpanded ? Icons.expand_less : Icons.expand_more,
+                                          _topExpanded
+                                              ? Icons.expand_less
+                                              : Icons.expand_more,
                                           color: Colors.white.withOpacity(0.85),
                                           size: 20,
                                         ),
@@ -1195,13 +1549,15 @@ Future<void> _openJunkshopChat() async {
                                       const SizedBox(height: 8),
                                       Expanded(
                                         child: SingleChildScrollView(
-                                          physics: const BouncingScrollPhysics(),
+                                          physics:
+                                              const BouncingScrollPhysics(),
                                           child: Wrap(
                                             spacing: 8,
                                             runSpacing: 8,
                                             children: [
                                               _pillChip(
-                                                icon: Icons.inventory_2_outlined,
+                                                icon:
+                                                    Icons.inventory_2_outlined,
                                                 text: currentStop.bagLabel.isEmpty
                                                     ? "Bag: —"
                                                     : "Bag: ${currentStop.bagLabel}${currentStop.bagKg == null ? "" : " (${currentStop.bagKg}kg)"}",
@@ -1214,15 +1570,18 @@ Future<void> _openJunkshopChat() async {
                                               ),
                                               _pillChip(
                                                 icon: Icons.place_outlined,
-                                                text: currentStop.pickupAddress.isEmpty
+                                                text: currentStop
+                                                        .pickupAddress.isEmpty
                                                     ? "Address: —"
                                                     : currentStop.pickupAddress,
                                               ),
-                                              if (currentStop.phoneNumber.isNotEmpty)
-                                              _pillChip(
-                                                icon: Icons.phone_outlined,
-                                                text: "Mobile: ${currentStop.phoneNumber}",
-                                              ),
+                                              if (currentStop
+                                                  .phoneNumber.isNotEmpty)
+                                                _pillChip(
+                                                  icon: Icons.phone_outlined,
+                                                  text:
+                                                      "Mobile: ${currentStop.phoneNumber}",
+                                                ),
                                             ],
                                           ),
                                         ),
@@ -1241,22 +1600,25 @@ Future<void> _openJunkshopChat() async {
               ),
             ),
           ),
-
           DraggableScrollableSheet(
             initialChildSize: 0.30,
             minChildSize: 0.18,
             maxChildSize: 0.78,
             builder: (context, scrollController) {
               return ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(22)),
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.55),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(22)),
                       border: Border(
-                        top: BorderSide(color: Colors.white.withOpacity(0.10)),
+                        top: BorderSide(
+                          color: Colors.white.withOpacity(0.10),
+                        ),
                       ),
                     ),
                     child: ListView(
@@ -1274,7 +1636,6 @@ Future<void> _openJunkshopChat() async {
                           ),
                         ),
                         const SizedBox(height: 12),
-
                         if (_loadingStops)
                           const Center(
                             child: Padding(
@@ -1282,26 +1643,15 @@ Future<void> _openJunkshopChat() async {
                               child: CircularProgressIndicator(),
                             ),
                           )
-                        else if (_stops.isEmpty)
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF111928),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Colors.white.withOpacity(0.08)),
-                            ),
-                            child: const Text(
-                              "No pickup stops found.",
-                              style: TextStyle(color: Colors.white70),
-                            ),
-                          )
                         else ...[
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF111928),
+                              color: _card,
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Colors.white.withOpacity(0.08)),
+                              border:
+                                  Border.all(color: Colors.white.withOpacity(0.08)),
                             ),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1310,13 +1660,17 @@ Future<void> _openJunkshopChat() async {
                                   Icons.access_time,
                                   _loadingRoute
                                       ? "Loading..."
-                                      : (_durationText.isEmpty ? "—" : _durationText),
+                                      : (_durationText.isEmpty
+                                          ? "—"
+                                          : _durationText),
                                 ),
                                 _miniStat(
                                   Icons.navigation_outlined,
                                   _loadingRoute
                                       ? "..."
-                                      : (_distanceText.isEmpty ? "—" : _distanceText),
+                                      : (_distanceText.isEmpty
+                                          ? "—"
+                                          : _distanceText),
                                 ),
                                 _miniStat(
                                   Icons.route,
@@ -1325,15 +1679,14 @@ Future<void> _openJunkshopChat() async {
                               ],
                             ),
                           ),
-
                           const SizedBox(height: 12),
-
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF111928),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Colors.white.withOpacity(0.08)),
+                              color: _card,
+                              borderRadius: BorderRadius.circular(16),
+                              border:
+                                  Border.all(color: Colors.white.withOpacity(0.08)),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1354,32 +1707,33 @@ Future<void> _openJunkshopChat() async {
                               ],
                             ),
                           ),
-
                           const SizedBox(height: 12),
-
                           Row(
                             children: [
                               Expanded(
                                 child: _actionWide(
-                                          icon: Icons.chat_bubble_outline,
-                                          title: "CHAT",
-                                          subtitle: "Message junkshop",
-                                          bg: Colors.white.withOpacity(0.10),
-                                          fg: Colors.white,
-                                          border: Colors.white.withOpacity(0.14),
-                                          onTap: _openJunkshopChat,
-                                        ),
+                                  icon: Icons.chat_bubble_outline,
+                                  title: "CHAT",
+                                  subtitle: "Message junkshop",
+                                  bg: Colors.white.withOpacity(0.10),
+                                  fg: Colors.white,
+                                  border: Colors.white.withOpacity(0.14),
+                                  onTap: _openJunkshopChat,
+                                ),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: _actionWide(
-                                  icon: currentStop?.status.toLowerCase() == 'arrived'
+                                  icon: currentStop?.status.toLowerCase() ==
+                                          'arrived'
                                       ? Icons.check_circle
                                       : Icons.location_on_outlined,
-                                  title: currentStop?.status.toLowerCase() == 'arrived'
+                                  title: currentStop?.status.toLowerCase() ==
+                                          'arrived'
                                       ? "COMPLETE"
                                       : "ARRIVED",
-                                  subtitle: currentStop?.status.toLowerCase() == 'arrived'
+                                  subtitle: currentStop?.status.toLowerCase() ==
+                                          'arrived'
                                       ? "Finish current stop"
                                       : "Mark current stop",
                                   bg: _accent,
@@ -1389,9 +1743,7 @@ Future<void> _openJunkshopChat() async {
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 10),
-
                           _actionWide(
                             icon: Icons.map_outlined,
                             title: "NAVIGATE",
@@ -1402,7 +1754,6 @@ Future<void> _openJunkshopChat() async {
                             onTap: _openGoogleMapsNavigation,
                           ),
                           const SizedBox(height: 10),
-
                           if (currentStop?.phoneNumber.trim().isNotEmpty == true)
                             _actionWide(
                               icon: Icons.call_outlined,
@@ -1413,9 +1764,7 @@ Future<void> _openJunkshopChat() async {
                               border: Colors.white.withOpacity(0.14),
                               onTap: _callCurrentStop,
                             ),
-
                           const SizedBox(height: 10),
-
                           if (currentStop?.status.toLowerCase() == "arrived")
                             _actionWide(
                               icon: (currentStop?.hasCollectorReceipt == true)
@@ -1424,9 +1773,10 @@ Future<void> _openJunkshopChat() async {
                               title: (currentStop?.hasCollectorReceipt == true)
                                   ? "RECEIPT SAVED"
                                   : "RECEIPT",
-                              subtitle: (currentStop?.hasCollectorReceipt == true)
-                                  ? "Already created"
-                                  : "Create buying receipt",
+                              subtitle:
+                                  (currentStop?.hasCollectorReceipt == true)
+                                      ? "Already created"
+                                      : "Create buying receipt",
                               bg: Colors.white.withOpacity(0.10),
                               fg: Colors.white,
                               border: Colors.white.withOpacity(0.14),
@@ -1448,180 +1798,207 @@ Future<void> _openJunkshopChat() async {
   }
 
   Widget _stopTile(int index, PickupStop stop) {
-  final isCurrent = index == _currentStopIndex;
+    final isCurrent = index == _currentStopIndex;
 
-  return InkWell(
-    onTap: () => _goToStop(index),
-    borderRadius: BorderRadius.circular(14),
-    child: Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isCurrent ? _accent.withOpacity(0.16) : Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
+    return InkWell(
+      onTap: () => _goToStop(index),
+      borderRadius: BorderRadius.circular(16),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
           color: isCurrent
-              ? _accent.withOpacity(0.70)
-              : Colors.white.withOpacity(0.08),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          /// STOP NUMBER
-          Container(
-            width: 24,
-            height: 24,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isCurrent ? _accent : Colors.white.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(999),
+              ? _accent.withOpacity(0.14)
+              : const Color(0xFF0F1A2E).withOpacity(0.92),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isCurrent
+                ? _accent.withOpacity(0.70)
+                : Colors.white.withOpacity(0.08),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.16),
+              blurRadius: 14,
+              offset: const Offset(0, 8),
             ),
-            child: Text(
-              "${index + 1}",
-              style: TextStyle(
-                color: isCurrent ? Colors.black : Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: isCurrent ? _accent : Colors.white.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                "${index + 1}",
+                style: TextStyle(
+                  color: isCurrent ? Colors.black : Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
-          ),
-
-          const SizedBox(width: 10),
-
-          /// STOP INFO
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  stop.householdName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    stop.householdName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  stop.pickupAddress,
-                  style: TextStyle(
-                    color: Colors.grey.shade400,
-                    fontSize: 12,
-                  ),
-                ),
-                if (stop.phoneNumber.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
-                    "Mobile: ${stop.phoneNumber}",
+                    stop.pickupAddress.isEmpty
+                        ? "No address available"
+                        : stop.pickupAddress,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: Colors.grey.shade300,
+                      color: Colors.white.withOpacity(0.68),
                       fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      height: 1.35,
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      _tinyBadge(Icons.home_outlined, "Household"),
+                      _tinyBadge(Icons.info_outline, stop.status.toUpperCase()),
+                      if (stop.phoneNumber.isNotEmpty)
+                        _tinyBadge(Icons.call_outlined, stop.phoneNumber),
+                    ],
                   ),
                 ],
-                const SizedBox(height: 4),
-                Text(
-                  "Status: ${stop.status.toUpperCase()}",
-                  style: TextStyle(
-                    color: isCurrent ? Colors.white : Colors.white70,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 8),
+            _buildStopChatButton(stop),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStopChatButton(PickupStop stop) {
+    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final chatId = "pickup_${stop.requestId}";
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .snapshots(),
+      builder: (context, snap) {
+        bool hasUnread = false;
+
+        final chat = snap.data?.data();
+        if (chat != null && me.isNotEmpty) {
+          final lastMessageAt = chat['lastMessageAt'];
+          final lastMessageSenderId =
+              (chat['lastMessageSenderId'] ?? '').toString();
+
+          final lastReadBy = chat['lastReadBy'];
+          Timestamp? myLastRead;
+
+          if (lastReadBy is Map && lastReadBy[me] is Timestamp) {
+            myLastRead = lastReadBy[me] as Timestamp;
+          }
+
+          if (lastMessageAt is Timestamp &&
+              lastMessageSenderId.isNotEmpty &&
+              lastMessageSenderId != me) {
+            if (myLastRead == null ||
+                myLastRead.millisecondsSinceEpoch <
+                    lastMessageAt.millisecondsSinceEpoch) {
+              hasUnread = true;
+            }
+          }
+        }
+
+        return InkWell(
+          onTap: () => _openStopChat(stop),
+          borderRadius: BorderRadius.circular(999),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.08),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.withOpacity(0.10)),
+                ),
+                child: const Icon(
+                  Icons.chat_bubble_outline,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              if (hasUnread)
+                Positioned(
+                  top: -1,
+                  right: -1,
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(0xFF111928),
+                        width: 1.5,
+                      ),
+                    ),
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
+        );
+      },
+    );
+  }
 
-          /// CHAT ICON
-          Builder(
-            builder: (context) {
-              final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-              final chatId = "pickup_${stop.requestId}";
-
-              return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection('chats')
-                    .doc(chatId)
-                    .snapshots(),
-                builder: (context, snap) {
-                  bool hasUnread = false;
-
-                  final chat = snap.data?.data();
-                  if (chat != null && me.isNotEmpty) {
-                    final lastMessageAt = chat['lastMessageAt'];
-                    final lastMessageSenderId =
-                        (chat['lastMessageSenderId'] ?? '').toString();
-
-                    final lastReadBy = chat['lastReadBy'];
-                    Timestamp? myLastRead;
-
-                    if (lastReadBy is Map && lastReadBy[me] is Timestamp) {
-                      myLastRead = lastReadBy[me] as Timestamp;
-                    }
-
-                    if (lastMessageAt is Timestamp &&
-                        lastMessageSenderId.isNotEmpty &&
-                        lastMessageSenderId != me) {
-                      if (myLastRead == null ||
-                          myLastRead.millisecondsSinceEpoch <
-                              lastMessageAt.millisecondsSinceEpoch) {
-                        hasUnread = true;
-                      }
-                    }
-                  }
-
-                  return InkWell(
-                    onTap: () => _openStopChat(stop),
-                    borderRadius: BorderRadius.circular(999),
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.08),
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.10),
-                            ),
-                          ),
-                          child: const Icon(
-                            Icons.chat_bubble_outline,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                        if (hasUnread)
-                          Positioned(
-                            top: -1,
-                            right: -1,
-                            child: Container(
-                              width: 10,
-                              height: 10,
-                              decoration: BoxDecoration(
-                                color: Colors.redAccent,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: const Color(0xFF111928),
-                                  width: 1.5,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  );
-                },
-              );
-            },
+  Widget _tinyBadge(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: Colors.white.withOpacity(0.85)),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ],
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _miniStat(IconData icon, String value) {
     return Row(
@@ -1761,7 +2138,9 @@ Future<void> _openJunkshopChat() async {
                 height: 36,
                 decoration: BoxDecoration(
                   color: Colors.black.withOpacity(
-                    disabled ? 0.10 : (bg == Colors.white || bg == _accent ? 0.06 : 0.18),
+                    disabled
+                        ? 0.10
+                        : (bg == Colors.white || bg == _accent ? 0.06 : 0.18),
                   ),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -1803,5 +2182,63 @@ Future<void> _openJunkshopChat() async {
         ),
       ),
     );
+  }
+}
+
+class _MarkerPainter {
+  final IconData icon;
+  final Color iconColor;
+  final Color backgroundColor;
+  final Color borderColor;
+  final double size;
+  final double iconSize;
+
+  _MarkerPainter({
+    required this.icon,
+    required this.iconColor,
+    required this.backgroundColor,
+    required this.borderColor,
+    required this.size,
+    required this.iconSize,
+  });
+
+  void paint(Canvas canvas, Size s) {
+    final center = Offset(s.width / 2, s.height / 2);
+    final radius = s.width / 2.6;
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.28)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+
+    canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
+
+    final fillPaint = Paint()..color = backgroundColor;
+    canvas.drawCircle(center, radius, fillPaint);
+
+    final borderPaint = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4;
+
+    canvas.drawCircle(center, radius, borderPaint);
+
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    textPainter.text = TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        fontSize: iconSize,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+        color: iconColor,
+      ),
+    );
+    textPainter.layout();
+
+    final iconOffset = Offset(
+      center.dx - textPainter.width / 2,
+      center.dy - textPainter.height / 2,
+    );
+
+    textPainter.paint(canvas, iconOffset);
   }
 }
