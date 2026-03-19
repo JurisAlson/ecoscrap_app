@@ -1059,6 +1059,14 @@ class _SellFormState extends State<_SellForm> {
   final TextEditingController _kgCtrl = TextEditingController();
   bool _saving = false;
 
+    bool _isWithinMoresWorkingHours() {
+    final now = DateTime.now();
+    final hour = now.hour;
+
+    // Allowed from 7:00 AM up to before 5:00 PM
+    return hour >= 7 && hour < 17;
+  }
+
   @override
   void dispose() {
     _kgCtrl.dispose();
@@ -1066,171 +1074,181 @@ class _SellFormState extends State<_SellForm> {
   }
 
   Future<void> _submitSell(double currentKg) async {
-    if (_saving) return;
+  if (_saving) return;
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  if (!_isWithinMoresWorkingHours()) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          "Mores Scrap only accepts sell transactions from 7:00 AM to 5:00 PM.",
+        ),
+      ),
+    );
+    return;
+  }
 
-    final sellKg = double.tryParse(_kgCtrl.text.trim()) ?? 0.0;
-    if (sellKg <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Enter a valid kg.")),
-      );
-      return;
-    }
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    if (sellKg > currentKg) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Not enough inventory.")),
-      );
-      return;
-    }
+  final sellKg = double.tryParse(_kgCtrl.text.trim()) ?? 0.0;
+  if (sellKg <= 0) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Enter a valid kg.")),
+    );
+    return;
+  }
 
-    final collectorId = user.uid;
-    final collectorName = user.displayName ?? "Collector";
+  if (sellKg > currentKg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Not enough inventory.")),
+    );
+    return;
+  }
 
-    setState(() => _saving = true);
+  final collectorId = user.uid;
+  final collectorName = user.displayName ?? "Collector";
 
-    try {
-      final db = FirebaseFirestore.instance;
+  setState(() => _saving = true);
 
-final activeStatuses = [
-  "incoming",
-  "accepted",
-  "on_the_way",
-  "arrived",
-  "confirmed",
-  "processing",
-];
+  try {
+    final db = FirebaseFirestore.instance;
 
-      final existingActive = await db
-          .collection('Users')
-          .doc(moresUid)
-          .collection('sell_requests')
-          .where('collectorId', isEqualTo: collectorId)
-          .where('status', whereIn: activeStatuses)
-          .limit(1)
-          .get();
+    final activeStatuses = [
+      "incoming",
+      "accepted",
+      "on_the_way",
+      "arrived",
+      "confirmed",
+      "processing",
+    ];
 
-      if (existingActive.docs.isNotEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              "You already have an active transaction with Mores Scrap. Finish or cancel it first.",
-            ),
-          ),
-        );
-        return;
-      }
+    final existingActive = await db
+        .collection('Users')
+        .doc(moresUid)
+        .collection('sell_requests')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('status', whereIn: activeStatuses)
+        .limit(1)
+        .get();
 
-      final sellReqRef = db
-          .collection('Users')
-          .doc(moresUid)
-          .collection('sell_requests')
-          .doc();
-
-      final txnRef = db
-          .collection('Users')
-          .doc(collectorId)
-          .collection('transactions')
-          .doc();
-
-      final collectorRef = db.collection('Users').doc(collectorId);
-
-      await db.runTransaction((trx) async {
-        final inventoryRef = db
-            .collection('Users')
-            .doc(collectorId)
-            .collection('inventory')
-            .doc('summary');
-
-        final invSnap = await trx.get(inventoryRef);
-        final latestKg = invSnap.exists
-            ? (((invSnap.data() as Map<String, dynamic>)['totalKg'] as num?) ??
-                    0)
-                .toDouble()
-            : 0.0;
-
-        if (latestKg < sellKg) {
-          throw Exception(
-            "Not enough stock. Available: ${latestKg.toStringAsFixed(2)} kg",
-          );
-        }
-
-        trx.set(sellReqRef, {
-          "kind": "collector_sell_to_junkshop",
-          "type": "sell",
-          "status": "incoming",
-          "seen": false,
-          "junkshopUid": moresUid,
-          "junkshopName": "Mores Scrap",
-          "sourceType": "collector",
-          "collectorId": collectorId,
-          "collectorName": collectorName,
-          "collectorTransactionId": txnRef.id,
-          "kg": sellKg,
-          "collectorArrived": false,
-          "junkshopConfirmedArrival": false,
-          "createdAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        });
-
-        trx.set(txnRef, {
-          "kind": "sell_request",
-          "status": "incoming",
-          "sellRequestId": sellReqRef.id,
-          "junkshopUid": moresUid,
-          "junkshopName": "Mores Scrap",
-          "kg": sellKg,
-          "createdAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        });
-
-trx.set(
-  collectorRef,
-  {
-    "isOnline": true,
-    "availabilityStatus": "busy_with_mores",
-    "isAvailableForHousehold": false,
-    "activeMoresSellRequestId": sellReqRef.id,
-    "updatedAt": FieldValue.serverTimestamp(),
-  },
-  SetOptions(merge: true),
-);
-      });
-
-      _kgCtrl.clear();
-
+    if (existingActive.docs.isNotEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Sell request sent to Mores Scrap.")),
-      );
-
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => CollectorTrackingPage(
-            fixedDestination: const LatLng(moresLat, moresLng),
-            destinationTitle: "Mores Scrap",
-            destinationAddress: "Mores Scrap",
-            trackingType: "sell",
-            showChatButton: true,
-            showCancelButton: true,
-            showArrivedButton: true,
-            sellRequestId: sellReqRef.id,
+        const SnackBar(
+          content: Text(
+            "You already have an active transaction with Mores Scrap. Finish or cancel it first.",
           ),
         ),
       );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Submit failed: $e")),
-      );
-    } finally {
-      if (mounted) setState(() => _saving = false);
+      return;
     }
+
+    final sellReqRef = db
+        .collection('Users')
+        .doc(moresUid)
+        .collection('sell_requests')
+        .doc();
+
+    final txnRef = db
+        .collection('Users')
+        .doc(collectorId)
+        .collection('transactions')
+        .doc();
+
+    final collectorRef = db.collection('Users').doc(collectorId);
+
+    await db.runTransaction((trx) async {
+      final inventoryRef = db
+          .collection('Users')
+          .doc(collectorId)
+          .collection('inventory')
+          .doc('summary');
+
+      final invSnap = await trx.get(inventoryRef);
+      final latestKg = invSnap.exists
+          ? (((invSnap.data() as Map<String, dynamic>)['totalKg'] as num?) ?? 0)
+              .toDouble()
+          : 0.0;
+
+      if (latestKg < sellKg) {
+        throw Exception(
+          "Not enough stock. Available: ${latestKg.toStringAsFixed(2)} kg",
+        );
+      }
+
+      trx.set(sellReqRef, {
+        "kind": "collector_sell_to_junkshop",
+        "type": "sell",
+        "status": "incoming",
+        "seen": false,
+        "junkshopUid": moresUid,
+        "junkshopName": "Mores Scrap",
+        "sourceType": "collector",
+        "collectorId": collectorId,
+        "collectorName": collectorName,
+        "collectorTransactionId": txnRef.id,
+        "kg": sellKg,
+        "collectorArrived": false,
+        "junkshopConfirmedArrival": false,
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      trx.set(txnRef, {
+        "kind": "sell_request",
+        "status": "incoming",
+        "sellRequestId": sellReqRef.id,
+        "junkshopUid": moresUid,
+        "junkshopName": "Mores Scrap",
+        "kg": sellKg,
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      trx.set(
+        collectorRef,
+        {
+          "isOnline": true,
+          "availabilityStatus": "busy_with_mores",
+          "isAvailableForHousehold": false,
+          "activeMoresSellRequestId": sellReqRef.id,
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    });
+
+    _kgCtrl.clear();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Sell request sent to Mores Scrap.")),
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CollectorTrackingPage(
+          fixedDestination: const LatLng(moresLat, moresLng),
+          destinationTitle: "Mores Scrap",
+          destinationAddress: "Mores Scrap",
+          trackingType: "sell",
+          showChatButton: true,
+          showCancelButton: true,
+          showArrivedButton: true,
+          sellRequestId: sellReqRef.id,
+        ),
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Submit failed: $e")),
+    );
+  } finally {
+    if (mounted) setState(() => _saving = false);
   }
+}
 
   Future<void> _confirmAndSubmitSell(double currentKg) async {
     final sellKg = double.tryParse(_kgCtrl.text.trim()) ?? 0.0;

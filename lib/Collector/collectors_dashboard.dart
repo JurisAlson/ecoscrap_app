@@ -391,7 +391,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       );
     }
   }
-
+ 
   Future<void> _declinePickup(String requestId, {required String reason}) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -1567,18 +1567,20 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     final userDocStream = _userRef(uid).snapshots();
 
-    final unassignedQuery = _requestsRef
-        .where('type', isEqualTo: 'pickup')
-        .where('status', whereIn: openPickupStatuses)
-        .orderBy('updatedAt', descending: true)
-        .limit(1);
+final unassignedQuery = _requestsRef
+    .where('type', isEqualTo: 'pickup')
+    .where('active', isEqualTo: true)
+    .where('status', whereIn: openPickupStatuses)
+    .orderBy('updatedAt', descending: true)
+    .limit(1);
 
-    final mineQuery = _requestsRef
-        .where('type', isEqualTo: 'pickup')
-        .where('collectorId', isEqualTo: uid)
-        .where('status', whereIn: openPickupStatuses)
-        .orderBy('updatedAt', descending: true)
-        .limit(1);
+final mineQuery = _requestsRef
+    .where('type', isEqualTo: 'pickup')
+    .where('collectorId', isEqualTo: uid)
+    .where('active', isEqualTo: true)
+    .where('status', whereIn: openPickupStatuses)
+    .orderBy('updatedAt', descending: true)
+    .limit(1);
 
     Widget bell({required bool hasUnread}) {
       return InkWell(
@@ -1740,11 +1742,20 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         }
 
         final pages = <Widget>[
-          _CollectorHomeTab(
-            collectorId: user.uid,
-            onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
-            notifBell: _buildCollectorNotifBell(),
-          ),
+_CollectorHomeTab(
+  collectorId: user.uid,
+  onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
+  onOpenNotifications: () => _scaffoldKey.currentState?.openEndDrawer(),
+  notifBell: _buildCollectorNotifBell(),
+  onAcceptPickup: _acceptPickup,
+  onDeclinePickup: _confirmAndDeclinePickup,
+  formatPickupSchedule: _formatPickupSchedule,
+  getRequestKg: _getRequestKg,
+  pickupAddress: (data) => _pickupAddress(data),
+  phoneNumber: _phoneNumber,
+  householdName: (data) => _householdName(data),
+  pillBuilder: _pill,
+),
           const CollectorTransactionPage(embedded: true),
         ];
 
@@ -1835,12 +1846,32 @@ class _CollectorHomeTab extends StatelessWidget {
   const _CollectorHomeTab({
     required this.collectorId,
     required this.onOpenProfile,
+    required this.onOpenNotifications,
     required this.notifBell,
+    required this.onAcceptPickup,
+    required this.onDeclinePickup,
+    required this.formatPickupSchedule,
+    required this.getRequestKg,
+    required this.pickupAddress,
+    required this.phoneNumber,
+    required this.householdName,
+    required this.pillBuilder,
   });
 
   final Widget notifBell;
   final String collectorId;
   final VoidCallback onOpenProfile;
+  final VoidCallback onOpenNotifications;
+
+  final Future<void> Function(String requestId) onAcceptPickup;
+  final Future<void> Function(String requestId) onDeclinePickup;
+
+  final String Function(Map<String, dynamic>) formatPickupSchedule;
+  final double Function(Map<String, dynamic>) getRequestKg;
+  final String Function(Map<String, dynamic>) pickupAddress;
+  final String Function(Map<String, dynamic>) phoneNumber;
+  final String Function(Map<String, dynamic>) householdName;
+  final Widget Function(String text) pillBuilder;
 
   static const Color primaryColor = Color(0xFF1FA9A7);
   static const Color cardColor = Color(0xFF1A2332);
@@ -1853,12 +1884,10 @@ class _CollectorHomeTab extends StatelessWidget {
     'scheduled',
   ];
 
-  double _getRequestKg(Map<String, dynamic> data) {
-    final value = data['bagKg'];
-    if (value is num) return value.toDouble();
-    if (value is String) return double.tryParse(value) ?? 0.0;
-    return 0.0;
-  }
+  static const List<String> openPickupStatuses = [
+    'pending',
+    'scheduled',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -1877,6 +1906,15 @@ class _CollectorHomeTab extends StatelessWidget {
         .where('collectorId', isEqualTo: collectorId)
         .where('status', isEqualTo: 'completed');
 
+    final availableQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('active', isEqualTo: true)
+        .where('collectorId', isEqualTo: "")
+        .where('status', whereIn: openPickupStatuses)
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+
     return StreamBuilder<QuerySnapshot>(
       stream: activeQuery.snapshots(),
       builder: (context, activeSnap) {
@@ -1886,7 +1924,7 @@ class _CollectorHomeTab extends StatelessWidget {
         double activeKg = 0.0;
         for (final doc in activeDocs) {
           final data = doc.data() as Map<String, dynamic>;
-          activeKg += _getRequestKg(data);
+          activeKg += getRequestKg(data);
         }
 
         final remainingKg = (20.0 - activeKg).clamp(0.0, 20.0);
@@ -1908,200 +1946,433 @@ class _CollectorHomeTab extends StatelessWidget {
           builder: (context, completedSnap) {
             final completedCount = completedSnap.data?.docs.length ?? 0;
 
-            return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 90),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            return StreamBuilder<QuerySnapshot>(
+              stream: availableQuery.snapshots(),
+              builder: (context, availableSnap) {
+                final availableDocs = availableSnap.data?.docs ?? [];
+                final availableDoc =
+                    availableDocs.isNotEmpty ? availableDocs.first : null;
+                final availableData =
+                    availableDoc?.data() as Map<String, dynamic>?;
+
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 90),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      GestureDetector(
-                        onTap: onOpenProfile,
-                        child: Container(
-                          width: 46,
-                          height: 46,
-                          decoration: BoxDecoration(
-                            color: primaryColor.withOpacity(0.14),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: primaryColor.withOpacity(0.25),
+                      Row(
+                        children: [
+                          GestureDetector(
+                            onTap: onOpenProfile,
+                            child: Container(
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                color: primaryColor.withOpacity(0.14),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: primaryColor.withOpacity(0.25),
+                                ),
+                              ),
+                              child:
+                                  const Icon(Icons.person, color: Colors.white),
                             ),
                           ),
-                          child: const Icon(Icons.person, color: Colors.white),
-                        ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "Collector Dashboard",
+                                  style: TextStyle(
+                                    color: textMuted,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  user?.displayName ?? "Collector",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.15,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          notifBell,
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
+                      const SizedBox(height: 18),
+
+                      _glassCard(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              "Collector Dashboard",
-                              style: TextStyle(
-                                color: textMuted,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: primaryColor.withOpacity(0.14),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(
+                                    Icons.route_outlined,
+                                    color: primaryColor,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "Today’s Overview",
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      SizedBox(height: 3),
+                                      Text(
+                                        "Track your assigned pickups.",
+                                        style: TextStyle(
+                                          color: textMuted,
+                                          fontSize: 12,
+                                          height: 1.35,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              user?.displayName ?? "Collector",
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w700,
-                                height: 1.15,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      notifBell,
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  _glassCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: primaryColor.withOpacity(0.14),
+                            const SizedBox(height: 14),
+
+                            if (activeCount > 0)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.04),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.06),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.info_outline,
+                                      size: 18,
+                                      color: Colors.white70,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        "You currently have $activeCount active pickup${activeCount == 1 ? '' : 's'} with a total load of ${activeKg.toStringAsFixed(1)} kg.",
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.map_outlined,
+                                      color: Colors.white54,
+                                      size: 18,
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else if (availableData != null)
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.06),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.08),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          width: 42,
+                                          height: 42,
+                                          decoration: BoxDecoration(
+                                            color:
+                                                primaryColor.withOpacity(0.18),
+                                            borderRadius:
+                                                BorderRadius.circular(14),
+                                          ),
+                                          child: const Icon(
+                                            Icons.local_shipping_outlined,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                householdName(availableData),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w900,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                pickupAddress(availableData)
+                                                        .isEmpty
+                                                    ? "No address"
+                                                    : pickupAddress(
+                                                        availableData),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: Colors.grey.shade400,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                              if (phoneNumber(availableData)
+                                                  .isNotEmpty) ...[
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  "Mobile: ${phoneNumber(availableData)}",
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    color: Colors.grey.shade300,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                        InkWell(
+                                          onTap: onOpenNotifications,
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                          child: const Padding(
+                                            padding: EdgeInsets.all(4),
+                                            child: Icon(
+                                              Icons.notifications_outlined,
+                                              color: Colors.white70,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        pillBuilder(
+                                          "Schedule: ${formatPickupSchedule(availableData)}",
+                                        ),
+                                        if ((availableData['bagLabel'] ?? '')
+                                            .toString()
+                                            .isNotEmpty)
+                                          pillBuilder(
+                                            "Bag: ${(availableData['bagLabel'] ?? '').toString()}${getRequestKg(availableData) > 0 ? " • ${getRequestKg(availableData).toStringAsFixed(0)}kg" : ""}",
+                                          ),
+                                        if (availableData['distanceKm'] is num)
+                                          pillBuilder(
+                                            "Distance: ${((availableData['distanceKm'] as num).toDouble()).toStringAsFixed(2)} km",
+                                          ),
+                                        if (availableData['etaMinutes'] is num)
+                                          pillBuilder(
+                                            "ETA: ${(availableData['etaMinutes'] as num).toInt()} min",
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: OutlinedButton(
+                                            onPressed: () => onDeclinePickup(
+                                              availableDoc!.id,
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.white,
+                                              side: BorderSide(
+                                                color: Colors.white
+                                                    .withOpacity(0.18),
+                                              ),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(14),
+                                              ),
+                                            ),
+                                            child: const Text(
+                                              "DECLINE",
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: ElevatedButton(
+                                            onPressed: () => onAcceptPickup(
+                                              availableDoc!.id,
+                                            ),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: primaryColor,
+                                              foregroundColor: Colors.white,
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(14),
+                                              ),
+                                            ),
+                                            child: const Text(
+                                              "ACCEPT",
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else
+                              InkWell(
+                                onTap: onOpenNotifications,
                                 borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Icon(
-                                Icons.route_outlined,
-                                color: primaryColor,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            const Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    "Today’s Overview",
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.04),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.06),
                                     ),
                                   ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    "Track your assigned pickups.",
-                                    style: TextStyle(
-                                      color: textMuted,
-                                      fontSize: 12,
-                                      height: 1.35,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.04),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.06),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.info_outline,
-                                size: 18,
-                                color: Colors.white70,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  activeCount == 0
-                                      ? "You have no accepted active pickups at the moment."
-                                      : "You currently have $activeCount active pickup${activeCount == 1 ? '' : 's'} with a total load of ${activeKg.toStringAsFixed(1)} kg.",
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 12,
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.info_outline,
+                                        size: 18,
+                                        color: Colors.white70,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Expanded(
+                                        child: Text(
+                                          "You have no accepted active pickups at the moment. Tap here to view available requests.",
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ),
+                                      const Icon(
+                                        Icons.notifications_outlined,
+                                        color: Colors.white54,
+                                        size: 18,
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
-                            ],
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _summaryCard(
+                              title: "Active",
+                              value: "$activeCount",
+                              icon: Icons.local_shipping_outlined,
+                              onTap: openActiveMap,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _summaryCard(
-                          title: "Active",
-                          value: "$activeCount",
-                          icon: Icons.local_shipping_outlined,
-                          onTap: openActiveMap,
-                        ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _summaryCard(
+                              title: "Completed",
+                              value: "$completedCount",
+                              icon: Icons.check_circle_outline,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _summaryCard(
+                              title: "Remaining",
+                              value: "${remainingKg.toStringAsFixed(1)} kg",
+                              icon: Icons.layers_outlined,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _summaryCard(
-                          title: "Completed",
-                          value: "$completedCount",
-                          icon: Icons.check_circle_outline,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _summaryCard(
-                          title: "Remaining",
-                          value: "${remainingKg.toStringAsFixed(1)} kg",
-                          icon: Icons.layers_outlined,
+
+                      const SizedBox(height: 16),
+
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: openActiveMap,
+                          icon: const Icon(Icons.map_outlined),
+                          label: Text(
+                            activeRequestIds.isEmpty
+                                ? "Open Pickup Map"
+                                : "Open Active Pickups",
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryColor,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: openActiveMap,
-                      icon: const Icon(Icons.map_outlined),
-                      label: Text(
-                        activeRequestIds.isEmpty
-                            ? "Open Pickup Map"
-                            : "Open Active Pickups",
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        textStyle: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                );
+              },
             );
           },
         );
