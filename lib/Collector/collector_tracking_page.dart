@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ui';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -164,7 +165,21 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
     super.initState();
     _initPage();
   }
+Future<void> _restoreCollectorAvailability() async {
+  final collectorId = FirebaseAuth.instance.currentUser?.uid;
+  if (collectorId == null) return;
 
+  await FirebaseFirestore.instance
+      .collection('Users')
+      .doc(collectorId)
+      .set({
+    "isOnline": true,
+    "availabilityStatus": "available",
+    "isAvailableForHousehold": true,
+    "activeMoresSellRequestId": FieldValue.delete(),
+    "updatedAt": FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
+}
   Future<void> _setupFixedDestinationMode() async {
     final destination = widget.fixedDestination;
     if (destination == null) return;
@@ -282,15 +297,18 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
     }
 
     try {
-      await FirebaseFirestore.instance
-          .collection('Users')
-          .doc(_moresUid)
-          .collection('sell_requests')
-          .doc(widget.sellRequestId!)
-          .update({
-        "status": "cancelled",
-        "updatedAt": FieldValue.serverTimestamp(),
-      });
+await FirebaseFirestore.instance
+    .collection('Users')
+    .doc(_moresUid)
+    .collection('sell_requests')
+    .doc(widget.sellRequestId!)
+    .update({
+  "status": "cancelled",
+  "updatedAt": FieldValue.serverTimestamp(),
+});
+
+await _restoreCollectorAvailability();
+      
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

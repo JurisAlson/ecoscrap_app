@@ -167,10 +167,9 @@ class _CollectorTransactionPageState extends State<CollectorTransactionPage> {
 }
 
 /// ===============================================================
-/// SHARED UI HELPERS (within this file only)
+/// SHARED UI HELPERS
 /// ===============================================================
 class _TransactionUi {
-
   static Widget blurCircle(Color color, double size) {
     return Container(
       width: size,
@@ -197,17 +196,6 @@ class _TransactionUi {
           ),
           child: child,
         ),
-      ),
-    );
-  }
-
-  static Widget label(String text) {
-    return Text(
-      text.toUpperCase(),
-      style: const TextStyle(
-        color: Color(0xFF94A3B8),
-        fontSize: 10,
-        fontWeight: FontWeight.bold,
       ),
     );
   }
@@ -253,6 +241,9 @@ class _BuyForm extends StatefulWidget {
 class _BuyFormState extends State<_BuyForm> {
   static const Color primaryColor = Color(0xFF1FA9A7);
   static const double buyPricePerKg = 5.0;
+
+  static const int _historyItemsPerPage = 5;
+  int _historyPage = 0;
 
   bool _saving = false;
 
@@ -418,7 +409,7 @@ class _BuyFormState extends State<_BuyForm> {
         .collection('transactions')
         .where('kind', isEqualTo: 'buy')
         .orderBy('createdAt', descending: true)
-        .limit(10)
+        .limit(50)
         .snapshots();
 
     if (!hasRequest) {
@@ -438,6 +429,7 @@ class _BuyFormState extends State<_BuyForm> {
         },
       );
     }
+
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('requests')
@@ -471,8 +463,6 @@ class _BuyFormState extends State<_BuyForm> {
         return StreamBuilder<QuerySnapshot>(
           stream: historyStream,
           builder: (context, historySnap) {
-            final historyDocs = historySnap.data?.docs ?? [];
-
             return SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -661,7 +651,8 @@ class _BuyFormState extends State<_BuyForm> {
       ],
     );
   }
-    Widget _sectionTitle(String text) {
+
+  Widget _sectionTitle(String text) {
     return Text(
       text.toUpperCase(),
       style: const TextStyle(
@@ -772,9 +763,30 @@ class _BuyFormState extends State<_BuyForm> {
       ),
     );
   }
-  
+
   Widget _historySection(AsyncSnapshot<QuerySnapshot> historySnap) {
     final historyDocs = historySnap.data?.docs ?? [];
+
+    final totalItems = historyDocs.length;
+    final totalPages = totalItems == 0
+        ? 1
+        : (totalItems / _historyItemsPerPage).ceil();
+
+    if (_historyPage >= totalPages) {
+      _historyPage = totalPages - 1;
+    }
+    if (_historyPage < 0) {
+      _historyPage = 0;
+    }
+
+    final startIndex = _historyPage * _historyItemsPerPage;
+    final endIndex = (startIndex + _historyItemsPerPage) > totalItems
+        ? totalItems
+        : (startIndex + _historyItemsPerPage);
+
+    final pageDocs = totalItems == 0
+        ? <QueryDocumentSnapshot>[]
+        : historyDocs.sublist(startIndex, endIndex);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -819,11 +831,10 @@ class _BuyFormState extends State<_BuyForm> {
               ),
             ),
           )
-        else
-          ...historyDocs.map((doc) {
+        else ...[
+          ...pageDocs.map((doc) {
             final item = doc.data() as Map<String, dynamic>;
-            final household =
-                (item['householdName'] ?? 'Household').toString();
+            final household = (item['householdName'] ?? 'Household').toString();
             final bag = (item['bagLabel'] ?? 'Bag').toString();
             final kg = ((item['kg'] as num?) ?? 0).toDouble();
             final price = ((item['pricePerKg'] as num?) ?? 0).toDouble();
@@ -842,7 +853,127 @@ class _BuyFormState extends State<_BuyForm> {
               ),
             );
           }),
+          const SizedBox(height: 8),
+          _buildHistoryPagination(totalPages),
+        ],
       ],
+    );
+  }
+
+  Widget _buildHistoryPagination(int totalPages) {
+    if (totalPages <= 1) return const SizedBox.shrink();
+
+    final pages = _visiblePages(totalPages, _historyPage);
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _pageArrowButton(
+          icon: Icons.chevron_left_rounded,
+          enabled: _historyPage > 0,
+          onTap: () {
+            if (_historyPage > 0) {
+              setState(() => _historyPage--);
+            }
+          },
+        ),
+        const SizedBox(width: 8),
+        ...pages.map((pageIndex) {
+          final isSelected = pageIndex == _historyPage;
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: _pageNumberButton(
+              label: "${pageIndex + 1}",
+              selected: isSelected,
+              onTap: () => setState(() => _historyPage = pageIndex),
+            ),
+          );
+        }),
+        const SizedBox(width: 8),
+        _pageArrowButton(
+          icon: Icons.chevron_right_rounded,
+          enabled: _historyPage < totalPages - 1,
+          onTap: () {
+            if (_historyPage < totalPages - 1) {
+              setState(() => _historyPage++);
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  List<int> _visiblePages(int totalPages, int currentPage) {
+    if (totalPages <= 3) {
+      return List.generate(totalPages, (i) => i);
+    }
+
+    if (currentPage <= 1) {
+      return [0, 1, 2];
+    }
+
+    if (currentPage >= totalPages - 2) {
+      return [totalPages - 3, totalPages - 2, totalPages - 1];
+    }
+
+    return [currentPage - 1, currentPage, currentPage + 1];
+  }
+
+  Widget _pageNumberButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? primaryColor : Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? primaryColor : Colors.white.withOpacity(0.08),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : Colors.white70,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pageArrowButton({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: enabled
+              ? Colors.white.withOpacity(0.06)
+              : Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.08)),
+        ),
+        child: Icon(
+          icon,
+          color: enabled ? Colors.white : Colors.white24,
+        ),
+      ),
     );
   }
 
@@ -852,8 +983,18 @@ class _BuyFormState extends State<_BuyForm> {
     final dt = timestamp.toDate();
 
     final months = [
-      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
     ];
 
     final hour = dt.hour > 12
@@ -912,7 +1053,6 @@ class _SellFormState extends State<_SellForm> {
   static const Color primaryColor = Color(0xFF1FA9A7);
   static const String moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
 
-  // Replace with real Mores Scrap coordinates
   static const double moresLat = 14.198630;
   static const double moresLng = 121.117270;
 
@@ -954,6 +1094,36 @@ class _SellFormState extends State<_SellForm> {
     try {
       final db = FirebaseFirestore.instance;
 
+final activeStatuses = [
+  "incoming",
+  "accepted",
+  "on_the_way",
+  "arrived",
+  "confirmed",
+  "processing",
+];
+
+      final existingActive = await db
+          .collection('Users')
+          .doc(moresUid)
+          .collection('sell_requests')
+          .where('collectorId', isEqualTo: collectorId)
+          .where('status', whereIn: activeStatuses)
+          .limit(1)
+          .get();
+
+      if (existingActive.docs.isNotEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              "You already have an active transaction with Mores Scrap. Finish or cancel it first.",
+            ),
+          ),
+        );
+        return;
+      }
+
       final sellReqRef = db
           .collection('Users')
           .doc(moresUid)
@@ -965,6 +1135,8 @@ class _SellFormState extends State<_SellForm> {
           .doc(collectorId)
           .collection('transactions')
           .doc();
+
+      final collectorRef = db.collection('Users').doc(collectorId);
 
       await db.runTransaction((trx) async {
         final inventoryRef = db
@@ -1014,6 +1186,18 @@ class _SellFormState extends State<_SellForm> {
           "createdAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
         });
+
+trx.set(
+  collectorRef,
+  {
+    "isOnline": true,
+    "availabilityStatus": "busy_with_mores",
+    "isAvailableForHousehold": false,
+    "activeMoresSellRequestId": sellReqRef.id,
+    "updatedAt": FieldValue.serverTimestamp(),
+  },
+  SetOptions(merge: true),
+);
       });
 
       _kgCtrl.clear();
@@ -1106,100 +1290,206 @@ class _SellFormState extends State<_SellForm> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    final collectorId = user?.uid;
+Widget build(BuildContext context) {
+  final user = FirebaseAuth.instance.currentUser;
+  final collectorId = user?.uid;
 
-    if (collectorId == null) {
-      return const Center(
-        child: Text("Not signed in", style: TextStyle(color: Colors.white)),
-      );
-    }
-
-    final inventoryStream = FirebaseFirestore.instance
-        .collection('Users')
-        .doc(collectorId)
-        .collection('inventory')
-        .doc('summary')
-        .snapshots();
-
-    return StreamBuilder<DocumentSnapshot>(
-      stream: inventoryStream,
-      builder: (context, snap) {
-        final data = snap.data?.data() as Map<String, dynamic>? ?? {};
-        final totalKg = ((data['totalKg'] as num?) ?? 0).toDouble();
-
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-
-              const SizedBox(height: 12),
-              _TransactionUi.glassCard(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      "Available inventory",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    Text(
-                      "${totalKg.toStringAsFixed(2)} kg",
-                      style: const TextStyle(
-                        color: primaryColor,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _TransactionUi.glassCard(
-                child: TextField(
-                  controller: _kgCtrl,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  style: const TextStyle(color: Colors.white),
-                  decoration:
-                      _TransactionUi.inputDecoration("Kg to sell to Mores Scrap"),
-                ),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _saving ? null : () => _confirmAndSubmitSell(totalKg),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                  child: Text(
-                    _saving ? "SENDING..." : "SEND TO MORES SCRAP",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                "Note: This will notify Mores Scrap of your intent to sell.",
-                style: TextStyle(color: Colors.white60, fontSize: 12),
-              ),
-            ],
-          ),
-        );
-      },
+  if (collectorId == null) {
+    return const Center(
+      child: Text("Not signed in", style: TextStyle(color: Colors.white)),
     );
   }
-}
+
+  final inventoryStream = FirebaseFirestore.instance
+      .collection('Users')
+      .doc(collectorId)
+      .collection('inventory')
+      .doc('summary')
+      .snapshots();
+
+  final activeSellStream = FirebaseFirestore.instance
+      .collection('Users')
+      .doc(moresUid)
+      .collection('sell_requests')
+      .where('collectorId', isEqualTo: collectorId)
+.where('status', whereIn: [
+  'incoming',
+  'accepted',
+  'on_the_way',
+  'arrived',
+  'confirmed',
+  'processing',
+])
+      .limit(1)
+      .snapshots();
+
+  return StreamBuilder<DocumentSnapshot>(
+    stream: inventoryStream,
+    builder: (context, inventorySnap) {
+      final data = inventorySnap.data?.data() as Map<String, dynamic>? ?? {};
+      final totalKg = ((data['totalKg'] as num?) ?? 0).toDouble();
+
+      return StreamBuilder<QuerySnapshot>(
+        stream: activeSellStream,
+        builder: (context, activeSnap) {
+          final hasActiveMoresTxn = activeSnap.data?.docs.isNotEmpty ?? false;
+          final activeDoc = hasActiveMoresTxn ? activeSnap.data!.docs.first : null;
+          final activeSellRequestId = activeDoc?.id;
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 12),
+
+                if (hasActiveMoresTxn) ...[
+                  InkWell(
+                    onTap: activeSellRequestId == null
+                        ? null
+                        : () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => CollectorTrackingPage(
+                                  fixedDestination: const LatLng(moresLat, moresLng),
+                                  destinationTitle: "Mores Scrap",
+                                  destinationAddress: "Mores Scrap",
+                                  trackingType: "sell",
+                                  showChatButton: true,
+                                  showCancelButton: true,
+                                  showArrivedButton: true,
+                                  sellRequestId: activeSellRequestId,
+                                ),
+                              ),
+                            );
+                          },
+                    borderRadius: BorderRadius.circular(18),
+                    child: _TransactionUi.glassCard(
+                      child: Row(
+                        children: const [
+                          Icon(Icons.map_rounded, color: Colors.orangeAccent),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "You already have an active transaction with Mores Scrap. Tap here to open the map.",
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            color: Colors.white70,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+
+                _TransactionUi.glassCard(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "Available inventory",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        "${totalKg.toStringAsFixed(2)} kg",
+                        style: const TextStyle(
+                          color: primaryColor,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                _TransactionUi.glassCard(
+                  child: TextField(
+                    controller: _kgCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: const TextStyle(color: Colors.white),
+                    enabled: !hasActiveMoresTxn && !_saving,
+                    decoration: _TransactionUi.inputDecoration(
+                      "Kg to sell to Mores Scrap",
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: ElevatedButton(
+                    onPressed: _saving
+                        ? null
+                        : hasActiveMoresTxn
+                            ? () async {
+                                if (activeSellRequestId == null) return;
+
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => CollectorTrackingPage(
+                                      fixedDestination: const LatLng(
+                                        moresLat,
+                                        moresLng,
+                                      ),
+                                      destinationTitle: "Mores Scrap",
+                                      destinationAddress: "Mores Scrap",
+                                      trackingType: "sell",
+                                      showChatButton: true,
+                                      showCancelButton: true,
+                                      showArrivedButton: true,
+                                      sellRequestId: activeSellRequestId,
+                                    ),
+                                  ),
+                                );
+                              }
+                            : () => _confirmAndSubmitSell(totalKg),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryColor,
+                      disabledBackgroundColor: Colors.white24,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                    ),
+                    child: Text(
+                      _saving
+                          ? "SENDING..."
+                          : hasActiveMoresTxn
+                              ? "OPEN ACTIVE TRANSACTION"
+                              : "SEND TO MORES SCRAP",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+                Text(
+                  hasActiveMoresTxn
+                      ? "You already have an active trip to Mores Scrap. Open it to continue tracking."
+                      : "Note: This will notify Mores Scrap of your intent to sell.",
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    },
+  );
+}}

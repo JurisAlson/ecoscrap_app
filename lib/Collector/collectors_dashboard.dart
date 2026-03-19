@@ -95,8 +95,10 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     return (data['phoneNumber'] ?? '').toString();
   }
 
-  String _householdName(Map<String, dynamic> data,
-      {String fallback = 'Household'}) {
+  String _householdName(
+    Map<String, dynamic> data, {
+    String fallback = 'Household',
+  }) {
     return (data['householdName'] ?? fallback).toString();
   }
 
@@ -183,16 +185,20 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     final batch = _db.batch();
     for (final doc in activeDocs.docs) {
-      batch.set(doc.reference, {
-        'collectorLiveLocation': GeoPoint(
-          firstPos.latitude,
-          firstPos.longitude,
-        ),
-        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-        'collectorHeading': firstPos.heading,
-        'collectorSpeedMps': firstPos.speed,
-        'sharingLiveLocation': true,
-      }, SetOptions(merge: true));
+      batch.set(
+        doc.reference,
+        {
+          'collectorLiveLocation': GeoPoint(
+            firstPos.latitude,
+            firstPos.longitude,
+          ),
+          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+          'collectorHeading': firstPos.heading,
+          'collectorSpeedMps': firstPos.speed,
+          'sharingLiveLocation': true,
+        },
+        SetOptions(merge: true),
+      );
     }
     await batch.commit();
 
@@ -207,7 +213,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser == null) return;
 
-      final activeNow = await _activeCollectorRequestsQuery(currentUser.uid).get();
+      final activeNow =
+          await _activeCollectorRequestsQuery(currentUser.uid).get();
 
       if (activeNow.docs.isEmpty) {
         await _stopDashboardLiveTracking(clearFirestore: true);
@@ -216,16 +223,20 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
       final batch = _db.batch();
       for (final doc in activeNow.docs) {
-        batch.set(doc.reference, {
-          'collectorLiveLocation': GeoPoint(
-            position.latitude,
-            position.longitude,
-          ),
-          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          'collectorHeading': position.heading,
-          'collectorSpeedMps': position.speed,
-          'sharingLiveLocation': true,
-        }, SetOptions(merge: true));
+        batch.set(
+          doc.reference,
+          {
+            'collectorLiveLocation': GeoPoint(
+              position.latitude,
+              position.longitude,
+            ),
+            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+            'collectorHeading': position.heading,
+            'collectorSpeedMps': position.speed,
+            'sharingLiveLocation': true,
+          },
+          SetOptions(merge: true),
+        );
       }
       await batch.commit();
     });
@@ -245,10 +256,14 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     final batch = _db.batch();
     for (final doc in activeDocs.docs) {
-      batch.set(doc.reference, {
-        'sharingLiveLocation': false,
-        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      batch.set(
+        doc.reference,
+        {
+          'sharingLiveLocation': false,
+          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
     }
     await batch.commit();
   }
@@ -542,25 +557,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     await _declinePickup(requestId, reason: reason);
   }
 
-  Future<void> _clearNotification(String notificationId) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    try {
-      await _userNotificationsRef(user.uid).doc(notificationId).delete();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Notification cleared.")),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to clear notification: $e")),
-      );
-    }
-  }
-
   Future<void> _clearAllCancelledPickupNotifications() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -713,6 +709,48 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       onTap: onTap,
       child: tile,
     );
+  }
+
+  Future<void> markArrivedOnce(BuildContext context, String requestId) async {
+    final requestRef =
+        FirebaseFirestore.instance.collection('requests').doc(requestId);
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final snap = await tx.get(requestRef);
+
+        if (!snap.exists) {
+          throw Exception("Request not found.");
+        }
+
+        final data = snap.data() as Map<String, dynamic>;
+        final currentStatus = (data['status'] ?? '').toString().toLowerCase();
+
+        if (currentStatus == 'arrived') {
+          throw Exception("You have already arrived.");
+        }
+
+        if (currentStatus != 'accepted' && currentStatus != 'scheduled') {
+          throw Exception("This pickup cannot be marked as arrived.");
+        }
+
+        tx.update(requestRef, {
+          'status': 'arrived',
+          'arrivedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("You have arrived.")),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("$e")),
+      );
+    }
   }
 
   Future<void> _promptPickupAction({
@@ -1145,8 +1183,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
                                 final title =
                                     (n['title'] ?? 'Notification').toString();
-                                final message =
-                                    (n['message'] ?? '').toString();
+                                final message = (n['message'] ?? '').toString();
                                 final reason = (n['reason'] ??
                                         n['collectorDeclineReason'] ??
                                         'No reason provided.')
@@ -1158,40 +1195,14 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                                     ? _formatNotifTime(createdAt)
                                     : "";
 
-                                final isCancelledPickup =
-                                    _isCancelledPickupNotification(n);
-
                                 return Padding(
-                                  padding: const EdgeInsets.only(bottom: 12),
+                                  padding:
+                                      const EdgeInsets.only(bottom: 12),
                                   child: _notifTile(
                                     title: title,
                                     subtitle: message,
                                     timeText: timeText,
                                     status: status,
-                                    trailing: isCancelledPickup
-                                        ? TextButton(
-                                            onPressed: () async =>
-                                                await _clearNotification(doc.id),
-                                            style: TextButton.styleFrom(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                horizontal: 10,
-                                                vertical: 6,
-                                              ),
-                                              minimumSize: Size.zero,
-                                              tapTargetSize:
-                                                  MaterialTapTargetSize
-                                                      .shrinkWrap,
-                                            ),
-                                            child: const Text(
-                                              "CLEAR",
-                                              style: TextStyle(
-                                                color: Colors.redAccent,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          )
-                                        : null,
                                     onTap: () async {
                                       await showDialog(
                                         context: context,
@@ -1235,8 +1246,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                                                   const SizedBox(height: 18),
                                                   Row(
                                                     crossAxisAlignment:
-                                                        CrossAxisAlignment
-                                                            .start,
+                                                        CrossAxisAlignment.start,
                                                     children: [
                                                       const Text(
                                                         "Reason: ",
@@ -1252,8 +1262,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                                                           reason,
                                                           style:
                                                               const TextStyle(
-                                                            color:
-                                                                Colors.white70,
+                                                            color: Colors.white70,
                                                             fontSize: 14,
                                                             height: 1.4,
                                                           ),
@@ -1268,8 +1277,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                                                     child: TextButton(
                                                       onPressed: () =>
                                                           Navigator.pop(
-                                                        dialogContext,
-                                                      ),
+                                                              dialogContext),
                                                       child:
                                                           const Text("Close"),
                                                     ),
@@ -1667,112 +1675,113 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       },
     );
   }
+
   @override
-Widget build(BuildContext context) {
-  final user = FirebaseAuth.instance.currentUser;
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
 
-  if (user == null) {
-    return const Scaffold(
-      backgroundColor: bgColor,
-      body: Center(
-        child: Text(
-          "Not logged in.",
-          style: TextStyle(color: Colors.white),
-        ),
-      ),
-    );
-  }
-
-  return StreamBuilder<DocumentSnapshot>(
-    stream: _userRef(user.uid).snapshots(),
-    builder: (context, snap) {
-      if (snap.connectionState == ConnectionState.waiting) {
-        return const Scaffold(
-          backgroundColor: bgColor,
-          body: Center(child: CircularProgressIndicator()),
-        );
-      }
-
-      if (snap.hasError) {
-        return Scaffold(
-          backgroundColor: bgColor,
-          body: Center(
-            child: Text(
-              "Error: ${snap.error}",
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-        );
-      }
-
-      final data = snap.data?.data() as Map<String, dynamic>?;
-
-      final isCollectorRole = _isCollectorRole(data);
-      final collectorStatus = (data?['collectorStatus'] ?? "").toString();
-
-      final legacyAdminOk = data?['adminVerified'] == true;
-      final legacyJunkshopOk = data?['junkshopVerified'] == true;
-      final legacyActive = data?['collectorActive'] == true;
-
-      final allowDashboard =
-          (isCollectorRole && _isCollectorAdminApproved(data)) ||
-          _isLegacyCollectorVerified(data);
-
-      if (!allowDashboard) {
-        return Scaffold(
-          backgroundColor: bgColor,
-          body: _pendingVerificationScreenNew(
-            collectorStatus: collectorStatus,
-            legacyAdminOk: legacyAdminOk,
-            legacyJunkshopOk: legacyJunkshopOk,
-            legacyActive: legacyActive,
-          ),
-        );
-      }
-
-      final pages = <Widget>[
-        _CollectorHomeTab(
-          collectorId: user.uid,
-          onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
-          notifBell: _buildCollectorNotifBell(),
-        ),
-        const CollectorTransactionPage(embedded: true),
-      ];
-
-      return Scaffold(
-        key: _scaffoldKey,
+    if (user == null) {
+      return const Scaffold(
         backgroundColor: bgColor,
-        drawer: Drawer(
-          backgroundColor: bgColor,
-          child: SafeArea(child: _collectorProfileDrawer(context)),
-        ),
-        endDrawer: Drawer(
-          backgroundColor: bgColor,
-          child: SafeArea(child: _notificationsDrawer()),
-        ),
-        body: Stack(
-          children: [
-            Positioned(
-              top: -120,
-              right: -120,
-              child: _blurCircle(primaryColor.withOpacity(0.15), 320),
-            ),
-            Positioned(
-              bottom: 80,
-              left: -120,
-              child: _blurCircle(Colors.green.withOpacity(0.10), 360),
-            ),
-            SafeArea(child: pages[_tabIndex]),
-          ],
-        ),
-        bottomNavigationBar: _collectorFooter(
-          currentIndex: _tabIndex,
-          onTap: (i) => setState(() => _tabIndex = i),
+        body: Center(
+          child: Text(
+            "Not logged in.",
+            style: TextStyle(color: Colors.white),
+          ),
         ),
       );
-    },
-  );
-}
+    }
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: _userRef(user.uid).snapshots(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: bgColor,
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snap.hasError) {
+          return Scaffold(
+            backgroundColor: bgColor,
+            body: Center(
+              child: Text(
+                "Error: ${snap.error}",
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          );
+        }
+
+        final data = snap.data?.data() as Map<String, dynamic>?;
+
+        final isCollectorRole = _isCollectorRole(data);
+        final collectorStatus = (data?['collectorStatus'] ?? "").toString();
+
+        final legacyAdminOk = data?['adminVerified'] == true;
+        final legacyJunkshopOk = data?['junkshopVerified'] == true;
+        final legacyActive = data?['collectorActive'] == true;
+
+        final allowDashboard =
+            (isCollectorRole && _isCollectorAdminApproved(data)) ||
+                _isLegacyCollectorVerified(data);
+
+        if (!allowDashboard) {
+          return Scaffold(
+            backgroundColor: bgColor,
+            body: _pendingVerificationScreenNew(
+              collectorStatus: collectorStatus,
+              legacyAdminOk: legacyAdminOk,
+              legacyJunkshopOk: legacyJunkshopOk,
+              legacyActive: legacyActive,
+            ),
+          );
+        }
+
+        final pages = <Widget>[
+          _CollectorHomeTab(
+            collectorId: user.uid,
+            onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
+            notifBell: _buildCollectorNotifBell(),
+          ),
+          const CollectorTransactionPage(embedded: true),
+        ];
+
+        return Scaffold(
+          key: _scaffoldKey,
+          backgroundColor: bgColor,
+          drawer: Drawer(
+            backgroundColor: bgColor,
+            child: SafeArea(child: _collectorProfileDrawer(context)),
+          ),
+          endDrawer: Drawer(
+            backgroundColor: bgColor,
+            child: SafeArea(child: _notificationsDrawer()),
+          ),
+          body: Stack(
+            children: [
+              Positioned(
+                top: -120,
+                right: -120,
+                child: _blurCircle(primaryColor.withOpacity(0.15), 320),
+              ),
+              Positioned(
+                bottom: 80,
+                left: -120,
+                child: _blurCircle(Colors.green.withOpacity(0.10), 360),
+              ),
+              SafeArea(child: pages[_tabIndex]),
+            ],
+          ),
+          bottomNavigationBar: _collectorFooter(
+            currentIndex: _tabIndex,
+            onTap: (i) => setState(() => _tabIndex = i),
+          ),
+        );
+      },
+    );
+  }
 
   Widget _collectorFooter({
     required int currentIndex,
