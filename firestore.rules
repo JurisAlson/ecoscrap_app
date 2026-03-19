@@ -948,7 +948,7 @@ match /collectorEquipment/{collectorUid} {
     // -------------------------
     // REQUESTS (NEW) ✅ replaces pickupRequests
     // -------------------------
-    match /requests/{requestId} {
+        match /requests/{requestId} {
 
       allow create: if signedIn()
         && request.resource.data.type == "pickup"
@@ -979,7 +979,6 @@ match /collectorEquipment/{collectorUid} {
           isCollector()
           && resource.data.type == "pickup"
           && resource.data.active == true
-          && (resource.data.collectorId == "" || resource.data.collectorId == null)
           && (resource.data.status == "pending" || resource.data.status == "scheduled")
         )
         || isAdmin()

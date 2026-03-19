@@ -64,6 +64,10 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   static const Color _textMuted = Color(0xFF64748B);
   static const String _moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
 
+  bool _markingArrived = false;
+  bool _collectorArrivedToMores = false;
+  bool _sellTransactionAudited = false;
+
   bool get _isFixedDestinationMode => widget.fixedDestination != null;
   bool get _hasValidRequestId =>
       widget.requestId != null && widget.requestId!.trim().isNotEmpty;
@@ -160,10 +164,51 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   BitmapDescriptor? _collectorIcon;
   BitmapDescriptor? _householdMarkerIcon; 
 
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sellRequestSub;
+  void _listenToSellRequest() {
+    if (widget.sellRequestId == null || widget.sellRequestId!.trim().isEmpty) {
+      return;
+    }
+
+    _sellRequestSub?.cancel();
+
+    _sellRequestSub = FirebaseFirestore.instance
+        .collection('Users')
+        .doc(_moresUid)
+        .collection('sell_requests')
+        .doc(widget.sellRequestId!)
+        .snapshots()
+        .listen((doc) async {
+      if (!doc.exists || !mounted) return;
+
+      final data = doc.data() ?? {};
+
+      final collectorArrived = data['collectorArrived'] == true;
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+
+      final audited = status == 'completed' ||
+          status == 'audited' ||
+          status == 'done' ||
+          status == 'receipt_saved';
+
+      setState(() {
+        _collectorArrivedToMores = collectorArrived;
+        _sellTransactionAudited = audited;
+      });
+
+      if (audited) {
+        await _restoreCollectorAvailability();
+      }
+    });
+  }
   @override
   void initState() {
     super.initState();
     _initPage();
+
+    if (widget.trackingType == "sell") {
+      _listenToSellRequest();
+    }
   }
 Future<void> _restoreCollectorAvailability() async {
   final collectorId = FirebaseAuth.instance.currentUser?.uid;
@@ -213,13 +258,59 @@ Future<void> _restoreCollectorAvailability() async {
       const SnackBar(content: Text("Chat coming soon.")),
     );
   }
-  Future<void> _onArrivedPressed() async {
+  
+
+  
+   Future<void> _onArrivedPressed() async {
+    if (_markingArrived || _collectorArrivedToMores || _sellTransactionAudited) {
+      return;
+    }
+
     if (widget.sellRequestId == null || widget.sellRequestId!.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Missing sell request ID.")),
       );
       return;
     }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: _sheet,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: const Text(
+          "Confirm Arrival",
+          style: TextStyle(color: _textPrimary),
+        ),
+        content: const Text(
+          "Are you now at Mores Scrap?\n\n"
+          "Tap Confirm only if you have already arrived. "
+          "After confirming, this button will be locked until "
+          "Mores Scrap saves and audits the transaction.",
+          style: TextStyle(color: _textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: _bg,
+            ),
+            child: const Text("Confirm"),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    setState(() => _markingArrived = true);
 
     try {
       await FirebaseFirestore.instance
@@ -235,22 +326,26 @@ Future<void> _restoreCollectorAvailability() async {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Arrival sent to Mores Scrap.")),
-      );
+      setState(() {
+        _collectorArrivedToMores = true;
+      });
 
-      // ✅ GO BACK TO COLLECTOR DASHBOARD
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => const CollectorsDashboardPage(),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Arrival confirmed. Please wait for Mores Scrap to save and audit the transaction.",
+          ),
         ),
-        (route) => false,
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Failed to mark arrived: $e")),
       );
+    } finally {
+      if (mounted) {
+        setState(() => _markingArrived = false);
+      }
     }
   }
 
@@ -365,6 +460,7 @@ await _restoreCollectorAvailability();
   @override
   void dispose() {
     _requestSub?.cancel();
+    _sellRequestSub?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -781,7 +877,7 @@ await _restoreCollectorAvailability();
     );
   }
 
-  Widget _topBar() {
+    Widget _topBar() {
     return Positioned(
       top: 56,
       left: 16,
@@ -840,6 +936,32 @@ await _restoreCollectorAvailability();
                       ),
                     ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          InkWell(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const CollectorsDashboardPage(),
+                ),
+              );
+            },
+            borderRadius: BorderRadius.circular(999),
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: _surface.o(0.96),
+                shape: BoxShape.circle,
+                border: Border.all(color: _border),
+              ),
+              child: const Icon(
+                Icons.notifications_outlined,
+                color: _textPrimary,
+                size: 18,
               ),
             ),
           ),
@@ -1048,26 +1170,52 @@ await _restoreCollectorAvailability();
                           ),
                       ],
                     ),
-                    if (widget.showArrivedButton) ...[
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: _onArrivedPressed,
-                          icon: const Icon(Icons.location_on_outlined),
-                          label: const Text("Arrived"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _accent,
-                            foregroundColor: _bg,
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            elevation: 0,
-                          ),
-                        ),
-                      ),
-                    ],
+if (widget.showArrivedButton) ...[
+  const SizedBox(height: 12),
+  SizedBox(
+    width: double.infinity,
+    child: ElevatedButton.icon(
+      onPressed: (_markingArrived ||
+              _collectorArrivedToMores ||
+              _sellTransactionAudited)
+          ? null
+          : _onArrivedPressed,
+      icon: const Icon(Icons.location_on_outlined),
+      label: Text(
+        _markingArrived
+            ? "CONFIRMING..."
+            : _collectorArrivedToMores
+                ? "ARRIVED"
+                : "YOU HAVE ARRIVED",
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: _accent,
+        disabledBackgroundColor: _surfaceAlt,
+        disabledForegroundColor: _textSecondary,
+        foregroundColor: _bg,
+        padding: const EdgeInsets.symmetric(vertical: 15),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        elevation: 0,
+      ),
+    ),
+  ),
+  const SizedBox(height: 10),
+  Text(
+    _sellTransactionAudited
+        ? "Transaction completed and audited by Mores Scrap."
+        : _collectorArrivedToMores
+            ? "You have marked yourself as arrived. Waiting for Mores Scrap to save and audit the transaction."
+            : "Press this only when you are already at Mores Scrap.",
+    textAlign: TextAlign.center,
+    style: const TextStyle(
+      color: _textSecondary,
+      fontSize: 12,
+      fontWeight: FontWeight.w600,
+    ),
+  ),
+],
                   ] else ...[
                     const SizedBox(height: 12),
                     SizedBox(
