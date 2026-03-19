@@ -1312,23 +1312,24 @@ match /collectorEquipment/{collectorUid} {
     // ==========================================================
     // Collector inventory summary cross-update by primary junkshop
     // ==========================================================
-    match /Users/{collectorUid}/inventory/{docId} {
+match /Users/{collectorUid}/inventory/{docId} {
+  allow read: if isOwner(collectorUid) || isAdmin()
+    || (isPrimaryJunkshop() && docId == "summary");
 
-      allow read: if isOwner(collectorUid) || isAdmin();
+  allow create, update: if isOwner(collectorUid) || isAdmin()
+    || (
+      isPrimaryJunkshop()
+      && docId == "summary"
+      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        "totalKg",
+        "updatedAt"
+      ])
+      && request.resource.data.totalKg is number
+    );
 
-      allow create, update: if isOwner(collectorUid) || isAdmin()
-        || (
-          isPrimaryJunkshop()
-          && docId == "summary"
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-            "totalKg",
-            "updatedAt"
-          ])
-          && request.resource.data.totalKg is number
-        );
+  allow delete: if false;
+}
 
-      allow delete: if false;
-    }
     
     // ==========================================================
     // SELL REQUESTS sent by collector to junkshop

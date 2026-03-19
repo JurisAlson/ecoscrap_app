@@ -1291,7 +1291,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                                     },
                                   ),
                                 );
-                              }).toList(),
+                              }),
                             ],
                             const SizedBox(height: 24),
                           ],
