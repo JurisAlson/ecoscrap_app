@@ -641,8 +641,7 @@ double get _sellMaxKg {
         collectorKgFromSellRequest =
             ((sellReqData['kg'] as num?) ?? 0).toDouble();
 
-        if (collectorIdFromSellRequest == null ||
-            collectorIdFromSellRequest!.isEmpty) {
+        if (collectorIdFromSellRequest.isEmpty) {
           throw Exception("Missing collectorId in sell request.");
         }
 
@@ -778,11 +777,11 @@ double get _sellMaxKg {
       }
       if (fromCollectorSellRequest &&
           collectorIdFromSellRequest != null &&
-          collectorIdFromSellRequest!.isNotEmpty &&
+          collectorIdFromSellRequest.isNotEmpty &&
           collectorInventoryRef != null &&
           collectorInventorySnap != null) {
-        final currentCollectorKg = collectorInventorySnap!.exists
-            ? (((collectorInventorySnap!.data() as Map<String, dynamic>)['totalKg']
+        final currentCollectorKg = collectorInventorySnap.exists
+            ? (((collectorInventorySnap.data() as Map<String, dynamic>)['totalKg']
                         as num?) ??
                     0)
                 .toDouble()
@@ -795,7 +794,7 @@ double get _sellMaxKg {
         }
 
         trx.set(
-          collectorInventoryRef!,
+          collectorInventoryRef,
           {
             'totalKg': FieldValue.increment(-collectorKgFromSellRequest),
             'updatedAt': FieldValue.serverTimestamp(),
@@ -863,9 +862,9 @@ double get _sellMaxKg {
       }
       if (fromCollectorSellRequest &&
           collectorIdFromSellRequest != null &&
-          collectorIdFromSellRequest!.isNotEmpty &&
+          collectorIdFromSellRequest.isNotEmpty &&
           collectorTransactionIdFromSellRequest != null &&
-          collectorTransactionIdFromSellRequest!.isNotEmpty) {
+          collectorTransactionIdFromSellRequest.isNotEmpty) {
         final collectorTxnRef = db
             .collection('Users')
             .doc(collectorIdFromSellRequest)
