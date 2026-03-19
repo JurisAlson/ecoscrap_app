@@ -376,31 +376,38 @@ Future<void> _deleteDropoffChat(String requestId) async {
     }
   }
 
-  void _listenAvailableCollectors() {
-    FirebaseFirestore.instance
-        .collection('Users')
-        .where('Roles', isEqualTo: 'collector')
-        .where('isOnline', isEqualTo: true)
-        .snapshots()
-        .listen((snap) {
-      final list = <Map<String, String>>[];
-      for (final d in snap.docs) {
-        final data = d.data();
-        final uid = d.id;
-        final name =
-            (data['Name'] ?? data['displayName'] ?? "Collector").toString();
-        list.add({'uid': uid, 'name': name});
-      }
+void _listenAvailableCollectors() {
+  FirebaseFirestore.instance
+      .collection('Users')
+      .where('Roles', isEqualTo: 'collector')
+      .where('isOnline', isEqualTo: true)
+      .where('isAvailableForHousehold', isEqualTo: true)
+      .snapshots()
+      .listen((snap) {
+    final list = <Map<String, String>>[];
 
-      if (!mounted) return;
-      setState(() {
-        _availableCollectors = list;
-        final stillThere = _selectedCollectorId != null &&
-            _availableCollectors.any((c) => c['uid'] == _selectedCollectorId);
-        if (!stillThere) _selectedCollectorId = null;
-      });
+    for (final d in snap.docs) {
+      final data = d.data();
+      final uid = d.id;
+
+      final name =
+          (data['Name'] ?? data['displayName'] ?? "Collector").toString();
+
+      list.add({'uid': uid, 'name': name});
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _availableCollectors = list;
+
+      final stillThere = _selectedCollectorId != null &&
+          _availableCollectors.any((c) => c['uid'] == _selectedCollectorId);
+
+      if (!stillThere) _selectedCollectorId = null;
     });
-  }
+  });
+}
 
   void _listenToActivePickupRequest(String requestId) {
     _pickupReqSub?.cancel();
