@@ -395,46 +395,52 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
                 ],
               ),
               const SizedBox(height: 12),
-              Container(
-                height: 190,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.04),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.08),
-                  ),
-                ),
-                child: const Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.add_photo_alternate_outlined,
-                      size: 42,
-                      color: Colors.white38,
-                    ),
-                    SizedBox(height: 10),
-                    Text(
-                      "Template / Example Picture Here",
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    SizedBox(height: 6),
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 18),
-                      child: Text(
-                        "Place your sample image here so users can follow the correct angle and framing.",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.white54,
-                          height: 1.35,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+             Container(
+  height: 190,
+  decoration: BoxDecoration(
+    color: Colors.white.withOpacity(0.04),
+    borderRadius: BorderRadius.circular(16),
+    border: Border.all(
+      color: Colors.white.withOpacity(0.08),
+    ),
+  ),
+  clipBehavior: Clip.antiAlias,
+  child: Stack(
+    fit: StackFit.expand,
+    children: [
+      Image.asset(
+        'assets/collector/images.jpg',
+        fit: BoxFit.cover,
+      ),
+      Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withOpacity(0.10),
+              Colors.black.withOpacity(0.45),
+            ],
+          ),
+        ),
+      ),
+      const Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: EdgeInsets.all(12),
+          child: Text(
+            "Example of a valid collection device photo",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    ],
+  ),
+),
               const SizedBox(height: 12),
               const _InfoCard(
                 title: "Accepted Device Examples",

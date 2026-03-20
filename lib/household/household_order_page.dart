@@ -16,13 +16,6 @@ class HouseholdOrderPage extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F172A),
         elevation: 0,
-        title: const Text(
-          "Current Order",
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: user == null
@@ -85,7 +78,7 @@ class _EmptyOrderState extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.all(20),
         child: Text(
-          "No active pickup order.\n\nCreate one from the Maps Page.",
+          "No active pickup order",
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.white70, height: 1.4),
         ),
@@ -197,16 +190,12 @@ class _OrderCard extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 0),
-                  child: Text(
-                    step["label"],
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 13,
-                      fontWeight:
-                          current ? FontWeight.w700 : FontWeight.w500,
-                    ),
+                child: Text(
+                  step["label"],
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 13,
+                    fontWeight: current ? FontWeight.w700 : FontWeight.w500,
                   ),
                 ),
               ),
@@ -291,7 +280,7 @@ class _OrderCard extends StatelessWidget {
     final status = (data['status'] ?? '—').toString().toLowerCase();
     final pickupType = (data['pickupType'] ?? '—').toString().toLowerCase();
 
-    final arrived = (data['arrived'] == true);
+    final arrived = data['arrived'] == true;
     final arrivedAt =
         data['arrivedAt'] is Timestamp ? data['arrivedAt'] as Timestamp : null;
 
@@ -302,20 +291,17 @@ class _OrderCard extends StatelessWidget {
     final windowEnd =
         data['windowEnd'] is Timestamp ? data['windowEnd'] as Timestamp : null;
 
-    final canReject =
-        !arrived && !['completed', 'cancelled', 'declined', 'rejected']
-            .contains(status);
+    final isClosed =
+        ['completed', 'cancelled', 'declined', 'rejected'].contains(status);
 
-    final canChat =
-        collectorId.isNotEmpty &&
-        !['completed', 'cancelled', 'declined', 'rejected'].contains(status);
-
-            final canTrack = [
-              'accepted',
-              'confirmed',
-              'ongoing',
-              'arrived',
-            ].contains(status);
+    final canReject = !arrived && !isClosed;
+    final canChat = collectorId.isNotEmpty && !isClosed;
+    final canTrack = [
+      'accepted',
+      'confirmed',
+      'ongoing',
+      'arrived',
+    ].contains(status);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -342,22 +328,15 @@ class _OrderCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 18),
-
                   _kv("Collector", collectorName),
                   _kv("Pickup Type", pickupType),
                   _kv("Status", status),
                   _kv("Arrived", arrived ? "Yes" : "No"),
-
                   if (arrived && arrivedAt != null)
                     _kv("Arrived At", _formatDateTime(arrivedAt)),
-
-                  if ((data['reason'] ?? '').toString().trim().isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                  if ((data['reason'] ?? '').toString().trim().isNotEmpty)
                     _kv("Reason", (data['reason'] ?? '').toString()),
-                  ],
-
                   const SizedBox(height: 10),
-
                   if (pickupType == 'window' &&
                       windowStart != null &&
                       windowEnd != null)
@@ -367,11 +346,9 @@ class _OrderCard extends StatelessWidget {
                     )
                   else if (scheduledAt != null)
                     _kv("Scheduled", _formatDateTime(scheduledAt)),
-
                   const SizedBox(height: 14),
                   _buildOrderTimeline(status),
                   const SizedBox(height: 16),
-
                   if (canTrack) ...[
                     Row(
                       children: [
@@ -404,7 +381,6 @@ class _OrderCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                   ],
-
                   if (canReject) ...[
                     Row(
                       children: [
@@ -445,17 +421,17 @@ class _OrderCard extends StatelessWidget {
                       ),
                     ),
                   ],
-
                   const SizedBox(height: 10),
                   Text(
                     "Note: Rejecting updates your request in Firestore (requests) and saves the reason field.",
-                    style:
-                        TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                    style: TextStyle(
+                      color: Colors.grey.shade400,
+                      fontSize: 11,
+                    ),
                   ),
                 ],
               ),
             ),
-
             if (canChat)
               Positioned(
                 top: 0,
@@ -511,7 +487,8 @@ class _OrderCard extends StatelessWidget {
                                 width: 42,
                                 height: 42,
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF1FA9A7).withOpacity(0.18),
+                                  color:
+                                      const Color(0xFF1FA9A7).withOpacity(0.18),
                                   shape: BoxShape.circle,
                                   border: Border.all(
                                     color: Colors.white.withOpacity(0.10),
@@ -549,7 +526,6 @@ class _OrderCard extends StatelessWidget {
                 ),
               ),
           ],
-          
         ),
       ),
     );
@@ -584,7 +560,9 @@ class _OrderCard extends StatelessWidget {
   }
 
   Future<String?> _pickRejectionReason(
-      BuildContext context, Color bgColor) async {
+    BuildContext context,
+    Color bgColor,
+  ) async {
     String selectedReason = rejectionReasons.first;
 
     return showDialog<String>(
@@ -694,7 +672,6 @@ class _OrderCard extends StatelessWidget {
           FirebaseFirestore.instance.collection('requests').doc(requestId);
 
       final collectorId = (data['collectorId'] ?? '').toString().trim();
-      final householdId = (data['householdId'] ?? '').toString().trim();
       final householdName = (data['householdName'] ?? 'Resident').toString();
       final pickupAddress = (data['pickupAddress'] ?? '').toString();
 
@@ -740,7 +717,9 @@ class _OrderCard extends StatelessWidget {
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Reject failed: ${e.code} • ${e.message ?? ''}")),
+        SnackBar(
+          content: Text("Reject failed: ${e.code} • ${e.message ?? ''}"),
+        ),
       );
     } catch (e, st) {
       debugPrint("🔴 Reject failed (unknown): $e");
@@ -767,13 +746,15 @@ class _OrderCard extends StatelessWidget {
       "Sep",
       "Oct",
       "Nov",
-      "Dec"
+      "Dec",
     ];
+
     final m = months[dt.month - 1];
     int hour = dt.hour % 12;
     if (hour == 0) hour = 12;
     final ampm = dt.hour >= 12 ? "PM" : "AM";
     final mm = dt.minute.toString().padLeft(2, '0');
+
     return "${dt.day} $m ${dt.year} • $hour:$mm $ampm";
   }
 
@@ -783,6 +764,7 @@ class _OrderCard extends StatelessWidget {
     if (hour == 0) hour = 12;
     final ampm = dt.hour >= 12 ? "PM" : "AM";
     final mm = dt.minute.toString().padLeft(2, '0');
+
     return "$hour:$mm $ampm";
   }
 }

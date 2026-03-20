@@ -49,6 +49,38 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
+  Future<void> _openChatsFromNotification({
+    required String collectionPathDocId,
+    required bool isSellRequest,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    if (isSellRequest) {
+      await FirebaseFirestore.instance
+          .collection('Users')
+          .doc(user.uid)
+          .collection('sell_requests')
+          .doc(collectionPathDocId)
+          .set({
+        'seen': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } else {
+      await FirebaseFirestore.instance
+          .collection('dropoff_requests')
+          .doc(collectionPathDocId)
+          .set({
+        'readByJunkshop': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    if (!mounted) return;
+    Navigator.pop(context);
+    _goToTab(2);
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -216,7 +248,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               return !readByJunkshop &&
                   !receiptSaved &&
                   !cleared &&
-                  status != 'completed';
+                  status != 'completed' &&
+                  status != 'confirmed';
             }).length;
 
             final unreadCount = sellUnread + dropUnread;
@@ -276,20 +309,18 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     );
   }
 
-  Future<void> _restoreCollectorAvailability(String collectorId) async {
-  if (collectorId.trim().isEmpty) return;
-
-  await FirebaseFirestore.instance
-      .collection('Users')
-      .doc(collectorId)
-      .set({
-    "isOnline": true,
-    "availabilityStatus": "available",
-    "isAvailableForHousehold": true,
-    "activeMoresSellRequestId": FieldValue.delete(),
-    "updatedAt": FieldValue.serverTimestamp(),
-  }, SetOptions(merge: true));
-}
+  Future<void> confirmDropoff(String requestId) async {
+    await FirebaseFirestore.instance
+        .collection('dropoff_requests')
+        .doc(requestId)
+        .update({
+      'status': 'confirmed',
+      'active': false,
+      'confirmedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'readByJunkshop': true,
+    });
+  }
 
   Future<void> _clearAllCancelledNotifications() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -320,29 +351,29 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       }
     }
 
-final sellSnap = await firestore
-    .collection('Users')
-    .doc(user.uid)
-    .collection('sell_requests')
-    .get();
+    final sellSnap = await firestore
+        .collection('Users')
+        .doc(user.uid)
+        .collection('sell_requests')
+        .get();
 
-for (final doc in sellSnap.docs) {
-  final data = doc.data();
-  final status = (data['status'] ?? '').toString();
-  final cleared = data['clearedByJunkshop'] == true;
+    for (final doc in sellSnap.docs) {
+      final data = doc.data();
+      final status = (data['status'] ?? '').toString();
+      final cleared = data['clearedByJunkshop'] == true;
 
-  if ((status == 'cancelled' || status == 'rejected') && !cleared) {
-    batch.set(
-      doc.reference,
-      {
-        'seen': true,
-        'clearedByJunkshop': true,
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
-  }
-}
+      if ((status == 'cancelled' || status == 'rejected') && !cleared) {
+        batch.set(
+          doc.reference,
+          {
+            'seen': true,
+            'clearedByJunkshop': true,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+    }
 
     await batch.commit();
   }
@@ -375,8 +406,10 @@ for (final doc in sellSnap.docs) {
 
     String dropoffTitleFromStatus(String status) {
       switch (status) {
-        case 'arrived':
-          return 'Household arrived';
+        case 'awaiting_confirmation':
+          return 'Arrival waiting for confirmation';
+        case 'confirmed':
+          return 'Drop-off confirmed';
         case 'cancelled':
           return 'Drop-off cancelled';
         case 'completed':
@@ -394,8 +427,10 @@ for (final doc in sellSnap.docs) {
       final reason = (data['cancelReason'] ?? '').toString().trim();
 
       switch (status) {
-        case 'arrived':
-          return '$householdName has arrived at $junkshopName.';
+        case 'awaiting_confirmation':
+          return '$householdName has arrived and is waiting for $junkshopName confirmation.';
+        case 'confirmed':
+          return '$householdName drop-off was confirmed by $junkshopName.';
         case 'cancelled':
           if (reason.isNotEmpty) {
             return '$householdName cancelled the drop-off. Reason: $reason';
@@ -480,18 +515,18 @@ for (final doc in sellSnap.docs) {
 
                     final List<Map<String, dynamic>> items = [];
 
-for (final d in sellSnap.data?.docs ?? []) {
-  final data = d.data() as Map<String, dynamic>;
-  final status = (data['status'] ?? '').toString();
-  final receiptSaved = data['receiptSaved'] == true;
-  final cleared = data['clearedByJunkshop'] == true;
+                    for (final d in sellSnap.data?.docs ?? []) {
+                      final data = d.data() as Map<String, dynamic>;
+                      final status = (data['status'] ?? '').toString();
+                      final receiptSaved = data['receiptSaved'] == true;
+                      final cleared = data['clearedByJunkshop'] == true;
 
-  if (receiptSaved ||
-      status == 'completed' ||
-      status == 'processed' ||
-      cleared) {
-    continue;
-  }
+                      if (receiptSaved ||
+                          status == 'completed' ||
+                          status == 'processed' ||
+                          cleared) {
+                        continue;
+                      }
 
                       final ts = (data['updatedAt'] as Timestamp?) ??
                           (data['createdAt'] as Timestamp?);
@@ -510,7 +545,10 @@ for (final d in sellSnap.data?.docs ?? []) {
                       final receiptSaved = data['receiptSaved'] == true;
                       final cleared = data['clearedByJunkshop'] == true;
 
-                      if (receiptSaved || status == 'completed' || cleared) {
+                      if (receiptSaved ||
+                          status == 'completed' ||
+                          status == 'confirmed' ||
+                          cleared) {
                         continue;
                       }
 
@@ -613,7 +651,8 @@ for (final d in sellSnap.data?.docs ?? []) {
                                                 ? "Did the collector really arrive at Mores Scrap?"
                                                 : "Did $collectorName really arrive at Mores Scrap?",
                                             style: const TextStyle(
-                                                color: Colors.white70),
+                                              color: Colors.white70,
+                                            ),
                                           ),
                                           actions: [
                                             TextButton(
@@ -624,7 +663,8 @@ for (final d in sellSnap.data?.docs ?? []) {
                                               child: const Text(
                                                 "NOT HERE",
                                                 style: TextStyle(
-                                                    color: Colors.redAccent),
+                                                  color: Colors.redAccent,
+                                                ),
                                               ),
                                             ),
                                             TextButton(
@@ -635,85 +675,96 @@ for (final d in sellSnap.data?.docs ?? []) {
                                               child: const Text(
                                                 "PROCEED",
                                                 style: TextStyle(
-                                                    color: Colors.greenAccent),
+                                                  color: Colors.greenAccent,
+                                                ),
                                               ),
                                             ),
                                           ],
                                         ),
                                       );
 
-if (action == 'dismiss') {
-  final collectorIdForUpdate =
-      (data['collectorId'] ?? '').toString();
-  final collectorTxnId =
-      (data['collectorTransactionId'] ?? '').toString();
+                                      if (action == 'dismiss') {
+                                        final collectorIdForUpdate =
+                                            (data['collectorId'] ?? '').toString();
+                                        final collectorTxnId =
+                                            (data['collectorTransactionId'] ?? '')
+                                                .toString();
 
-  final db = FirebaseFirestore.instance;
-  final batch = db.batch();
+                                        final db = FirebaseFirestore.instance;
+                                        final batch = db.batch();
 
-  final sellReqRef = db
-      .collection('Users')
-      .doc(user.uid)
-      .collection('sell_requests')
-      .doc(docId);
+                                        final sellReqRef = db
+                                            .collection('Users')
+                                            .doc(user.uid)
+                                            .collection('sell_requests')
+                                            .doc(docId);
 
-  batch.set(
-    sellReqRef,
-    {
-      'seen': true,
-      'status': 'rejected',
-      'junkshopRejected': true,
-      'junkshopRejectedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    },
-    SetOptions(merge: true),
-  );
+                                        batch.set(
+                                          sellReqRef,
+                                          {
+                                            'seen': true,
+                                            'status': 'rejected',
+                                            'junkshopRejected': true,
+                                            'junkshopRejectedAt':
+                                                FieldValue.serverTimestamp(),
+                                            'updatedAt':
+                                                FieldValue.serverTimestamp(),
+                                          },
+                                          SetOptions(merge: true),
+                                        );
 
-  if (collectorIdForUpdate.isNotEmpty) {
-    final collectorRef = db.collection('Users').doc(collectorIdForUpdate);
+                                        if (collectorIdForUpdate.isNotEmpty) {
+                                          final collectorRef = db
+                                              .collection('Users')
+                                              .doc(collectorIdForUpdate);
 
-    batch.set(
-      collectorRef,
-      {
-        'isOnline': true,
-        'availabilityStatus': 'available',
-        'isAvailableForHousehold': true,
-        'activeMoresSellRequestId': FieldValue.delete(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
-  }
+                                          batch.set(
+                                            collectorRef,
+                                            {
+                                              'isOnline': true,
+                                              'availabilityStatus': 'available',
+                                              'isAvailableForHousehold': true,
+                                              'activeMoresSellRequestId':
+                                                  FieldValue.delete(),
+                                              'updatedAt':
+                                                  FieldValue.serverTimestamp(),
+                                            },
+                                            SetOptions(merge: true),
+                                          );
+                                        }
 
-  if (collectorIdForUpdate.isNotEmpty && collectorTxnId.isNotEmpty) {
-    final collectorTxnRef = db
-        .collection('Users')
-        .doc(collectorIdForUpdate)
-        .collection('transactions')
-        .doc(collectorTxnId);
+                                        if (collectorIdForUpdate.isNotEmpty &&
+                                            collectorTxnId.isNotEmpty) {
+                                          final collectorTxnRef = db
+                                              .collection('Users')
+                                              .doc(collectorIdForUpdate)
+                                              .collection('transactions')
+                                              .doc(collectorTxnId);
 
-    batch.set(
-      collectorTxnRef,
-      {
-        'status': 'rejected',
-        'junkshopRejected': true,
-        'junkshopRejectedAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
-  }
+                                          batch.set(
+                                            collectorTxnRef,
+                                            {
+                                              'status': 'rejected',
+                                              'junkshopRejected': true,
+                                              'junkshopRejectedAt':
+                                                  FieldValue.serverTimestamp(),
+                                              'updatedAt':
+                                                  FieldValue.serverTimestamp(),
+                                            },
+                                            SetOptions(merge: true),
+                                          );
+                                        }
 
-  await batch.commit();
+                                        await batch.commit();
 
-  if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(
-      content: Text("Sell request rejected."),
-    ),
-  );
-  return;
-}
+                                        if (!context.mounted) return;
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text("Sell request rejected."),
+                                          ),
+                                        );
+                                        return;
+                                      }
 
                                       if (action != 'proceed') return;
 
@@ -784,22 +835,30 @@ if (action == 'dismiss') {
                                                     : collectorId,
                                             sellRequestId: docId,
                                             prefillSourceType: "collector",
+                                            initialTransactionType: "buy",
                                           ),
                                         ),
                                       );
                                     }
-                                  : () async {
-                                      await FirebaseFirestore.instance
-                                          .collection('Users')
-                                          .doc(user.uid)
-                                          .collection('sell_requests')
-                                          .doc(docId)
-                                          .set({
-                                        'seen': true,
-                                        'updatedAt':
-                                            FieldValue.serverTimestamp(),
-                                      }, SetOptions(merge: true));
-                                    },
+                                  : status == 'cancelled' || status == 'rejected'
+                                      ? () async {
+                                          await FirebaseFirestore.instance
+                                              .collection('Users')
+                                              .doc(user.uid)
+                                              .collection('sell_requests')
+                                              .doc(docId)
+                                              .set({
+                                            'seen': true,
+                                            'updatedAt':
+                                                FieldValue.serverTimestamp(),
+                                          }, SetOptions(merge: true));
+                                        }
+                                      : () async {
+                                          await _openChatsFromNotification(
+                                            collectionPathDocId: docId,
+                                            isSellRequest: true,
+                                          );
+                                        },
                               leading: Container(
                                 width: 44,
                                 height: 44,
@@ -811,10 +870,8 @@ if (action == 'dismiss') {
                                           : status == 'arrived'
                                               ? Colors.green.withOpacity(0.15)
                                               : seen
-                                                  ? Colors.white
-                                                      .withOpacity(0.08)
-                                                  : Colors.orange
-                                                      .withOpacity(0.15),
+                                                  ? Colors.white.withOpacity(0.08)
+                                                  : Colors.orange.withOpacity(0.15),
                                   borderRadius: BorderRadius.circular(14),
                                 ),
                                 child: Icon(
@@ -880,7 +937,7 @@ if (action == 'dismiss') {
                             ),
                           ),
                           child: ListTile(
-                            onTap: status == 'arrived'
+                            onTap: status == 'awaiting_confirmation'
                                 ? () async {
                                     final action = await showDialog<String>(
                                       context: context,
@@ -897,7 +954,8 @@ if (action == 'dismiss') {
                                               ? "Has the resident really arrived?"
                                               : "Has $householdName really arrived at the junkshop?",
                                           style: const TextStyle(
-                                              color: Colors.white70),
+                                            color: Colors.white70,
+                                          ),
                                         ),
                                         actions: [
                                           TextButton(
@@ -908,7 +966,8 @@ if (action == 'dismiss') {
                                             child: const Text(
                                               "NOT HERE",
                                               style: TextStyle(
-                                                  color: Colors.redAccent),
+                                                color: Colors.redAccent,
+                                              ),
                                             ),
                                           ),
                                           TextButton(
@@ -917,9 +976,10 @@ if (action == 'dismiss') {
                                               'proceed',
                                             ),
                                             child: const Text(
-                                              "PROCEED",
+                                              "CONFIRM",
                                               style: TextStyle(
-                                                  color: Colors.greenAccent),
+                                                color: Colors.greenAccent,
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -931,7 +991,7 @@ if (action == 'dismiss') {
                                           .collection('dropoff_requests')
                                           .doc(docId)
                                           .set({
-                                        'clearedByJunkshop': true,
+                                        'readByJunkshop': true,
                                         'updatedAt':
                                             FieldValue.serverTimestamp(),
                                       }, SetOptions(merge: true));
@@ -941,7 +1001,7 @@ if (action == 'dismiss') {
                                           .showSnackBar(
                                         const SnackBar(
                                           content: Text(
-                                            "Drop-off notification dismissed.",
+                                            "Arrival not confirmed.",
                                           ),
                                         ),
                                       );
@@ -950,14 +1010,7 @@ if (action == 'dismiss') {
 
                                     if (action != 'proceed') return;
 
-                                    await FirebaseFirestore.instance
-                                        .collection('dropoff_requests')
-                                        .doc(docId)
-                                        .set({
-                                      'readByJunkshop': true,
-                                      'updatedAt':
-                                          FieldValue.serverTimestamp(),
-                                    }, SetOptions(merge: true));
+                                    await confirmDropoff(docId);
 
                                     if (!context.mounted) return;
                                     Navigator.pop(context);
@@ -971,16 +1024,25 @@ if (action == 'dismiss') {
                                               householdName.isEmpty
                                                   ? null
                                                   : householdName,
-                                          prefillCollectorId: householdId.isEmpty
-                                              ? null
-                                              : householdId,
+                                          prefillCollectorId:
+                                              householdId.isEmpty
+                                                  ? null
+                                                  : householdId,
                                           prefillSourceType: "household",
                                           sellRequestId: docId,
+                                          initialTransactionType: "buy",
                                         ),
                                       ),
                                     );
                                   }
-                                : null,
+                                : status == 'en_route'
+                                    ? () async {
+                                        await _openChatsFromNotification(
+                                          collectionPathDocId: docId,
+                                          isSellRequest: false,
+                                        );
+                                      }
+                                    : null,
                             leading: Container(
                               width: 44,
                               height: 44,
@@ -989,24 +1051,30 @@ if (action == 'dismiss') {
                                     ? Colors.white.withOpacity(0.08)
                                     : status == 'cancelled'
                                         ? Colors.red.withOpacity(0.15)
-                                        : status == 'arrived'
-                                            ? Colors.green.withOpacity(0.15)
-                                            : Colors.blue.withOpacity(0.15),
+                                        : status == 'awaiting_confirmation'
+                                            ? Colors.amber.withOpacity(0.15)
+                                            : status == 'confirmed'
+                                                ? Colors.green.withOpacity(0.15)
+                                                : Colors.blue.withOpacity(0.15),
                                 borderRadius: BorderRadius.circular(14),
                               ),
                               child: Icon(
                                 status == 'cancelled'
                                     ? Icons.cancel_outlined
-                                    : status == 'arrived'
-                                        ? Icons.check_circle_outline
-                                        : Icons.store_mall_directory_outlined,
+                                    : status == 'awaiting_confirmation'
+                                        ? Icons.hourglass_top_rounded
+                                        : status == 'confirmed'
+                                            ? Icons.check_circle_outline
+                                            : Icons.store_mall_directory_outlined,
                                 color: readByJunkshop
                                     ? Colors.white70
                                     : status == 'cancelled'
                                         ? Colors.redAccent
-                                        : status == 'arrived'
-                                            ? Colors.greenAccent
-                                            : Colors.lightBlueAccent,
+                                        : status == 'awaiting_confirmation'
+                                            ? Colors.amberAccent
+                                            : status == 'confirmed'
+                                                ? Colors.greenAccent
+                                                : Colors.lightBlueAccent,
                               ),
                             ),
                             title: Text(

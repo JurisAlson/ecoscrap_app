@@ -67,7 +67,7 @@ class _LoaderOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const Color primaryColor = Color(0xFF1FA9A7);
-    const Color bgColor = Color(0xFF0F172A);
+    //const Color bgColor = Color(0xFF0F172A);
 
     return Material(
       type: MaterialType.transparency,

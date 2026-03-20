@@ -14,37 +14,33 @@ class TransactionDetailScreen extends StatefulWidget {
   });
 
   @override
-  State<TransactionDetailScreen> createState() => _TransactionDetailScreenState();
+  State<TransactionDetailScreen> createState() =>
+      _TransactionDetailScreenState();
 }
 
 class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
   static const Color bgColor = Color(0xFF0F172A);
   static const Color primaryColor = Color(0xFF1FA9A7);
 
-final NumberFormat _php = NumberFormat.currency(
-  locale: 'en_PH',
-  symbol: '₱',
-  decimalDigits: 0,
-);
+  final NumberFormat _php0 = NumberFormat.currency(
+    locale: 'en_PH',
+    symbol: '₱',
+    decimalDigits: 0,
+  );
 
-final NumberFormat _num2 = NumberFormat('#,##0.##');
-
-String _formatMoney(num value) {
-  if (value % 1 == 0) {
-    return NumberFormat.currency(
-      locale: 'en_PH',
-      symbol: '₱',
-      decimalDigits: 0,
-    ).format(value);
-  }
-
-  return NumberFormat.currency(
+  final NumberFormat _php2 = NumberFormat.currency(
     locale: 'en_PH',
     symbol: '₱',
     decimalDigits: 2,
-  ).format(value);
-}
-String _formatKg(num value) => '${_num2.format(value)} kg';
+  );
+
+  final NumberFormat _num2 = NumberFormat('#,##0.##');
+
+  String _formatMoney(num value) {
+    return value % 1 == 0 ? _php0.format(value) : _php2.format(value);
+  }
+
+  String _formatKg(num value) => '${_num2.format(value)} kg';
 
   String _formatDate(DateTime d) {
     final y = d.year.toString().padLeft(4, '0');
@@ -58,7 +54,7 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
   double _sumKg(List items) {
     double total = 0.0;
     for (final it in items) {
-      final m = (it as Map<String, dynamic>);
+      final m = it as Map<String, dynamic>;
       total += (m['weightKg'] as num?)?.toDouble() ?? 0.0;
     }
     return total;
@@ -72,7 +68,10 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
 
   bool _isWalkInType(String raw) {
     final v = raw.trim().toLowerCase();
-    return v == "walkin" || v == "walk-in" || v == "walk in" || v == "walk_in";
+    return v == "walkin" ||
+        v == "walk-in" ||
+        v == "walk in" ||
+        v == "walk_in";
   }
 
   @override
@@ -99,7 +98,9 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
     if (!isSale) {
       // BUY
       if (_isWalkInType(sourceTypeRaw) ||
-          (sourceTypeRaw.isEmpty && sourceNameRaw.isEmpty && customerName.isEmpty)) {
+          (sourceTypeRaw.isEmpty &&
+              sourceNameRaw.isEmpty &&
+              customerName.isEmpty)) {
         partyLine = sourceNameRaw.isEmpty ? "Walk-in" : "Walk-in • $sourceNameRaw";
       } else {
         final prettyType = _titleCase(sourceTypeRaw);
@@ -125,12 +126,6 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
     final date = ts?.toDate();
 
     final items = (widget.transactionData['items'] as List<dynamic>?) ?? [];
-
-    final txId = (widget.transactionData['receiptId'] ??
-            widget.transactionData['transactionId'] ??
-            '')
-        .toString();
-
     final totalKg = _sumKg(items);
 
     return Scaffold(
@@ -139,7 +134,7 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
         backgroundColor: bgColor,
         elevation: 0,
         foregroundColor: Colors.white,
-        title: Text(isSale ? "Sell Receipt" : "Buy Receipt"),
+        title: Text(isSale ? "Transaction Overview" : "Transaction Overview"),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -174,17 +169,13 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-
                   const SizedBox(height: 8),
-
                   if (date != null)
                     Text(
                       _formatDate(date),
                       style: const TextStyle(color: Colors.grey),
                     ),
-
                   const SizedBox(height: 8),
-
                   Text(
                     partyLine,
                     style: const TextStyle(
@@ -193,10 +184,8 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-
                   const SizedBox(height: 12),
                   Divider(color: Colors.white.withOpacity(0.08)),
-
                   ...items.map((raw) {
                     final item = raw as Map<String, dynamic>;
                     final itemName = (item['itemName'] ?? '').toString();
@@ -204,9 +193,9 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
 
                     final subtotal =
                         (item['subtotal'] as num?)?.toDouble() ??
-                        (item['sellTotal'] as num?)?.toDouble() ??
-                        (item['costTotal'] as num?)?.toDouble() ??
-                        0.0;
+                            (item['sellTotal'] as num?)?.toDouble() ??
+                            (item['costTotal'] as num?)?.toDouble() ??
+                            0.0;
 
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -235,7 +224,9 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
                           Text(
                             _formatMoney(subtotal),
                             style: TextStyle(
-                              color: isSale ? Colors.greenAccent : Colors.orangeAccent,
+                              color: isSale
+                                  ? Colors.greenAccent
+                                  : Colors.orangeAccent,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -243,11 +234,8 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
                       ),
                     );
                   }),
-
                   Divider(color: Colors.white.withOpacity(0.08)),
-
                   const SizedBox(height: 8),
-
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -267,9 +255,7 @@ String _formatKg(num value) => '${_num2.format(value)} kg';
                       ),
                     ],
                   ),
-
                   const SizedBox(height: 12),
-
                   Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
