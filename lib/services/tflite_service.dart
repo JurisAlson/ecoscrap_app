@@ -6,7 +6,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 
 class TFLiteService {
   static const String _modelAssetPath = 'assets/models/plastic_model.tflite';
-  static const int _inputSize = 224;
+  //static const int _inputSize = 224;
   static const bool _debug = false;
 
   static Interpreter? _interpreter;

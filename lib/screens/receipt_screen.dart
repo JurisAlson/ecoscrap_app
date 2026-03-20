@@ -127,14 +127,19 @@ double get _sellMaxKg {
       (sum, it) => sum + (double.tryParse(it.weightCtrl.text.trim()) ?? 0.0),
     );
   }
+  bool get _openedFromHouseholdDropoff =>
+    !(_openedFromCollectorSellRequest) &&
+    widget.prefillSourceType == "household" &&
+    (widget.sellRequestId?.trim().isNotEmpty ?? false);
 
   bool get _isPrefilledCollectorBuy =>
       !(_openedFromCollectorSellRequest) &&
       (widget.prefillSourceType == "collector");
 
-  bool get _isPrefilledHouseholdWalkIn =>
-      !(_openedFromCollectorSellRequest) &&
-      (widget.prefillSourceType == "household");
+bool get _isPrefilledHouseholdWalkIn =>
+    !(_openedFromCollectorSellRequest) &&
+    !(_openedFromHouseholdDropoff) &&
+    (widget.prefillSourceType == "household");
 
   bool get _openedFromCollectorSellRequest =>
       (widget.sellRequestId?.trim().isNotEmpty ?? false) &&
@@ -254,75 +259,91 @@ double get _sellMaxKg {
       });
 
   @override
-  void initState() {
-    super.initState();
+void initState() {
+  super.initState();
 
-    _selectedSellBranch = _sellBranches.first;
+  _selectedSellBranch = _sellBranches.first;
 
-    if (widget.initialTransactionType == "buy" ||
-        widget.initialTransactionType == "sell") {
-      _txType = widget.initialTransactionType!;
-    }
-
-    final name = widget.prefillCollectorName?.trim() ?? "";
-    final id = widget.prefillCollectorId?.trim();
-
-    if (_openedFromCollectorSellRequest) {
-      _txType = "buy";
-
-      if (name.isNotEmpty) {
-        _sourceNameCtrl.text = name;
-      }
-
-      _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
-
-      final it = _ReceiptItem();
-      it.categoryValue = kMajorCategories.first;
-      it.subCategoryValue = kBuySubCategories.first;
-      _recalcBuyItem(it);
-      _items.add(it);
-    } else if (_isPrefilledCollectorBuy) {
-      _txType = "buy";
-
-      if (name.isNotEmpty) {
-        _sourceNameCtrl.text = name;
-      }
-
-      _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
-
-      final it = _ReceiptItem();
-      it.categoryValue = kMajorCategories.first;
-      it.subCategoryValue = kBuySubCategories.first;
-      _recalcBuyItem(it);
-      _items.add(it);
-    } else if (_isPrefilledHouseholdWalkIn) {
-      _txType = "buy";
-
-      if (name.isNotEmpty) {
-        _walkInNameCtrl.text = name;
-      }
-
-      _sourceUserId = null;
-
-      final it = _ReceiptItem();
-      it.categoryValue = kMajorCategories.first;
-      it.subCategoryValue = kBuySubCategories.first;
-      _recalcBuyItem(it);
-      _items.add(it);
-    }
-
-    if (_items.isEmpty) {
-      final it = _ReceiptItem();
-
-      if (_txType == "buy") {
-        it.categoryValue = kMajorCategories.first;
-        it.subCategoryValue = kBuySubCategories.first;
-        _recalcBuyItem(it);
-      }
-
-      _items.add(it);
-    }
+  if (_openedFromHouseholdDropoff || _openedFromCollectorSellRequest) {
+    _txType = "buy";
+  } else if (widget.initialTransactionType == "buy" ||
+      widget.initialTransactionType == "sell") {
+    _txType = widget.initialTransactionType!;
   }
+
+  final name = widget.prefillCollectorName?.trim() ?? "";
+  final id = widget.prefillCollectorId?.trim();
+
+  if (_openedFromCollectorSellRequest) {
+    _txType = "buy";
+
+    if (name.isNotEmpty) {
+      _sourceNameCtrl.text = name;
+    }
+
+    _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
+
+    final it = _ReceiptItem();
+    it.categoryValue = kMajorCategories.first;
+    it.subCategoryValue = kBuySubCategories.first;
+    _recalcBuyItem(it);
+    _items.add(it);
+  } else if (_openedFromHouseholdDropoff) {
+    _txType = "buy";
+
+    if (name.isNotEmpty) {
+      _sourceNameCtrl.text = name;
+    }
+
+    _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
+
+    final it = _ReceiptItem();
+    it.categoryValue = kMajorCategories.first;
+    it.subCategoryValue = kBuySubCategories.first;
+    _recalcBuyItem(it);
+    _items.add(it);
+  } else if (_isPrefilledCollectorBuy) {
+    _txType = "buy";
+
+    if (name.isNotEmpty) {
+      _sourceNameCtrl.text = name;
+    }
+
+    _sourceUserId = (id != null && id.isNotEmpty) ? id : null;
+
+    final it = _ReceiptItem();
+    it.categoryValue = kMajorCategories.first;
+    it.subCategoryValue = kBuySubCategories.first;
+    _recalcBuyItem(it);
+    _items.add(it);
+  } else if (_isPrefilledHouseholdWalkIn) {
+    _txType = "buy";
+
+    if (name.isNotEmpty) {
+      _walkInNameCtrl.text = name;
+    }
+
+    _sourceUserId = null;
+
+    final it = _ReceiptItem();
+    it.categoryValue = kMajorCategories.first;
+    it.subCategoryValue = kBuySubCategories.first;
+    _recalcBuyItem(it);
+    _items.add(it);
+  }
+
+  if (_items.isEmpty) {
+    final it = _ReceiptItem();
+
+    if (_txType == "buy") {
+      it.categoryValue = kMajorCategories.first;
+      it.subCategoryValue = kBuySubCategories.first;
+      _recalcBuyItem(it);
+    }
+
+    _items.add(it);
+  }
+}
 
   @override
   void dispose() {
@@ -404,16 +425,19 @@ double get _sellMaxKg {
   if (_saving) return;
   setState(() => _saving = true);
 
+  
+
+  String dropoffHouseholdName = "";
+
   final isSell = _txType == "sell";
   final fromCollectorSellRequest = _openedFromCollectorSellRequest;
 
-  final fromHouseholdDropoff = !isSell &&
-      widget.prefillSourceType == "household" &&
-      (widget.sellRequestId?.trim().isNotEmpty ?? false);
+final fromHouseholdDropoff = !isSell && _openedFromHouseholdDropoff;
 
-  final isWalkInBuy = !isSell &&
-      !_openedFromCollectorSellRequest &&
-      (_isPrefilledHouseholdWalkIn || _sourceUserId == null);
+final isWalkInBuy = !isSell &&
+    !_openedFromCollectorSellRequest &&
+    !_openedFromHouseholdDropoff &&
+    (_isPrefilledHouseholdWalkIn || _sourceUserId == null);
 
   final collectorName = _sourceNameCtrl.text.trim();
   final walkInName = _walkInNameCtrl.text.trim();
@@ -444,23 +468,23 @@ double get _sellMaxKg {
       }
     }
 
-    final sourceType = isSell
-        ? ""
-        : fromHouseholdDropoff
-            ? "household"
-            : (isWalkInBuy ? "walkin" : "collector");
+String sourceType = isSell
+    ? ""
+    : fromHouseholdDropoff
+        ? "household"
+        : (isWalkInBuy ? "walkin" : "collector");
 
-    final sourceName = isSell
-        ? ""
-        : fromHouseholdDropoff
-            ? walkInName
-            : (isWalkInBuy ? walkInName : collectorName);
+String sourceName = isSell
+    ? ""
+    : fromHouseholdDropoff
+        ? (_sourceNameCtrl.text.trim())
+        : (isWalkInBuy ? walkInName : collectorName);
 
-    final partyName = isSell
-        ? _selectedSellBranch
-        : fromHouseholdDropoff
-            ? walkInName
-            : (isWalkInBuy ? walkInName : collectorName);
+String partyName = isSell
+    ? (_selectedSellBranch ?? "")
+    : fromHouseholdDropoff
+        ? (_sourceNameCtrl.text.trim())
+        : (isWalkInBuy ? walkInName : collectorName);
 
     double totalWeightKg = 0.0;
 
@@ -658,20 +682,29 @@ double get _sellMaxKg {
         collectorInventorySnap = await trx.get(collectorInventoryRef);
       }
 
-      if (fromHouseholdDropoff &&
-          widget.sellRequestId != null &&
-          dropoffReqRef != null) {
-        if (dropoffReqSnap == null || !dropoffReqSnap.exists) {
-          throw Exception("Drop-off request not found.");
-        }
+if (fromHouseholdDropoff &&
+    widget.sellRequestId != null &&
+    dropoffReqRef != null) {
+  if (dropoffReqSnap == null || !dropoffReqSnap.exists) {
+    throw Exception("Drop-off request not found.");
+  }
 
-        final dropoffData = dropoffReqSnap.data() ?? {};
-        final status = (dropoffData['status'] ?? '').toString();
+  final dropoffData = dropoffReqSnap.data() ?? {};
+  final status = (dropoffData['status'] ?? '').toString();
 
-        if (status == 'completed') {
-          throw Exception("This drop-off request was already completed.");
-        }
-      }
+  if (status == 'completed') {
+    throw Exception("This drop-off request was already completed.");
+  }
+
+  dropoffHouseholdName =
+      (dropoffData['householdName'] ?? dropoffData['actorName'] ?? '')
+          .toString()
+          .trim();
+
+  if (dropoffHouseholdName.isEmpty) {
+    throw Exception("Missing household name in drop-off request.");
+  }
+}
 
       if (isSell) {
         for (final entry in sellGroups.entries) {
@@ -807,6 +840,11 @@ double get _sellMaxKg {
       final transportCost = isSell ? _transportCost : 0.0;
       final netAmount = isSell ? _netSellAmount : _totalAmount;
 
+      if (fromHouseholdDropoff && dropoffHouseholdName.isNotEmpty) {
+      sourceName = dropoffHouseholdName;
+      partyName = dropoffHouseholdName;
+    }   
+
       final payload = <String, dynamic>{
         'transactionType': _txType,
         'customerName': partyName,
@@ -882,31 +920,22 @@ double get _sellMaxKg {
         );
       }
 
-      if (fromHouseholdDropoff &&
-          widget.sellRequestId != null &&
-          dropoffReqRef != null) {
-        trx.set(
-          dropoffReqRef,
-          {
-            'status': 'completed',
-            'readByJunkshop': true,
-            'receiptSaved': true,
-            'receiptTransactionId': txRef.id,
-            'processedAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-        trx.set(
-          db.collection('chats').doc('dropoff_${widget.sellRequestId}'),
-          {
-            'active': false,
-            'status': 'completed',
-            'lastMessageAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      }
+if (fromHouseholdDropoff &&
+    widget.sellRequestId != null &&
+    dropoffReqRef != null) {
+  trx.set(
+    dropoffReqRef,
+    {
+      'status': 'completed',
+      'readByJunkshop': true,
+      'receiptSaved': true,
+      'receiptTransactionId': txRef.id,
+      'processedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    },
+    SetOptions(merge: true),
+  );
+}
     });
 
     if (!mounted) return;
@@ -944,109 +973,130 @@ double get _sellMaxKg {
                 children: [
                   _label(isSell ? "Client" : "Walk-in"),
                   const SizedBox(height: 8),
-                  if (isSell) ...[
-                    DropdownButtonFormField<String>(
-                      initialValue: _sellBranches.contains(_selectedSellBranch)
-                          ? _selectedSellBranch
-                          : _sellBranches.first,
-                      items: _sellBranches
-                          .map(
-                            (b) => DropdownMenuItem(
-                              value: b,
-                              child: Text(b, overflow: TextOverflow.ellipsis),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        if (v == null) return;
-                        setState(() => _selectedSellBranch = v);
-                      },
-                      dropdownColor: const Color(0xFF0F172A),
-                      style: const TextStyle(color: Colors.white),
-                      decoration: _dropdownDecoration(""),
-                    ),
-                  ] else if (_openedFromCollectorSellRequest ||
-                      _isPrefilledCollectorBuy) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 14,
-                        horizontal: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.2),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            "Collector",
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _sourceNameCtrl.text.isEmpty
-                                ? "Unknown Collector"
-                                : _sourceNameCtrl.text,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else if (_isPrefilledHouseholdWalkIn) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 14,
-                        horizontal: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.2),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            "Walk-in",
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _walkInNameCtrl.text.isEmpty
-                                ? "Unknown Walk-in"
-                                : _walkInNameCtrl.text,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else ...[
-                    TextField(
-                      controller: _walkInNameCtrl,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: _inputDecoration("Enter walk-in name"),
-                    ),
-                  ],
+if (isSell) ...[
+  DropdownButtonFormField<String>(
+    initialValue: _sellBranches.contains(_selectedSellBranch)
+        ? _selectedSellBranch
+        : _sellBranches.first,
+    items: _sellBranches
+        .map(
+          (b) => DropdownMenuItem(
+            value: b,
+            child: Text(b, overflow: TextOverflow.ellipsis),
+          ),
+        )
+        .toList(),
+    onChanged: (v) {
+      if (v == null) return;
+      setState(() => _selectedSellBranch = v);
+    },
+    dropdownColor: const Color(0xFF0F172A),
+    style: const TextStyle(color: Colors.white),
+    decoration: _dropdownDecoration(""),
+  ),
+] else if (_openedFromCollectorSellRequest || _isPrefilledCollectorBuy) ...[
+  Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+    decoration: BoxDecoration(
+      color: Colors.black.withOpacity(0.2),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Colors.white.withOpacity(0.2)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Collector",
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _sourceNameCtrl.text.isEmpty
+              ? "Unknown Collector"
+              : _sourceNameCtrl.text,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    ),
+  ),
+] else if (_openedFromHouseholdDropoff) ...[
+  Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+    decoration: BoxDecoration(
+      color: Colors.black.withOpacity(0.2),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Colors.white.withOpacity(0.2)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Resident",
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _sourceNameCtrl.text.isEmpty
+              ? "Unknown Resident"
+              : _sourceNameCtrl.text,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    ),
+  ),
+] else if (_isPrefilledHouseholdWalkIn) ...[
+  Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+    decoration: BoxDecoration(
+      color: Colors.black.withOpacity(0.2),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Colors.white.withOpacity(0.2)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Walk-in",
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _walkInNameCtrl.text.isEmpty
+              ? "Unknown Walk-in"
+              : _walkInNameCtrl.text,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    ),
+  ),
+] else ...[
+  TextField(
+    controller: _walkInNameCtrl,
+    style: const TextStyle(color: Colors.white),
+    decoration: _inputDecoration("Enter walk-in name"),
+  ),
+],
                 ],
               ),
             ),

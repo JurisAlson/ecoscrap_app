@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+
 import '../chat/screens/chat_page.dart';
 import '../chat/services/chat_services.dart';
-
 import 'pickup_request_page.dart';
 
 extension OpacityFix on Color {
@@ -28,6 +28,11 @@ class GeoMappingPage extends StatefulWidget {
 }
 
 class _GeoMappingPageState extends State<GeoMappingPage> {
+  bool get _canUsePinControls => _tripStage == TripStage.planning;
+  bool get _isUsingPinnedForActiveTransaction =>
+      _activeTransactionUsesPinned && _tripStage != TripStage.planning;
+  bool _activeTransactionUsesPinned = false;
+
   static const Color _bg = Color(0xFF0B1220);
   static const Color _sheet = Color(0xFF121C2E);
   static const Color _surface = Color(0xFF162235);
@@ -41,32 +46,31 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   static const Color _textSecondary = Color(0xFF94A3B8);
   static const Color _textMuted = Color(0xFF64748B);
 
-  static const String _pickupCollection = 'requests';
-  static const String _dropoffCollection = 'dropoff_requests';
-
   late String _timeString;
   late Timer _timer;
 
   GoogleMapController? _mapController;
-  final LatLng _defaultCenter = const LatLng(14.18695, 121.11299);
 
+  final LatLng _defaultCenter = const LatLng(14.18695, 121.11299);
   final LatLng _moresLatLng = const LatLng(14.198630, 121.117270);
-  final String _moresName = "Mores Scrap Trading";
+
+  final String _moresName = "Mores Scrap";
   final String _moresSubtitle = "Brgy Palo Alto, Calamba";
   final String _moresJunkshopUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
+
   final ChatService _chatService = ChatService();
+
+  final FirebaseFunctions _functions =
+      FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+
+  BitmapDescriptor? _residenceMarkerIcon;
+  BitmapDescriptor? _moresMarkerIcon;
+  BitmapDescriptor? _collectorMarkerIcon;
 
   bool _locationReady = false;
   Position? _currentPosition;
   StreamSubscription<Position>? _posSub;
-
-  bool get _hasActivePickupRequest =>
-    _activePickupRequestId != null && _tripStage == TripStage.pickup;
-
-  List<LatLng> _routePoints = [];
-  String _dirDistanceText = "";
-  String _dirDurationText = "";
-  int? _dirDurationValueSec;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _dropoffReqSub;
 
   bool _pinMode = false;
   LatLng? _pinnedPickupLatLng;
@@ -83,26 +87,34 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   String? _activeDropoffRequestId;
   String _dropoffStatus = "";
 
+  List<LatLng> _routePoints = [];
+  String _dirDistanceText = "";
+  String _dirDurationText = "";
+  int? _dirDurationValueSec;
+
   TripStage _tripStage = TripStage.planning;
 
   bool get _isPickup => _tripStage == TripStage.pickup;
   bool get _isDelivering => _tripStage == TripStage.delivering;
   bool get _rideActive => _tripStage == TripStage.delivering;
 
-  
+  bool get _hasActivePickupRequest =>
+      _activePickupRequestId != null && _tripStage == TripStage.pickup;
 
-  LatLng get _originLatLng {
+  LatLng get _liveUserLatLng {
     final p = _currentPosition;
     if (p == null) return _defaultCenter;
     return LatLng(p.latitude, p.longitude);
   }
 
-  LatLng get _effectivePickupLatLng => _pinnedPickupLatLng ?? _originLatLng;
+  LatLng get _effectivePickupLatLng => _pinnedPickupLatLng ?? _liveUserLatLng;
+
+  LatLng get _routeBaseLatLng => _effectivePickupLatLng;
 
   double get _distanceKm {
     final meters = Geolocator.distanceBetween(
-      _originLatLng.latitude,
-      _originLatLng.longitude,
+      _routeBaseLatLng.latitude,
+      _routeBaseLatLng.longitude,
       _moresLatLng.latitude,
       _moresLatLng.longitude,
     );
@@ -118,22 +130,31 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     return (_distanceKm * 4.0).round().clamp(3, 999);
   }
 
-  final FirebaseFunctions _functions =
-      FirebaseFunctions.instanceFor(region: 'asia-southeast1');
-
   static const String _darkMapStyle = r'''
 [
   {"elementType":"geometry","stylers":[{"color":"#0b1220"}]},
   {"elementType":"labels.text.fill","stylers":[{"color":"#8aa0b8"}]},
   {"elementType":"labels.text.stroke","stylers":[{"color":"#0b1220"}]},
+
   {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#2b3445"}]},
-  {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#7d93aa"}]},
+
+  {"featureType":"poi","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.business","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.medical","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.school","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.government","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.place_of_worship","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.attraction","stylers":[{"visibility":"off"}]},
   {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#0f1a2a"}]},
+  {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#5f748d"}]},
+
+  {"featureType":"transit.station","stylers":[{"visibility":"off"}]},
   {"featureType":"road","elementType":"geometry","stylers":[{"color":"#162235"}]},
   {"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
   {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#93a8bf"}]},
   {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#1f2f48"}]},
   {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
+
   {"featureType":"transit","elementType":"geometry","stylers":[{"color":"#142033"}]},
   {"featureType":"water","elementType":"geometry","stylers":[{"color":"#06101c"}]},
   {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#6f879f"}]}
@@ -150,6 +171,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       setState(() => _timeString = _formatTime(DateTime.now()));
     });
 
+    _loadMapMarkerIcons();
     _initLocation();
     _listenAvailableCollectors();
   }
@@ -159,66 +181,198 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     _timer.cancel();
     _posSub?.cancel();
     _pickupReqSub?.cancel();
+    _dropoffReqSub?.cancel();
     super.dispose();
+  }
+
+  void _clearPinnedLocation() {
+    if (_pinnedPickupLatLng == null) return;
+
+    setState(() {
+      _pinnedPickupLatLng = null;
+      _pickupSource = "gps";
+      _pinMode = false;
+      if (_tripStage == TripStage.planning) {
+        _activeTransactionUsesPinned = false;
+      }
+    });
+
+    _snack("Pinned residence cleared. Using current location now.");
+
+    if (_currentPosition != null) {
+      final p = _currentPosition!;
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(p.latitude, p.longitude),
+          16,
+        ),
+      );
+    }
+  }
+
+  void _listenToActiveDropoffRequest(String requestId) {
+    _dropoffReqSub?.cancel();
+
+    _dropoffReqSub = FirebaseFirestore.instance
+        .collection('dropoff_requests')
+        .doc(requestId)
+        .snapshots()
+        .listen((doc) async {
+      if (!doc.exists) return;
+
+      final data = doc.data() ?? {};
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+
+      if (!mounted) return;
+
+      if (status == 'confirmed' || status == 'completed') {
+        setState(() {
+          _tripStage = TripStage.planning;
+          _activeDropoffRequestId = null;
+          _dropoffStatus = status;
+          _routePoints = [];
+          _dirDistanceText = "";
+          _dirDurationText = "";
+          _dirDurationValueSec = null;
+          _activeTransactionUsesPinned = false;
+        });
+
+        _dropoffReqSub?.cancel();
+        _dropoffReqSub = null;
+
+        _snack("Mores Scrap confirmed your drop-off.", bg: _accent);
+        return;
+      }
+
+      setState(() {
+        _dropoffStatus = status;
+      });
+    });
   }
 
   String _formatTime(DateTime dt) {
     return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
   }
 
-  void _onMapCreated(GoogleMapController controller) async {
+  Future<void> _onMapCreated(GoogleMapController controller) async {
     _mapController = controller;
     await _mapController?.setMapStyle(_darkMapStyle);
   }
 
+  Future<BitmapDescriptor> _iconToMarker({
+    required IconData icon,
+    required Color iconColor,
+    required Color backgroundColor,
+    required Color borderColor,
+    required double size,
+    required double iconSize,
+    String? label,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    final painter = _GeoMarkerPainter(
+      icon: icon,
+      iconColor: iconColor,
+      backgroundColor: backgroundColor,
+      borderColor: borderColor,
+      size: size,
+      iconSize: iconSize,
+      label: label,
+    );
+
+    painter.paint(canvas, Size(size, size));
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+  }
+
+  Future<void> _loadMapMarkerIcons() async {
+    try {
+      _residenceMarkerIcon = await _iconToMarker(
+        icon: Icons.person_pin_circle_rounded,
+        iconColor: Colors.white,
+        backgroundColor: const Color(0xFF334155),
+        borderColor: Colors.white.withOpacity(0.16),
+        size: 96,
+        iconSize: 42,
+      );
+
+      _moresMarkerIcon = await _iconToMarker(
+        icon: Icons.storefront_rounded,
+        iconColor: Colors.white,
+        backgroundColor: const Color(0xFF16A34A),
+        borderColor: Colors.white.withOpacity(0.20),
+        size: 260,
+        iconSize: 52,
+        label: "Mores Scrap",
+      );
+
+      _collectorMarkerIcon = await _iconToMarker(
+        icon: Icons.local_shipping_rounded,
+        iconColor: Colors.white,
+        backgroundColor: _blue,
+        borderColor: Colors.white.withOpacity(0.18),
+        size: 78,
+        iconSize: 34,
+      );
+
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint("Failed to load map marker icons: $e");
+    }
+  }
+
   Future<void> _openDropoffChat() async {
-  final user = FirebaseAuth.instance.currentUser;
-  final requestId = _activeDropoffRequestId;
+    final user = FirebaseAuth.instance.currentUser;
+    final requestId = _activeDropoffRequestId;
 
-  if (user == null || requestId == null) {
-    _snack("No active drop-off chat available.");
-    return;
-  }
-
-  try {
-    final chatId = await _chatService.ensureDropoffChat(
-      requestId: requestId,
-      householdUid: user.uid,
-      junkshopUid: _moresJunkshopUid,
-    );
-
-    if (!mounted) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatPage(
-          chatId: chatId,
-          title: _moresName,
-          otherUserId: _moresJunkshopUid,
-        ),
-      ),
-    );
-  } catch (e) {
-    _snack("Failed to open chat.");
-  }
-}
-
-Future<void> _deleteDropoffChat(String requestId) async {
-  final db = FirebaseFirestore.instance;
-  final chatRef = db.collection('chats').doc('dropoff_$requestId');
-
-  try {
-    final messages = await chatRef.collection('messages').get();
-    for (final doc in messages.docs) {
-      await doc.reference.delete();
+    if (user == null || requestId == null) {
+      _snack("No active drop-off chat available.");
+      return;
     }
 
-    await chatRef.delete();
-  } catch (e) {
-    debugPrint('Failed to delete dropoff chat: $e');
+    try {
+      final chatId = await _chatService.ensureDropoffChat(
+        requestId: requestId,
+        householdUid: user.uid,
+        junkshopUid: _moresJunkshopUid,
+      );
+
+      if (!mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatPage(
+            chatId: chatId,
+            title: _moresName,
+            otherUserId: _moresJunkshopUid,
+          ),
+        ),
+      );
+    } catch (e) {
+      _snack("Failed to open chat.");
+    }
   }
-}
+
+  Future<void> _deleteDropoffChat(String requestId) async {
+    final db = FirebaseFirestore.instance;
+    final chatRef = db.collection('chats').doc('dropoff_$requestId');
+
+    try {
+      final messages = await chatRef.collection('messages').get();
+      for (final doc in messages.docs) {
+        await doc.reference.delete();
+      }
+      await chatRef.delete();
+    } catch (e) {
+      debugPrint('Failed to delete dropoff chat: $e');
+    }
+  }
 
   Future<void> _initLocation() async {
     final ok = await _ensureLocationPermission();
@@ -302,6 +456,42 @@ Future<void> _deleteDropoffChat(String requestId) async {
     );
   }
 
+  Widget _activePinnedNotice() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 44, vertical: 12),
+      decoration: BoxDecoration(
+        color: _surfaceAlt,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(
+              Icons.info_outline,
+              size: 18,
+              color: Colors.amberAccent,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              "You have an ongoing transaction.",
+              style: const TextStyle(
+                color: _textSecondary,
+                fontWeight: FontWeight.w700,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _glass({
     required Widget child,
     double blur = 12,
@@ -327,14 +517,7 @@ Future<void> _deleteDropoffChat(String requestId) async {
   }
 
   Future<void> _buildRouteTo(LatLng dest) async {
-    if (_currentPosition == null) {
-      if (!mounted) return;
-      setState(() => _routePoints = []);
-      return;
-    }
-
-    final origin = _originLatLng;
-    debugPrint("projectId=${Firebase.app().options.projectId}");
+    final origin = _routeBaseLatLng;
 
     try {
       final callable = _functions.httpsCallable('getDirections');
@@ -376,38 +559,36 @@ Future<void> _deleteDropoffChat(String requestId) async {
     }
   }
 
-void _listenAvailableCollectors() {
-  FirebaseFirestore.instance
-      .collection('Users')
-      .where('Roles', isEqualTo: 'collector')
-      .where('isOnline', isEqualTo: true)
-      .where('isAvailableForHousehold', isEqualTo: true)
-      .snapshots()
-      .listen((snap) {
-    final list = <Map<String, String>>[];
+  void _listenAvailableCollectors() {
+    FirebaseFirestore.instance
+        .collection('Users')
+        .where('Roles', isEqualTo: 'collector')
+        .where('isOnline', isEqualTo: true)
+        .where('isAvailableForHousehold', isEqualTo: true)
+        .snapshots()
+        .listen((snap) {
+      final list = <Map<String, String>>[];
 
-    for (final d in snap.docs) {
-      final data = d.data();
-      final uid = d.id;
+      for (final d in snap.docs) {
+        final data = d.data();
+        final uid = d.id;
+        final name =
+            (data['Name'] ?? data['displayName'] ?? "Collector").toString();
+        list.add({'uid': uid, 'name': name});
+      }
 
-      final name =
-          (data['Name'] ?? data['displayName'] ?? "Collector").toString();
+      if (!mounted) return;
 
-      list.add({'uid': uid, 'name': name});
-    }
+      setState(() {
+        _availableCollectors = list;
 
-    if (!mounted) return;
+        final stillThere = _selectedCollectorId != null &&
+            _availableCollectors.any((c) => c['uid'] == _selectedCollectorId);
 
-    setState(() {
-      _availableCollectors = list;
-
-      final stillThere = _selectedCollectorId != null &&
-          _availableCollectors.any((c) => c['uid'] == _selectedCollectorId);
-
-      if (!stillThere) _selectedCollectorId = null;
+        if (!stillThere) _selectedCollectorId = null;
+      });
     });
-  });
-}
+  }
 
   void _listenToActivePickupRequest(String requestId) {
     _pickupReqSub?.cancel();
@@ -477,33 +658,39 @@ void _listenAvailableCollectors() {
     if (user == null) return;
 
     final snap = await FirebaseFirestore.instance
-      .collection('dropoff_requests')
-      .where('householdId', isEqualTo: user.uid)
-      .where('active', isEqualTo: true)
-      .limit(5)
-      .get();
+        .collection('dropoff_requests')
+        .where('householdId', isEqualTo: user.uid)
+        .where('active', isEqualTo: true)
+        .limit(5)
+        .get();
 
     if (snap.docs.isEmpty) return;
 
     final docs = snap.docs.where((d) {
       final status = (d.data()['status'] ?? '').toString().trim().toLowerCase();
-      return status == 'en_route';
+      return status == 'en_route' || status == 'awaiting_confirmation';
     }).toList();
 
     if (docs.isEmpty) return;
 
     final doc = docs.first;
+    final data = doc.data();
+    final pinnedUsed = data['pinnedLocationUsed'] == true;
 
     if (!mounted) return;
     setState(() {
       _activeDropoffRequestId = doc.id;
       _tripStage = TripStage.delivering;
-      _dropoffStatus = 'en_route';
+      _dropoffStatus = (data['status'] ?? 'en_route').toString();
       _activePickupRequestId = null;
       _collectorLatLng = null;
       _collectorName = null;
       _collectorRoutePoints = [];
+      _pinMode = false;
+      _activeTransactionUsesPinned = pinnedUsed;
     });
+
+    _listenToActiveDropoffRequest(doc.id);
 
     await _buildRouteTo(_moresLatLng);
     _mapController?.animateCamera(
@@ -515,10 +702,13 @@ void _listenAvailableCollectors() {
     try {
       final doc =
           await FirebaseFirestore.instance.collection('Users').doc(uid).get();
+
       final data = doc.data() ?? {};
+
       final name = (data['Name'] ?? data['displayName'] ?? data['name'] ?? '')
           .toString()
           .trim();
+
       if (name.isNotEmpty) return name;
 
       final email = (data['email'] ?? '').toString().trim();
@@ -537,7 +727,8 @@ void _listenAvailableCollectors() {
     final actorName =
         await _getUserName(user.uid, fallback: user.email ?? "User");
 
-    final doc = await FirebaseFirestore.instance.collection('dropoff_requests').add({
+    final doc =
+        await FirebaseFirestore.instance.collection('dropoff_requests').add({
       'type': 'drop-off',
       'active': true,
       'status': 'en_route',
@@ -550,7 +741,7 @@ void _listenAvailableCollectors() {
       'destinationLocation':
           GeoPoint(_moresLatLng.latitude, _moresLatLng.longitude),
       'originLocation':
-          GeoPoint(_originLatLng.latitude, _originLatLng.longitude),
+          GeoPoint(_routeBaseLatLng.latitude, _routeBaseLatLng.longitude),
       'distanceKm': double.parse(_distanceKm.toStringAsFixed(2)),
       'etaMinutes': _etaMinutes,
       'arrived': false,
@@ -562,20 +753,21 @@ void _listenAvailableCollectors() {
       'readByJunkshop': false,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
+      'pickupSource': _pickupSource,
+      'pinnedLocationUsed': _pinnedPickupLatLng != null,
     });
 
     return doc.id;
   }
-  
 
   Future<void> _startDirectionsToMores() async {
-    if (!_locationReady || _currentPosition == null) {
+    if (!_locationReady && _pinnedPickupLatLng == null) {
       _snack("Still getting your location. Please wait...", bg: _surface);
       return;
     }
     if (_hasActivePickupRequest) {
-    _snack("You already have an active pickup request. Cancel it first.");
-    return;
+      _snack("You already have an active pickup request. Cancel it first.");
+      return;
     }
 
     final go = await showDialog<bool>(
@@ -587,7 +779,9 @@ void _listenAvailableCollectors() {
           style: TextStyle(color: _textPrimary),
         ),
         content: Text(
-          "Navigate to $_moresName?",
+          _pinnedPickupLatLng != null
+              ? "Start drop-off using your pinned residence location?"
+              : "Navigate to $_moresName?",
           style: const TextStyle(color: _textSecondary),
         ),
         actions: [
@@ -621,8 +815,8 @@ void _listenAvailableCollectors() {
       _collectorRoutePoints = [];
       _activePickupRequestId = null;
       _dropoffStatus = "en_route";
+      _activeTransactionUsesPinned = _pinnedPickupLatLng != null;
     });
-    
 
     final dropoffId = await _createDropoffRequest();
 
@@ -632,41 +826,91 @@ void _listenAvailableCollectors() {
       _activeDropoffRequestId = dropoffId;
     });
 
-    await _buildRouteTo(_moresLatLng);
-    _mapController?.animateCamera(
-      CameraUpdate.newLatLngZoom(_moresLatLng, 16),
-    );
+    if (dropoffId != null) {
+      _listenToActiveDropoffRequest(dropoffId);
+    }
 
-    _snack("Showing directions to $_moresName.", bg: _surface);
+    await _buildRouteTo(_moresLatLng);
+    await _focusDropoffRoute();
+
+    _snack(
+      _pinnedPickupLatLng != null
+          ? "Showing route from pinned residence to $_moresName."
+          : "Showing directions to $_moresName.",
+      bg: _surface,
+    );
   }
 
   Future<void> _markDropoffArrived() async {
     final requestId = _activeDropoffRequestId;
     if (requestId == null) return;
 
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: _sheet,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text(
+          "Confirm arrival",
+          style: TextStyle(
+            color: _textPrimary,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: Text(
+          "Are you now at $_moresName?",
+          style: const TextStyle(
+            color: _textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              "No",
+              style: TextStyle(color: _textSecondary),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: _textPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text("Yes"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     try {
       await FirebaseFirestore.instance
           .collection('dropoff_requests')
           .doc(requestId)
           .update({
-        'status': 'arrived',
+        'status': 'awaiting_confirmation',
         'arrived': true,
-        'active': false,
+        'active': true,
         'arrivedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'readByJunkshop': false,
       });
 
-      await _deleteDropoffChat(requestId);
-
       if (!mounted) return;
+
       setState(() {
-        _dropoffStatus = "arrived";
-        _tripStage = TripStage.planning;
-        _routePoints = [];
+        _dropoffStatus = "awaiting_confirmation";
       });
 
-      _snack("Marked as arrived at $_moresName.", bg: _accent);
+      _snack(
+        "Arrival submitted. Waiting for Mores Scrap confirmation.",
+        bg: _surface,
+      );
     } on FirebaseException catch (e, st) {
       debugPrint("❌ mark arrived failed");
       debugPrint("code: ${e.code}");
@@ -686,8 +930,6 @@ void _listenAvailableCollectors() {
   }
 
   Future<void> _cancelDropoff() async {
-    debugPrint("PROJECT ID: ${Firebase.app().options.projectId}");
-    debugPrint("AUTH UID: ${FirebaseAuth.instance.currentUser?.uid}");
     final requestId = _activeDropoffRequestId;
     if (requestId == null) return;
 
@@ -695,9 +937,10 @@ void _listenAvailableCollectors() {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: _sheet,
-        title: const Text("Cancel ride", style: TextStyle(color: _textPrimary)),
+        title:
+            const Text("Cancel Collection", style: TextStyle(color: _textPrimary)),
         content: const Text(
-          "Do you want to cancel this ride?",
+          "Do you want to cancel this Collection?",
           style: TextStyle(color: _textSecondary),
         ),
         actions: [
@@ -723,20 +966,6 @@ void _listenAvailableCollectors() {
     };
 
     try {
-      debugPrint("NEW BUILD REQUEST ID: $requestId");
-      debugPrint("NEW BUILD CANCEL PAYLOAD: $payload");
-
-      final user = FirebaseAuth.instance.currentUser;
-      debugPrint("AUTH UID: ${user?.uid}");
-
-      final snap = await FirebaseFirestore.instance
-          .collection('dropoff_requests')
-          .doc(requestId)
-          .get();
-
-      debugPrint("DOC EXISTS: ${snap.exists}");
-      debugPrint("DOC DATA: ${snap.data()}");
-
       await FirebaseFirestore.instance
           .collection('dropoff_requests')
           .doc(requestId)
@@ -753,18 +982,13 @@ void _listenAvailableCollectors() {
         _dirDistanceText = "";
         _dirDurationText = "";
         _dirDurationValueSec = null;
+        _activeTransactionUsesPinned = false;
       });
 
       _snack("Drop-off cancelled.", bg: _surface);
-    } on FirebaseException catch (e, st) {
-      debugPrint("❌ NEW BUILD cancel dropoff failed");
-      debugPrint("code: ${e.code}");
-      debugPrint("message: ${e.message}");
-      debugPrint("requestId: $requestId");
-      debugPrintStack(stackTrace: st);
-
+    } on FirebaseException catch (e) {
       if (!mounted) return;
-      _snack("NEW BUILD cancel failed: ${e.message}", bg: Colors.redAccent);
+      _snack("Cancel failed: ${e.message}", bg: Colors.redAccent);
     }
   }
 
@@ -784,24 +1008,19 @@ void _listenAvailableCollectors() {
   Future<void> _focusDropoffRoute() async {
     if (_mapController == null) return;
 
-    if (_currentPosition == null) {
-      await _mapController!.animateCamera(
-        CameraUpdate.newLatLngZoom(_moresLatLng, 16),
-      );
-      return;
-    }
+    final base = _routeBaseLatLng;
 
-    final me = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
-
-    final south =
-        me.latitude < _moresLatLng.latitude ? me.latitude : _moresLatLng.latitude;
-    final north =
-        me.latitude > _moresLatLng.latitude ? me.latitude : _moresLatLng.latitude;
-    final west = me.longitude < _moresLatLng.longitude
-        ? me.longitude
+    final south = base.latitude < _moresLatLng.latitude
+        ? base.latitude
+        : _moresLatLng.latitude;
+    final north = base.latitude > _moresLatLng.latitude
+        ? base.latitude
+        : _moresLatLng.latitude;
+    final west = base.longitude < _moresLatLng.longitude
+        ? base.longitude
         : _moresLatLng.longitude;
-    final east = me.longitude > _moresLatLng.longitude
-        ? me.longitude
+    final east = base.longitude > _moresLatLng.longitude
+        ? base.longitude
         : _moresLatLng.longitude;
 
     final bounds = LatLngBounds(
@@ -816,16 +1035,16 @@ void _listenAvailableCollectors() {
 
   Future<void> _openPickupFlowPage() async {
     if (_hasActivePickupRequest) {
-    _snack("You already have an active pickup request. Cancel it first.");
-    return;
-    } 
+      _snack("You already have an active pickup request. Cancel it first.");
+      return;
+    }
 
     if (_availableCollectors.isEmpty) {
       _snack("No available collectors right now.");
       return;
     }
 
-    if (!_locationReady || _currentPosition == null) {
+    if (!_locationReady && _pinnedPickupLatLng == null) {
       _snack("Still getting your location. Please wait...");
       return;
     }
@@ -855,10 +1074,17 @@ void _listenAvailableCollectors() {
         _dirDistanceText = "";
         _dirDurationText = "";
         _dirDurationValueSec = null;
+        _pinMode = false;
+        _activeTransactionUsesPinned = _pinnedPickupLatLng != null;
       });
 
       _listenToActivePickupRequest(result);
-      _snack("Pickup request sent.", bg: _accent);
+      _snack(
+        _pinnedPickupLatLng != null
+            ? "Pickup request sent using pinned residence."
+            : "Pickup request sent.",
+        bg: _accent,
+      );
     }
   }
 
@@ -935,41 +1161,8 @@ void _listenAvailableCollectors() {
     );
   }
 
-  Future<void> _showInfoDialog({
-    required String title,
-    required String message,
-  }) {
-    return showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: _sheet,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          title,
-          style: const TextStyle(
-            color: _textPrimary,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        content: Text(
-          message,
-          style: const TextStyle(color: _textSecondary),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _accent,
-              foregroundColor: _textPrimary,
-            ),
-            child: const Text("OK"),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _onMapTap(LatLng tapped) {
+    if (!_canUsePinControls) return;
     if (!_pinMode) return;
 
     setState(() {
@@ -977,7 +1170,7 @@ void _listenAvailableCollectors() {
       _pickupSource = "pin";
     });
 
-    _snack("Pickup location pinned.");
+    _snack("Pinned residence set. Routes will use this location.");
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(tapped, 16));
   }
 
@@ -988,34 +1181,39 @@ void _listenAvailableCollectors() {
       Marker(
         markerId: const MarkerId("mores_dropoff"),
         position: _moresLatLng,
-        infoWindow: InfoWindow(title: _moresName, snippet: _moresSubtitle),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        anchor: const Offset(0.20, 0.52),
+        infoWindow: InfoWindow(
+          title: _moresName,
+          snippet: _moresSubtitle,
+        ),
+        icon: _moresMarkerIcon ??
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        zIndex: 10,
       ),
     );
 
-    final p = _currentPosition;
-    if (p != null) {
-      markers.add(
-        Marker(
-          markerId: const MarkerId("user_pos"),
-          position: LatLng(p.latitude, p.longitude),
-          infoWindow: const InfoWindow(title: "You"),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-        ),
-      );
-    }
+    final LatLng? residenceLatLng = _pinnedPickupLatLng != null
+        ? _pinnedPickupLatLng
+        : (_currentPosition != null
+            ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
+            : null);
 
-    if (_pinnedPickupLatLng != null) {
+    if (residenceLatLng != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId("pickup_pin"),
-          position: _pinnedPickupLatLng!,
-          infoWindow: const InfoWindow(
-            title: "Pickup Location",
-            snippet: "Pinned by household",
+          markerId: const MarkerId("residence_basis"),
+          position: residenceLatLng,
+          anchor: const Offset(0.5, 0.55),
+          infoWindow: InfoWindow(
+            title:
+                _pinnedPickupLatLng != null ? "Pinned Residence" : "Your Location",
+            snippet: _pinnedPickupLatLng != null
+                ? "Using pinned residence"
+                : "Using realtime location",
           ),
-          icon:
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+          icon: _residenceMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          zIndex: 8,
         ),
       );
     }
@@ -1025,13 +1223,14 @@ void _listenAvailableCollectors() {
         Marker(
           markerId: const MarkerId("collector_live"),
           position: _collectorLatLng!,
+          anchor: const Offset(0.5, 0.55),
           infoWindow: InfoWindow(
             title: _collectorName ?? "Collector",
             snippet: "Approaching pickup location",
           ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueViolet,
-          ),
+          icon: _collectorMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+          zIndex: 4,
         ),
       );
     }
@@ -1115,8 +1314,8 @@ void _listenAvailableCollectors() {
                 onMapCreated: _onMapCreated,
                 initialCameraPosition:
                     CameraPosition(target: _defaultCenter, zoom: 14),
-                myLocationEnabled: _locationReady,
-                myLocationButtonEnabled: _locationReady,
+                myLocationEnabled: false,
+                myLocationButtonEnabled: false,
                 markers: _buildMarkers(),
                 polylines: _buildPolylines(),
                 onTap: _onMapTap,
@@ -1231,22 +1430,37 @@ void _listenAvailableCollectors() {
               bottom: 220,
               child: Column(
                 children: [
-                  FloatingActionButton(
-                    heroTag: "pinMode",
-                    mini: true,
-                    backgroundColor: _pinMode ? _accent : _surface,
-                    elevation: 0,
-                    onPressed: () {
-                      setState(() => _pinMode = !_pinMode);
-                      _snack(
-                        _pinMode
-                            ? "Pin mode ON: tap map to pin pickup."
-                            : "Pin mode OFF.",
-                      );
-                    },
-                    child: const Icon(Icons.push_pin_outlined, color: _textPrimary),
-                  ),
-                  const SizedBox(height: 10),
+                  if (_canUsePinControls) ...[
+                    FloatingActionButton(
+                      heroTag: "pinMode",
+                      mini: true,
+                      backgroundColor: _pinMode ? _accent : _surface,
+                      elevation: 0,
+                      onPressed: () {
+                        setState(() => _pinMode = !_pinMode);
+                        _snack(
+                          _pinMode
+                              ? "Pin mode ON: tap the map to set residence basis."
+                              : "Pin mode OFF.",
+                        );
+                      },
+                      child:
+                          const Icon(Icons.push_pin_outlined, color: _textPrimary),
+                    ),
+                    if (_pinnedPickupLatLng != null) ...[
+                      const SizedBox(height: 10),
+                      FloatingActionButton(
+                        heroTag: "clearPin",
+                        mini: true,
+                        backgroundColor: Colors.redAccent,
+                        elevation: 0,
+                        onPressed: _clearPinnedLocation,
+                        child:
+                            const Icon(Icons.close_rounded, color: _textPrimary),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                  ],
                   FloatingActionButton(
                     heroTag: "goMe",
                     mini: true,
@@ -1328,15 +1542,21 @@ void _listenAvailableCollectors() {
                               children: [
                                 Column(
                                   children: [
-                                    const Icon(Icons.radio_button_checked,
-                                        color: _blue, size: 20),
+                                    const Icon(
+                                      Icons.person_pin_circle_rounded,
+                                      color: _blue,
+                                      size: 20,
+                                    ),
                                     Container(
                                       width: 1,
                                       height: 30,
                                       color: _blue.o(0.35),
                                     ),
-                                    const Icon(Icons.location_on,
-                                        color: _accent, size: 20),
+                                    const Icon(
+                                      Icons.storefront_rounded,
+                                      color: _accent,
+                                      size: 20,
+                                    ),
                                   ],
                                 ),
                                 const SizedBox(width: 16),
@@ -1346,7 +1566,7 @@ void _listenAvailableCollectors() {
                                         CrossAxisAlignment.start,
                                     children: [
                                       const Text(
-                                        "YOUR LOCATION",
+                                        "RESIDENCE",
                                         style: TextStyle(
                                           fontSize: 10,
                                           color: _textMuted,
@@ -1356,11 +1576,12 @@ void _listenAvailableCollectors() {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        !_locationReady
+                                        !_locationReady &&
+                                                _pinnedPickupLatLng == null
                                             ? "Locating..."
                                             : _pinnedPickupLatLng != null
-                                                ? "Pinned Location"
-                                                : "Current Location",
+                                                ? "Pinned residence basis"
+                                                : "Current residence basis",
                                         style: const TextStyle(
                                           fontSize: 14,
                                           color: _textPrimary,
@@ -1369,7 +1590,7 @@ void _listenAvailableCollectors() {
                                       ),
                                       const SizedBox(height: 14),
                                       const Text(
-                                        "DESTINATION",
+                                        "MORES SCRAP",
                                         style: TextStyle(
                                           fontSize: 10,
                                           color: _textMuted,
@@ -1420,198 +1641,247 @@ void _listenAvailableCollectors() {
                                       : _dirDistanceText,
                                 ),
                                 _statDivider(),
-                                _statItem(Icons.store_mall_directory, "Mores"),
+                                _statItem(Icons.storefront_rounded, "Mores"),
                               ],
                             ),
                           ),
                           const SizedBox(height: 16),
-if (_isDelivering) ...[
-  Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: _surface,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: _border),
-    ),
-    child: Row(
-      children: [
-        Icon(
-          _dropoffStatus == "arrived"
-              ? Icons.check_circle
-              : Icons.local_shipping_outlined,
-          color: _dropoffStatus == "arrived" ? _accent : _blue,
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            _dropoffStatus == "arrived"
-                ? "You have arrived at $_moresName"
-                : "You are on the way to $_moresName",
-            style: const TextStyle(
-              color: _textPrimary,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-      ],
-    ),
-  ),
-  const SizedBox(height: 16),
-  Row(
-    children: [
-      Expanded(
-        child: SizedBox(
-          height: 54,
-          child: ElevatedButton.icon(
-            onPressed: _focusDropoffRoute,
-            icon: const Icon(Icons.map_outlined),
-            label: const Text("ROUTE"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _surfaceAlt,
-              foregroundColor: _textPrimary,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: _border),
-              ),
-              elevation: 0,
-            ),
-          ),
-        ),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: SizedBox(
-          height: 54,
-          child: ElevatedButton.icon(
-            onPressed:
-                _dropoffStatus == "arrived" ? null : _markDropoffArrived,
-            icon: const Icon(Icons.check_circle_outline),
-            label: const Text("ARRIVED"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _accent,
-              foregroundColor: _textPrimary,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              elevation: 0,
-            ),
-          ),
-        ),
-      ),
-    ],
-  ),
-  const SizedBox(height: 10),
-  SizedBox(
-    height: 54,
-    child: ElevatedButton.icon(
-      onPressed: _dropoffStatus == "arrived" ? null : _cancelDropoff,
-      icon: const Icon(Icons.cancel_outlined),
-      label: const Text("CANCEL RIDE"),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.redAccent,
-        foregroundColor: _textPrimary,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        elevation: 0,
-      ),
-    ),
-  ),
-] else if (_isPickup) ...[
-  Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: _surface,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: _border),
-    ),
-    child: Row(
-      children: [
-        const SizedBox(
-          width: 22,
-          height: 22,
-          child: CircularProgressIndicator(
-            strokeWidth: 2.5,
-            valueColor: AlwaysStoppedAnimation<Color>(_accent),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            _collectorName == null
-                ? "Waiting for collector to accept your pickup request"
-                : "Collector $_collectorName is assigned",
-            style: const TextStyle(
-              color: _textPrimary,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-      ],
-    ),
-  ),
-  const SizedBox(height: 10),
-  Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: _surfaceAlt,
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: _border),
-    ),
-    child: const Text(
-      "Pickup and drop-off actions are disabled while your pickup order is active. Cancel it from the Order page.",
-      style: TextStyle(
-        color: _textSecondary,
-        fontWeight: FontWeight.w700,
-        height: 1.4,
-      ),
-    ),
-  ),
-] else ...[
-  Row(
-    children: [
-      Expanded(
-        child: SizedBox(
-          height: 52,
-          child: ElevatedButton.icon(
-            onPressed: _startDirectionsToMores,
-            icon: const Icon(Icons.directions),
-            label: const Text("DROP-OFF"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _surfaceAlt,
-              foregroundColor: _textPrimary,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-                side: const BorderSide(color: _border),
-              ),
-              elevation: 0,
-            ),
-          ),
-        ),
-      ),
-      const SizedBox(width: 12),
-      Expanded(
-        child: SizedBox(
-          height: 52,
-          child: ElevatedButton.icon(
-            onPressed: _openPickupFlowPage,
-            icon: const Icon(Icons.local_shipping),
-            label: const Text("PICKUP"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _accent,
-              foregroundColor: _textPrimary,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-              elevation: 0,
-            ),
-          ),
-        ),
-      ),
-    ],
-  ),
-],
+                          if (_isUsingPinnedForActiveTransaction) ...[
+                            _activePinnedNotice(),
+                            const SizedBox(height: 12),
+                          ],
+                          if (_isDelivering) ...[
+                            Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: _surface,
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: _border),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    _dropoffStatus == "awaiting_confirmation"
+                                        ? Icons.check_circle
+                                        : Icons.local_shipping_outlined,
+                                    color: _dropoffStatus ==
+                                            "awaiting_confirmation"
+                                        ? _accent
+                                        : _blue,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      _dropoffStatus ==
+                                              "awaiting_confirmation"
+                                          ? "You are now at $_moresName. Waiting for confirmation."
+                                          : "You are on the way to $_moresName",
+                                      style: const TextStyle(
+                                        color: _textPrimary,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            if (_dropoffStatus ==
+                                "awaiting_confirmation") ...[
+                              SizedBox(
+                                width: double.infinity,
+                                child: Container(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: _surfaceAlt,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: _border),
+                                  ),
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.check_circle,
+                                          color: _accent),
+                                      SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          "You are now in Mores Scrap",
+                                          style: TextStyle(
+                                            color: _textPrimary,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ] else ...[
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: SizedBox(
+                                      height: 54,
+                                      child: ElevatedButton.icon(
+                                        onPressed: _focusDropoffRoute,
+                                        icon: const Icon(Icons.map_outlined),
+                                        label: const Text("ROUTE"),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: _surfaceAlt,
+                                          foregroundColor: _textPrimary,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                            side: const BorderSide(
+                                                color: _border),
+                                          ),
+                                          elevation: 0,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: SizedBox(
+                                      height: 54,
+                                      child: ElevatedButton.icon(
+                                        onPressed: _markDropoffArrived,
+                                        icon: const Icon(
+                                            Icons.check_circle_outline),
+                                        label: const Text("ARRIVED"),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: _accent,
+                                          foregroundColor: _textPrimary,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                          ),
+                                          elevation: 0,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              height: 54,
+                              child: ElevatedButton.icon(
+                                onPressed:
+                                    _dropoffStatus == "awaiting_confirmation"
+                                        ? null
+                                        : _cancelDropoff,
+                                icon: const Icon(Icons.cancel_outlined),
+                                label: const Text("CANCEL RIDE"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.redAccent,
+                                  foregroundColor: _textPrimary,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  elevation: 0,
+                                ),
+                              ),
+                            ),
+                          ] else if (_isPickup) ...[
+                            Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: _surface,
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: _border),
+                              ),
+                              child: Row(
+                                children: [
+                                  const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.5,
+                                      valueColor:
+                                          AlwaysStoppedAnimation<Color>(
+                                              _accent),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      _collectorName == null
+                                          ? "Waiting for collector to accept your pickup request"
+                                          : "Collector $_collectorName is assigned",
+                                      style: const TextStyle(
+                                        color: _textPrimary,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _surfaceAlt,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: _border),
+                              ),
+                              child: const Text(
+                                "Pin mode can be used when the resident is not at home. Pickup and drop-off will use the pinned residence basis.",
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ] else ...[
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: SizedBox(
+                                    height: 52,
+                                    child: ElevatedButton.icon(
+                                      onPressed: _startDirectionsToMores,
+                                      icon: const Icon(Icons.directions),
+                                      label: const Text("DROP-OFF"),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: _surfaceAlt,
+                                        foregroundColor: _textPrimary,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(18),
+                                          side: const BorderSide(color: _border),
+                                        ),
+                                        elevation: 0,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: SizedBox(
+                                    height: 52,
+                                    child: ElevatedButton.icon(
+                                      onPressed: _openPickupFlowPage,
+                                      icon: const Icon(Icons.local_shipping),
+                                      label: const Text("PICKUP"),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: _accent,
+                                        foregroundColor: _textPrimary,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(18),
+                                        ),
+                                        elevation: 0,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                           const SizedBox(height: 10),
                           Center(
                             child: Container(
@@ -1685,5 +1955,141 @@ if (_isDelivering) ...[
         shape: BoxShape.circle,
       ),
     );
+  }
+}
+
+class _GeoMarkerPainter {
+  final IconData icon;
+  final Color iconColor;
+  final Color backgroundColor;
+  final Color borderColor;
+  final double size;
+  final double iconSize;
+  final String? label;
+
+  _GeoMarkerPainter({
+    required this.icon,
+    required this.iconColor,
+    required this.backgroundColor,
+    required this.borderColor,
+    required this.size,
+    required this.iconSize,
+    this.label,
+  });
+
+  void paint(Canvas canvas, Size s) {
+    final hasLabel = label != null && label!.trim().isNotEmpty;
+
+    if (!hasLabel) {
+      final center = Offset(s.width / 2, s.height / 2);
+      final radius = s.width / 2.9;
+
+      final shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.24)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+      canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
+
+      final fillPaint = Paint()..color = backgroundColor;
+      canvas.drawCircle(center, radius, fillPaint);
+
+      final borderPaint = Paint()
+        ..color = borderColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4;
+      canvas.drawCircle(center, radius, borderPaint);
+
+      final iconPainter = TextPainter(textDirection: TextDirection.ltr);
+      iconPainter.text = TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontSize: iconSize,
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          color: iconColor,
+        ),
+      );
+      iconPainter.layout();
+
+      final iconOffset = Offset(
+        center.dx - iconPainter.width / 2,
+        center.dy - iconPainter.height / 2,
+      );
+      iconPainter.paint(canvas, iconOffset);
+      return;
+    }
+
+    final markerCenter = Offset(s.width * 0.20, s.height * 0.52);
+    final markerRadius = s.width * 0.15;
+
+    final markerShadow = Paint()
+      ..color = Colors.black.withOpacity(0.28)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+    canvas.drawCircle(markerCenter.translate(0, 4), markerRadius, markerShadow);
+
+    final markerFill = Paint()..color = backgroundColor;
+    canvas.drawCircle(markerCenter, markerRadius, markerFill);
+
+    final markerBorder = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4;
+    canvas.drawCircle(markerCenter, markerRadius, markerBorder);
+
+    final iconPainter = TextPainter(textDirection: TextDirection.ltr);
+    iconPainter.text = TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        fontSize: iconSize,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+        color: iconColor,
+      ),
+    );
+    iconPainter.layout();
+
+    final iconOffset = Offset(
+      markerCenter.dx - iconPainter.width / 2,
+      markerCenter.dy - iconPainter.height / 2,
+    );
+    iconPainter.paint(canvas, iconOffset);
+
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+      ellipsis: '…',
+    );
+
+    textPainter.text = TextSpan(
+      text: label!,
+      style: TextStyle(
+        color: const Color(0xFFE2E8F0),
+        fontSize: s.width * 0.085,
+        fontWeight: FontWeight.w700,
+        letterSpacing: -0.3,
+      ),
+    );
+
+    textPainter.layout();
+
+    final shadowPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+    );
+    shadowPainter.text = TextSpan(
+      text: label!,
+      style: TextStyle(
+        color: Colors.black.withOpacity(0.6),
+        fontSize: s.width * 0.085,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+    shadowPainter.layout();
+
+    final textOffset = Offset(
+      markerCenter.dx + markerRadius + 10,
+      markerCenter.dy - textPainter.height / 2,
+    );
+
+    shadowPainter.paint(canvas, textOffset.translate(1.5, 1.5));
+    textPainter.paint(canvas, textOffset);
   }
 }
