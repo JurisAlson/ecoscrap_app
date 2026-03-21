@@ -46,6 +46,7 @@ class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
 
     return "unknown";
   }
+  
 
   static const Map<String, String> restrictionReasonMap = {
     "potential_fake": "Potential fake account / identity",

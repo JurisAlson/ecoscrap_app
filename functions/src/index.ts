@@ -1362,8 +1362,6 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
             subject: "EcoScrap Collector Application Approved",
             html: `
             <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-              <h2 style="color:#1FA9A7;">EcoScrap</h2>
-
               <p>Dear ${name},</p>
 
               <p>We are pleased to inform you that your <strong>collector application has been approved</strong>.</p>
@@ -1500,8 +1498,6 @@ export const notifyResidentAdminApproved = onDocumentUpdated(
           subject: "EcoScrap Resident Registration Approved",
           html: `
         <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-          <h2 style="color:#1FA9A7;">EcoScrap</h2>
-
           <p>Dear ${name},</p>
 
           <p>Your <strong>residency verification has been successfully approved</strong>.</p>
