@@ -1,12 +1,13 @@
 import 'dart:async';
-import 'dart:ui';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:geolocator/geolocator.dart';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'dart:ui' as ui;
 
 extension TrackingOpacityFix on Color {
   Color o(double opacity) =>
@@ -15,7 +16,6 @@ extension TrackingOpacityFix on Color {
 
 class CollectorTrackingPage extends StatefulWidget {
   final String? requestId;
-
   final LatLng? fixedDestination;
   final String destinationTitle;
   final String destinationAddress;
@@ -63,11 +63,159 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   static const Color _textMuted = Color(0xFF64748B);
   static const String _moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
 
+static const String _darkMapStyle = r'''
+[
+  {
+    "elementType": "geometry",
+    "stylers": [{"color": "#0b1220"}]
+  },
+  {
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#8aa0b8"}]
+  },
+  {
+    "elementType": "labels.text.stroke",
+    "stylers": [{"color": "#0b1220"}]
+  },
+  {
+    "elementType": "labels.icon",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "administrative",
+    "elementType": "geometry",
+    "stylers": [{"color": "#2b3445"}]
+  },
+  {
+    "featureType": "administrative",
+    "elementType": "labels.icon",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi",
+    "elementType": "labels",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi",
+    "elementType": "labels.icon",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi.business",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi.business",
+    "elementType": "labels",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "geometry",
+    "stylers": [{"color": "#0f1a2a"}]
+  },
+  {
+    "featureType": "poi.park",
+    "elementType": "labels",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "road",
+    "elementType": "geometry",
+    "stylers": [{"color": "#162235"}]
+  },
+  {
+    "featureType": "road",
+    "elementType": "geometry.stroke",
+    "stylers": [{"color": "#0b1220"}]
+  },
+  {
+    "featureType": "road",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#93a8bf"}]
+  },
+  {
+    "featureType": "road",
+    "elementType": "labels.icon",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "geometry",
+    "stylers": [{"color": "#1f2f48"}]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "geometry.stroke",
+    "stylers": [{"color": "#0b1220"}]
+  },
+  {
+    "featureType": "road.highway",
+    "elementType": "labels.icon",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "transit",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "transit.station",
+    "stylers": [{"visibility": "off"}]
+  },
+  {
+    "featureType": "water",
+    "elementType": "geometry",
+    "stylers": [{"color": "#06101c"}]
+  },
+  {
+    "featureType": "water",
+    "elementType": "labels.text.fill",
+    "stylers": [{"color": "#6f879f"}]
+  }
+]
+''';
+
+  final FirebaseFunctions _functions =
+      FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+
+  GoogleMapController? _mapController;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _requestSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sellRequestSub;
+
+  LatLng? _pickupLatLng;
+  LatLng? _collectorLatLng;
+  LatLng? _myLatLng;
+
+  String _collectorName = "Collector";
+  String _status = "";
+  String _pickupSource = "";
+  String _street = "";
+  String _subdivision = "";
+  String _landmark = "";
+  String _phoneNumber = "";
+
+  String _routeDistanceText = "";
+  String _routeDurationText = "";
+
+  List<LatLng> _collectorRoutePoints = [];
+
+  bool _initialFitDone = false;
+  bool _loading = true;
   bool _markingArrived = false;
   bool _collectorArrivedToMores = false;
   bool _sellTransactionAudited = false;
 
+  double _collectorHeading = 0;
+  BitmapDescriptor? _collectorIcon;
+  BitmapDescriptor? _householdMarkerIcon;
+
   bool get _isFixedDestinationMode => widget.fixedDestination != null;
+
   bool get _hasValidRequestId =>
       widget.requestId != null && widget.requestId!.trim().isNotEmpty;
 
@@ -91,8 +239,9 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
         ? widget.destinationTitle
         : "Pinned / GPS pickup location";
   }
+
   String get _sourceLabel =>
-    widget.trackingType == "sell" ? "TRIP TYPE" : "PICKUP SOURCE";
+      widget.trackingType == "sell" ? "TRIP TYPE" : "PICKUP SOURCE";
 
   String get _liveStatusText {
     if (_collectorLatLng != null) {
@@ -105,65 +254,43 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
         ? "Waiting for your current location"
         : "Waiting for collector location update";
   }
-  String _routeDistanceText = "";
-  String _routeDurationText = "";
-  
 
-  String get _topBarTitle =>
-      _isFixedDestinationMode ? "Route to ${widget.destinationTitle}" : "Track Collector";
+  String get _topBarTitle => _isFixedDestinationMode
+      ? "Route to ${widget.destinationTitle}"
+      : "Track Collector";
 
   String get _pickupMarkerTitle =>
       _isFixedDestinationMode ? widget.destinationTitle : 'PICKUP';
 
-  static const String _darkMapStyle = r'''
-[
-  {"elementType":"geometry","stylers":[{"color":"#0b1220"}]},
-  {"elementType":"labels.text.fill","stylers":[{"color":"#8aa0b8"}]},
-  {"elementType":"labels.text.stroke","stylers":[{"color":"#0b1220"}]},
-  {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#2b3445"}]},
-  {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#7d93aa"}]},
-  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#0f1a2a"}]},
-  {"featureType":"road","elementType":"geometry","stylers":[{"color":"#162235"}]},
-  {"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
-  {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#93a8bf"}]},
-  {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#1f2f48"}]},
-  {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
-  {"featureType":"transit","elementType":"geometry","stylers":[{"color":"#142033"}]},
-  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#06101c"}]},
-  {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#6f879f"}]}
-]
-''';
+  @override
+  void initState() {
+    super.initState();
+    _initPage();
 
-  final FirebaseFunctions _functions =
-      FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+    if (widget.trackingType == "sell") {
+      _listenToSellRequest();
+    }
+  }
 
-  GoogleMapController? _mapController;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _requestSub;
+  @override
+  void dispose() {
+    _requestSub?.cancel();
+    _sellRequestSub?.cancel();
+    _mapController?.dispose();
+    super.dispose();
+  }
 
-  LatLng? _pickupLatLng;
-  LatLng? _collectorLatLng;
+  Future<void> _initPage() async {
+    await _loadCollectorIcon();
+    await _initMyLocation();
 
-  String _collectorName = "Collector";
-  String _status = "";
-  String _pickupSource = "";
-  String _street = "";
-  String _subdivision = "";
-  String _landmark = "";
-  String _phoneNumber = "";
+    if (_isFixedDestinationMode) {
+      await _setupFixedDestinationMode();
+    } else {
+      _listenToRequest();
+    }
+  }
 
-  Position? _myPosition;
-  LatLng? _myLatLng;
-
-  List<LatLng> _collectorRoutePoints = [];
-
-  bool _initialFitDone = false;
-  bool _loading = true;
-
-  double _collectorHeading = 0;
-  BitmapDescriptor? _collectorIcon;
-  BitmapDescriptor? _householdMarkerIcon; 
-
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sellRequestSub;
   void _listenToSellRequest() {
     if (widget.sellRequestId == null || widget.sellRequestId!.trim().isEmpty) {
       return;
@@ -181,7 +308,6 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       if (!doc.exists || !mounted) return;
 
       final data = doc.data() ?? {};
-
       final collectorArrived = data['collectorArrived'] == true;
       final status = (data['status'] ?? '').toString().trim().toLowerCase();
 
@@ -200,30 +326,20 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       }
     });
   }
-  @override
-  void initState() {
-    super.initState();
-    _initPage();
 
-    if (widget.trackingType == "sell") {
-      _listenToSellRequest();
-    }
+  Future<void> _restoreCollectorAvailability() async {
+    final collectorId = FirebaseAuth.instance.currentUser?.uid;
+    if (collectorId == null) return;
+
+    await FirebaseFirestore.instance.collection('Users').doc(collectorId).set({
+      "isOnline": true,
+      "availabilityStatus": "available",
+      "isAvailableForHousehold": true,
+      "activeMoresSellRequestId": FieldValue.delete(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
-Future<void> _restoreCollectorAvailability() async {
-  final collectorId = FirebaseAuth.instance.currentUser?.uid;
-  if (collectorId == null) return;
 
-  await FirebaseFirestore.instance
-      .collection('Users')
-      .doc(collectorId)
-      .set({
-    "isOnline": true,
-    "availabilityStatus": "available",
-    "isAvailableForHousehold": true,
-    "activeMoresSellRequestId": FieldValue.delete(),
-    "updatedAt": FieldValue.serverTimestamp(),
-  }, SetOptions(merge: true));
-}
   Future<void> _setupFixedDestinationMode() async {
     final destination = widget.fixedDestination;
     if (destination == null) return;
@@ -252,15 +368,14 @@ Future<void> _restoreCollectorAvailability() async {
     await _fitMap();
     _initialFitDone = true;
   }
+
   Future<void> _onChatPressed() async {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("Chat coming soon.")),
     );
   }
-  
 
-  
-   Future<void> _onArrivedPressed() async {
+  Future<void> _onArrivedPressed() async {
     if (_markingArrived || _collectorArrivedToMores || _sellTransactionAudited) {
       return;
     }
@@ -391,18 +506,17 @@ Future<void> _restoreCollectorAvailability() async {
     }
 
     try {
-await FirebaseFirestore.instance
-    .collection('Users')
-    .doc(_moresUid)
-    .collection('sell_requests')
-    .doc(widget.sellRequestId!)
-    .update({
-  "status": "cancelled",
-  "updatedAt": FieldValue.serverTimestamp(),
-});
+      await FirebaseFirestore.instance
+          .collection('Users')
+          .doc(_moresUid)
+          .collection('sell_requests')
+          .doc(widget.sellRequestId!)
+          .update({
+        "status": "cancelled",
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
 
-await _restoreCollectorAvailability();
-      
+      await _restoreCollectorAvailability();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -417,16 +531,7 @@ await _restoreCollectorAvailability();
       );
     }
   }
-  Future<void> _initPage() async {
-    await _loadCollectorIcon();
-    await _initMyLocation();
 
-    if (_isFixedDestinationMode) {
-      await _setupFixedDestinationMode();
-    } else {
-      _listenToRequest();
-    }
-  }
   Future<BitmapDescriptor> _iconToMarker({
     required IconData icon,
     required Color iconColor,
@@ -454,14 +559,6 @@ await _restoreCollectorAvailability();
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
 
     return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
-  }
-
-  @override
-  void dispose() {
-    _requestSub?.cancel();
-    _sellRequestSub?.cancel();
-    _mapController?.dispose();
-    super.dispose();
   }
 
   Future<void> _onMapCreated(GoogleMapController controller) async {
@@ -493,7 +590,7 @@ await _restoreCollectorAvailability();
         setState(() {});
       }
     } catch (e) {
-      debugPrint("❌ Failed to build marker icons: $e");
+      debugPrint("Failed to build marker icons: $e");
     }
   }
 
@@ -529,9 +626,6 @@ await _restoreCollectorAvailability();
         heading = headingRaw.toDouble();
       }
 
-      debugPrint('collectorGp: $collectorGp');
-      debugPrint('headingRaw: $headingRaw');
-
       LatLng? pickup;
       LatLng? collector;
 
@@ -566,7 +660,11 @@ await _restoreCollectorAvailability();
         );
       } else {
         if (!mounted) return;
-        setState(() => _collectorRoutePoints = []);
+        setState(() {
+          _collectorRoutePoints = [];
+          _routeDistanceText = "";
+          _routeDurationText = "";
+        });
       }
 
       if (!_initialFitDone && _pickupLatLng != null) {
@@ -577,17 +675,12 @@ await _restoreCollectorAvailability();
       } else if (previousCollectorWasNull && _collectorLatLng != null) {
         await _fitMap();
       }
-
-      debugPrint('request data: $data');
-      debugPrint('collectorLiveLocation: ${data['collectorLiveLocation']}');
-      debugPrint('collectorLocation: ${data['collectorLocation']}');
     });
   }
 
   Future<void> _buildCollectorRouteToPickup({
     required LatLng collectorLatLng,
     required LatLng pickupLatLng,
-    
   }) async {
     try {
       final callable = _functions.httpsCallable('getDirections');
@@ -599,11 +692,11 @@ await _restoreCollectorAvailability();
 
       final data = result.data;
       if (data is! Map) return;
+
       final distanceText = (data['distanceText'] ?? '').toString();
       final durationText = (data['durationText'] ?? '').toString();
-      
-
       final points = data['points'] as String?;
+
       if (points == null || points.isEmpty) {
         if (!mounted) return;
         setState(() {
@@ -661,7 +754,6 @@ await _restoreCollectorAvailability();
 
       if (!mounted) return;
       setState(() {
-        _myPosition = pos;
         _myLatLng = LatLng(pos.latitude, pos.longitude);
       });
     } catch (e) {
@@ -735,37 +827,79 @@ await _restoreCollectorAvailability();
     return points;
   }
 
-  Set<Marker> _buildMarkers() {
-    final markers = <Marker>{};
+  double _bearingBetween(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180.0;
+    final lon1 = from.longitude * math.pi / 180.0;
+    final lat2 = to.latitude * math.pi / 180.0;
+    final lon2 = to.longitude * math.pi / 180.0;
 
-    if (_pickupLatLng != null) {
-      markers.add(
-        Marker(
-          markerId: const MarkerId('pickup'),
-          position: _pickupLatLng!,
-          infoWindow: InfoWindow(title: _pickupMarkerTitle),
-          icon: _householdMarkerIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
-          zIndex: 1,
-        ),
-      );
-    }
+    final dLon = lon2 - lon1;
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
 
-    if (_collectorLatLng != null) {
-      markers.add(
-        Marker(
-          markerId: const MarkerId('collector'),
-          position: _collectorLatLng!,
-          infoWindow: InfoWindow(title: _displayCollectorName),
-          icon: _collectorIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-          zIndex: 3,
-        ),
-      );
-    }
-
-    return markers;
+    final bearing = math.atan2(y, x) * 180.0 / math.pi;
+    return (bearing + 360.0) % 360.0;
   }
+
+  double _normalizeRotation(double angle) {
+    final normalized = angle % 360;
+    return normalized < 0 ? normalized + 360 : normalized;
+  }
+
+Set<Marker> _buildMarkers() {
+  final markers = <Marker>{};
+
+  if (_pickupLatLng != null) {
+    double householdRotation = 0;
+
+    if (_collectorRoutePoints.length >= 2) {
+      final p1 = _collectorRoutePoints[_collectorRoutePoints.length - 2];
+      final p2 = _collectorRoutePoints.last;
+      householdRotation = _bearingBetween(p1, p2);
+    }
+
+    markers.add(
+      Marker(
+        markerId: const MarkerId('pickup'),
+        position: _pickupLatLng!,
+        infoWindow: InfoWindow(title: _pickupMarkerTitle),
+        icon: _householdMarkerIcon ??
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
+        rotation: _normalizeRotation(householdRotation + 90),
+        flat: true,
+        anchor: const Offset(0.5, 0.5),
+        zIndex: 1,
+      ),
+    );
+  }
+
+  if (_collectorLatLng != null) {
+    double rotation = _collectorHeading;
+
+    if (rotation == 0 && _collectorRoutePoints.length >= 2) {
+      final p1 = _collectorRoutePoints.first;
+      final p2 = _collectorRoutePoints[1];
+      rotation = _bearingBetween(p1, p2);
+    }
+
+    markers.add(
+      Marker(
+        markerId: const MarkerId('collector'),
+        position: _collectorLatLng!,
+        infoWindow: InfoWindow(title: _displayCollectorName),
+        icon: _collectorIcon ??
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+        rotation: _normalizeRotation(rotation + 140),
+        flat: true,
+        anchor: const Offset(0.5, 0.5),
+        zIndex: 3,
+      ),
+    );
+  }
+
+  return markers;
+}
 
   Set<Polyline> _buildPolylines() {
     if (_collectorRoutePoints.isEmpty) return <Polyline>{};
@@ -862,7 +996,7 @@ await _restoreCollectorAvailability();
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
@@ -876,7 +1010,7 @@ await _restoreCollectorAvailability();
     );
   }
 
-    Widget _topBar() {
+  Widget _topBar() {
     return Positioned(
       top: 56,
       left: 16,
@@ -952,7 +1086,7 @@ await _restoreCollectorAvailability();
         return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
             child: Container(
               decoration: BoxDecoration(
                 color: _sheet.o(0.97),
@@ -1067,7 +1201,9 @@ await _restoreCollectorAvailability();
                         child: _infoTile(
                           icon: Icons.route_outlined,
                           label: "DISTANCE",
-                          value: _routeDistanceText.isEmpty ? "Calculating..." : _routeDistanceText,
+                          value: _routeDistanceText.isEmpty
+                              ? "Calculating..."
+                              : _routeDistanceText,
                           valueColor: _textPrimary,
                         ),
                       ),
@@ -1076,7 +1212,9 @@ await _restoreCollectorAvailability();
                         child: _infoTile(
                           icon: Icons.schedule_outlined,
                           label: "ETA",
-                          value: _routeDurationText.isEmpty ? "Calculating..." : _routeDurationText,
+                          value: _routeDurationText.isEmpty
+                              ? "Calculating..."
+                              : _routeDurationText,
                           valueColor: _textPrimary,
                         ),
                       ),
@@ -1100,7 +1238,6 @@ await _restoreCollectorAvailability();
                       ),
                     ),
                   ),
-
                   if (widget.trackingType == "sell") ...[
                     const SizedBox(height: 12),
                     Row(
@@ -1143,52 +1280,52 @@ await _restoreCollectorAvailability();
                           ),
                       ],
                     ),
-if (widget.showArrivedButton) ...[
-  const SizedBox(height: 12),
-  SizedBox(
-    width: double.infinity,
-    child: ElevatedButton.icon(
-      onPressed: (_markingArrived ||
-              _collectorArrivedToMores ||
-              _sellTransactionAudited)
-          ? null
-          : _onArrivedPressed,
-      icon: const Icon(Icons.location_on_outlined),
-      label: Text(
-        _markingArrived
-            ? "CONFIRMING..."
-            : _collectorArrivedToMores
-                ? "ARRIVED"
-                : "YOU HAVE ARRIVED",
-      ),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: _accent,
-        disabledBackgroundColor: _surfaceAlt,
-        disabledForegroundColor: _textSecondary,
-        foregroundColor: _bg,
-        padding: const EdgeInsets.symmetric(vertical: 15),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        elevation: 0,
-      ),
-    ),
-  ),
-  const SizedBox(height: 10),
-  Text(
-    _sellTransactionAudited
-        ? "Transaction completed and audited by Mores Scrap."
-        : _collectorArrivedToMores
-            ? "You have marked yourself as arrived. Waiting for Mores Scrap to save and audit the transaction."
-            : "Press this only when you are already at Mores Scrap.",
-    textAlign: TextAlign.center,
-    style: const TextStyle(
-      color: _textSecondary,
-      fontSize: 12,
-      fontWeight: FontWeight.w600,
-    ),
-  ),
-],
+                    if (widget.showArrivedButton) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: (_markingArrived ||
+                                  _collectorArrivedToMores ||
+                                  _sellTransactionAudited)
+                              ? null
+                              : _onArrivedPressed,
+                          icon: const Icon(Icons.location_on_outlined),
+                          label: Text(
+                            _markingArrived
+                                ? "CONFIRMING..."
+                                : _collectorArrivedToMores
+                                    ? "ARRIVED"
+                                    : "YOU HAVE ARRIVED",
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _accent,
+                            disabledBackgroundColor: _surfaceAlt,
+                            disabledForegroundColor: _textSecondary,
+                            foregroundColor: _bg,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            elevation: 0,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        _sellTransactionAudited
+                            ? "Transaction completed and audited by Mores Scrap."
+                            : _collectorArrivedToMores
+                                ? "You have marked yourself as arrived. Waiting for Mores Scrap to save and audit the transaction."
+                                : "Press this only when you are already at Mores Scrap.",
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: _textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ] else ...[
                     const SizedBox(height: 12),
                     SizedBox(
@@ -1342,6 +1479,7 @@ if (widget.showArrivedButton) ...[
     );
   }
 }
+
 class _TrackingMarkerPainter {
   final IconData icon;
   final Color iconColor;

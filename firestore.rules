@@ -156,14 +156,14 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/dropoff_requests/$(requestId)).data;
     }
 
-function dropoffReqAllowsChat(requestId) {
-  return dropoffReqExists(requestId)
-    && dropoffReqById(requestId).active == true
-    && (
-      dropoffReqById(requestId).status == "en_route"
-      || dropoffReqById(requestId).status == "awaiting_confirmation"
-    );
-}
+    function dropoffReqAllowsChat(requestId) {
+      return dropoffReqExists(requestId)
+        && dropoffReqById(requestId).active == true
+        && (
+          dropoffReqById(requestId).status == "en_route"
+          || dropoffReqById(requestId).status == "awaiting_confirmation"
+        );
+    }
 
     function dropoffReqIsTerminated(requestId) {
       return dropoffReqExists(requestId)
@@ -524,17 +524,21 @@ function dropoffReqAllowsChat(requestId) {
     // -------------------------
     match /Users/{uid} {
 
+      match /inventory/{docId} {
+        allow read, write: if isOwner(uid) || isAdmin();
+      }
+
       allow get: if isOwner(uid) || isAdmin() || (signedIn() && uid == primaryJunkshopUid());
 
       allow read: if isOwner(uid) || isAdmin()
-      || (signedIn() && uid == primaryJunkshopUid())
-      || (
-        signedIn()
-        && (
-          (resource.data.role == "collector" || resource.data.Roles == "collector")
-          && resource.data.isOnline == true
-        )
-      );
+        || (signedIn() && uid == primaryJunkshopUid())
+        || (
+          signedIn()
+          && (
+            (resource.data.role == "collector" || resource.data.Roles == "collector")
+            && resource.data.isOnline == true
+          )
+        );
 
       allow list: if signedIn();
 
@@ -593,6 +597,16 @@ function dropoffReqAllowsChat(requestId) {
         || (
           isOwner(uid)
           && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "isAvailableForHousehold",
+            "availabilityStatus",
+            "activeRequestId",
+            "activeMoresSellRequestId",
+            "updatedAt"
+          ])
+        )
+        || (
+          isOwner(uid)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
             "uid",
             "emailDisplay",
             "name",
@@ -637,12 +651,23 @@ function dropoffReqAllowsChat(requestId) {
 
     // ==========================================================
     // User Collector Transactions
-    // ==========================================================    
+    // ==========================================================
     match /Users/{collectorUid}/transactions/{txnId} {
+
+      allow create: if isAdmin()
+        || isOwner(collectorUid)
+        || (
+          isCollector()
+          && request.resource.data.requestId is string
+          && reqExistsById(request.resource.data.requestId)
+          && reqById(request.resource.data.requestId).collectorId == request.auth.uid
+          && reqById(request.resource.data.requestId).householdId == collectorUid
+          && reqById(request.resource.data.requestId).type == "pickup"
+        );
 
       allow read: if isOwner(collectorUid) || isAdmin();
 
-      allow create, update: if isOwner(collectorUid) || isAdmin()
+      allow update: if isOwner(collectorUid) || isAdmin()
         || (
           isPrimaryJunkshop()
           && request.resource.data.diff(resource.data).changedKeys().hasOnly([
@@ -704,26 +729,26 @@ function dropoffReqAllowsChat(requestId) {
     // ==========================================================
     // ✅ COLLECTOR EQUIPMENT (NEW FLOW)
     // ==========================================================
-match /collectorEquipment/{collectorUid} {
+    match /collectorEquipment/{collectorUid} {
 
-  allow get: if isOwner(collectorUid) || isAdmin();
-  allow list: if isAdmin();
+      allow get: if isOwner(collectorUid) || isAdmin();
+      allow list: if isAdmin();
 
-  allow create, update: if isOwner(collectorUid)
-    && request.resource.data.keys().hasOnly([
-      "uid",
-      "residentName",
-      "status",
-      "minimumRequiredCapacityKg",
-      "photo",
-      "submittedAt",
-      "updatedAt"
-    ])
-    && request.resource.data.uid == collectorUid
-    && request.resource.data.status == "pending";
+      allow create, update: if isOwner(collectorUid)
+        && request.resource.data.keys().hasOnly([
+          "uid",
+          "residentName",
+          "status",
+          "minimumRequiredCapacityKg",
+          "photo",
+          "submittedAt",
+          "updatedAt"
+        ])
+        && request.resource.data.uid == collectorUid
+        && request.resource.data.status == "pending";
 
-  allow delete: if isAdmin();
-}
+      allow delete: if isAdmin();
+    }
 
     // ==========================================================
     // ✅ RESIDENT KYC (PALO ALTO ONLY)
@@ -948,7 +973,7 @@ match /collectorEquipment/{collectorUid} {
     // -------------------------
     // REQUESTS (NEW) ✅ replaces pickupRequests
     // -------------------------
-        match /requests/{requestId} {
+    match /requests/{requestId} {
 
       allow create: if signedIn()
         && request.resource.data.type == "pickup"
@@ -1199,113 +1224,113 @@ match /collectorEquipment/{collectorUid} {
     // ==========================================================
     match /dropoff_requests/{requestId} {
 
-  allow create: if signedIn()
-    && request.resource.data.householdId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.householdId == request.auth.uid;
 
-  allow read: if signedIn() && (
-    resource.data.householdId == request.auth.uid
-    || resource.data.junkshopId == request.auth.uid
-    || isAdmin()
-  );
+      allow read: if signedIn() && (
+        resource.data.householdId == request.auth.uid
+        || resource.data.junkshopId == request.auth.uid
+        || isAdmin()
+      );
 
-  allow update: if signedIn() && (
+      allow update: if signedIn() && (
 
-    // household submits arrival and waits for junkshop confirmation
-    (
-      resource.data.householdId == request.auth.uid
-      && resource.data.status == "en_route"
-      && resource.data.active == true
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "status",
-        "arrived",
-        "active",
-        "arrivedAt",
-        "updatedAt",
-        "readByJunkshop"
-      ])
-      && request.resource.data.status == "awaiting_confirmation"
-      && request.resource.data.arrived == true
-      && request.resource.data.active == true
-      && request.resource.data.readByJunkshop == false
-    )
+        // household submits arrival and waits for junkshop confirmation
+        (
+          resource.data.householdId == request.auth.uid
+          && resource.data.status == "en_route"
+          && resource.data.active == true
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "status",
+            "arrived",
+            "active",
+            "arrivedAt",
+            "updatedAt",
+            "readByJunkshop"
+          ])
+          && request.resource.data.status == "awaiting_confirmation"
+          && request.resource.data.arrived == true
+          && request.resource.data.active == true
+          && request.resource.data.readByJunkshop == false
+        )
 
-    ||
+        ||
 
-    // household cancels drop-off before confirmation
-    (
-      resource.data.householdId == request.auth.uid
-      && resource.data.status == "en_route"
-      && resource.data.active == true
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "active",
-        "status",
-        "cancelReason",
-        "cancelledAt",
-        "updatedAt",
-        "readByJunkshop"
-      ])
-      && request.resource.data.active == false
-      && request.resource.data.status == "cancelled"
-      && request.resource.data.cancelReason is string
-      && request.resource.data.cancelReason.size() > 0
-      && request.resource.data.readByJunkshop == false
-    )
+        // household cancels drop-off before confirmation
+        (
+          resource.data.householdId == request.auth.uid
+          && resource.data.status == "en_route"
+          && resource.data.active == true
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "active",
+            "status",
+            "cancelReason",
+            "cancelledAt",
+            "updatedAt",
+            "readByJunkshop"
+          ])
+          && request.resource.data.active == false
+          && request.resource.data.status == "cancelled"
+          && request.resource.data.cancelReason is string
+          && request.resource.data.cancelReason.size() > 0
+          && request.resource.data.readByJunkshop == false
+        )
 
-    ||
+        ||
 
-    // junkshop can mark notification as read
-    (
-      resource.data.junkshopId == request.auth.uid
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "readByJunkshop",
-        "updatedAt"
-      ])
-      && request.resource.data.readByJunkshop is bool
-    )
+        // junkshop can mark notification as read
+        (
+          resource.data.junkshopId == request.auth.uid
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "readByJunkshop",
+            "updatedAt"
+          ])
+          && request.resource.data.readByJunkshop is bool
+        )
 
-    ||
+        ||
 
-    // junkshop confirms household arrival
-    (
-      resource.data.junkshopId == request.auth.uid
-      && resource.data.status == "awaiting_confirmation"
-      && resource.data.active == true
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "status",
-        "active",
-        "confirmedAt",
-        "updatedAt",
-        "readByJunkshop"
-      ])
-      && request.resource.data.status == "confirmed"
-      && request.resource.data.active == false
-      && request.resource.data.readByJunkshop == true
-    )
+        // junkshop confirms household arrival
+        (
+          resource.data.junkshopId == request.auth.uid
+          && resource.data.status == "awaiting_confirmation"
+          && resource.data.active == true
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "status",
+            "active",
+            "confirmedAt",
+            "updatedAt",
+            "readByJunkshop"
+          ])
+          && request.resource.data.status == "confirmed"
+          && request.resource.data.active == false
+          && request.resource.data.readByJunkshop == true
+        )
 
-    ||
+        ||
 
-    // junkshop completes drop-off after saving receipt
-    (
-      resource.data.junkshopId == request.auth.uid
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "status",
-        "readByJunkshop",
-        "receiptSaved",
-        "receiptTransactionId",
-        "processedAt",
-        "updatedAt"
-      ])
-      && request.resource.data.status == "completed"
-      && request.resource.data.readByJunkshop == true
-    )
+        // junkshop completes drop-off after saving receipt
+        (
+          resource.data.junkshopId == request.auth.uid
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "status",
+            "readByJunkshop",
+            "receiptSaved",
+            "receiptTransactionId",
+            "processedAt",
+            "updatedAt"
+          ])
+          && request.resource.data.status == "completed"
+          && request.resource.data.readByJunkshop == true
+        )
 
-    ||
+        ||
 
-    isAdmin()
-  );
+        isAdmin()
+      );
 
-  allow delete: if false;
-}
+      allow delete: if false;
+    }
 
     // -------------------------
     // REQUESTS COLLECTOR_RECEIPTS
@@ -1332,25 +1357,24 @@ match /collectorEquipment/{collectorUid} {
     // ==========================================================
     // Collector inventory summary cross-update by primary junkshop
     // ==========================================================
-match /Users/{collectorUid}/inventory/{docId} {
-  allow read: if isOwner(collectorUid) || isAdmin()
-    || (isPrimaryJunkshop() && docId == "summary");
+    match /Users/{collectorUid}/inventory/{docId} {
+      allow read: if isOwner(collectorUid) || isAdmin()
+        || (isPrimaryJunkshop() && docId == "summary");
 
-  allow create, update: if isOwner(collectorUid) || isAdmin()
-    || (
-      isPrimaryJunkshop()
-      && docId == "summary"
-      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-        "totalKg",
-        "updatedAt"
-      ])
-      && request.resource.data.totalKg is number
-    );
+      allow create, update: if isOwner(collectorUid) || isAdmin()
+        || (
+          isPrimaryJunkshop()
+          && docId == "summary"
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "totalKg",
+            "updatedAt"
+          ])
+          && request.resource.data.totalKg is number
+        );
 
-  allow delete: if false;
-}
+      allow delete: if false;
+    }
 
-    
     // ==========================================================
     // SELL REQUESTS sent by collector to junkshop
     // ==========================================================
