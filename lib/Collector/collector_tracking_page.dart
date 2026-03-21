@@ -939,32 +939,6 @@ await _restoreCollectorAvailability();
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          InkWell(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const CollectorsDashboardPage(),
-                ),
-              );
-            },
-            borderRadius: BorderRadius.circular(999),
-            child: Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: _surface.o(0.96),
-                shape: BoxShape.circle,
-                border: Border.all(color: _border),
-              ),
-              child: const Icon(
-                Icons.notifications_outlined,
-                color: _textPrimary,
-                size: 18,
-              ),
-            ),
-          ),
         ],
       ),
     );
