@@ -405,7 +405,17 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
         final data = snap.data() as Map<String, dynamic>;
         final householdId = (data['householdId'] ?? '').toString().trim();
-        final collectorName = (data['collectorName'] ?? 'Collector').toString();
+        final collectorDoc =
+    await FirebaseFirestore.instance.collection('Users').doc(user.uid).get();
+
+final collectorData = collectorDoc.data() ?? {};
+final collectorName =
+    (collectorData['Name'] ??
+            collectorData['displayName'] ??
+            user.displayName ??
+            'Collector')
+        .toString();
+        
         final pickupAddress = _pickupAddress(data);
 
         tx.update(ref, {
@@ -1350,21 +1360,20 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     }
   }
 
-Future<void> _setOnline(bool online) async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return;
+  Future<void> _setOnline(bool online) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-  try {
-    await _userRef(user.uid).set({
-      'isOnline': online,
-      'isAvailableForHousehold': online,
-      'lastSeen': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  } catch (e) {
-    debugPrint("❌ setOnline failed: $e");
+    try {
+      await _userRef(user.uid).set({
+        'isOnline': online,
+        'lastSeen': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("❌ setOnline failed: $e");
+    }
   }
-}
 
   Widget _collectorProfileDrawer(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -1434,6 +1443,89 @@ Future<void> _setOnline(bool online) async {
     );
   }
 
+  Widget _pendingVerificationScreenNew({
+    required String collectorStatus,
+    required bool legacyAdminOk,
+    required bool legacyJunkshopOk,
+    required bool legacyActive,
+  }) {
+    final s = collectorStatus.toLowerCase();
+
+    String title = "Collector account pending";
+    String body = "Your account is not verified yet.\nPlease wait for approval.";
+
+    if (s == "pending") {
+      title = "Collector request submitted";
+      body = "Please wait for admin approval.";
+    } else if (s == "adminapproved") {
+      title = "Admin approved";
+      body = "You may now access the Collector Dashboard.";
+    } else if (s == "rejected") {
+      title = "Request rejected";
+      body = "Your collector request was rejected.\nYou may submit again.";
+    }
+
+    if (collectorStatus.isEmpty) {
+      if (!legacyAdminOk) {
+        title = "Collector account pending";
+        body = "Please wait for admin approval.";
+      } else if (!legacyJunkshopOk) {
+        title = "Admin approved";
+        body = "Now wait for junkshop verification.";
+      } else if (!legacyActive) {
+        title = "Almost ready";
+        body = "Your account is verified but not yet active.";
+      }
+    }
+
+    return SafeArea(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.hourglass_top, color: Colors.white70, size: 70),
+              const SizedBox(height: 16),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                body,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    await _logout(context);
+                  },
+                  icon: const Icon(Icons.logout),
+                  label: const Text("Logout"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryColor,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   bool _isCollectorRole(Map<String, dynamic>? data) {
     final rolesRaw =
@@ -1647,7 +1739,7 @@ final mineQuery = _requestsRef
             (isCollectorRole && _isCollectorAdminApproved(data)) ||
                 _isLegacyCollectorVerified(data);
 
-        /*if (!allowDashboard) {
+        if (!allowDashboard) {
           return Scaffold(
             backgroundColor: bgColor,
             body: _pendingVerificationScreenNew(
@@ -1657,7 +1749,7 @@ final mineQuery = _requestsRef
               legacyActive: legacyActive,
             ),
           );
-        }*/
+        }
 
         final pages = <Widget>[
 _CollectorHomeTab(
