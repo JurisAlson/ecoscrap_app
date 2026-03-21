@@ -5,7 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'services/notification_service.dart';
-import 'services/tflite_service.dart'; 
 import 'firebase_options.dart';
 import 'role_gate.dart';
 import 'auth/login_page.dart';
@@ -22,7 +21,6 @@ void main() async {
   );
 
   // ✅ PRELOAD TFLITE (prevents first-scan lag + helps loader show properly)
-  await TFLiteService.init();
 
   runApp(const MyApp());
 }
