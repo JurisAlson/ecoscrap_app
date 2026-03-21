@@ -602,7 +602,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
       final data = doc.data() ?? {};
       final collectorName = (data['collectorName'] ?? 'Collector').toString();
-      final gp = data['collectorLocation'];
+      final gp = data['collectorLiveLocation'];
 
       LatLng? liveCollector;
       if (gp is GeoPoint) {

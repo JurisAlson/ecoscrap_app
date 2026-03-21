@@ -1350,20 +1350,21 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     }
   }
 
-  Future<void> _setOnline(bool online) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+Future<void> _setOnline(bool online) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    try {
-      await _userRef(user.uid).set({
-        'isOnline': online,
-        'lastSeen': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      debugPrint("❌ setOnline failed: $e");
-    }
+  try {
+    await _userRef(user.uid).set({
+      'isOnline': online,
+      'isAvailableForHousehold': online,
+      'lastSeen': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  } catch (e) {
+    debugPrint("❌ setOnline failed: $e");
   }
+}
 
   Widget _collectorProfileDrawer(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
