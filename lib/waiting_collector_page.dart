@@ -273,81 +273,94 @@ class _WaitingCollectorPageState extends State<WaitingCollectorPage>
 
             Align(
               alignment: Alignment.bottomCenter,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
-                decoration: const BoxDecoration(
-                  color: _sheet,
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(26),
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 44,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: _border,
-                          borderRadius: BorderRadius.circular(100),
-                        ),
+              child: DraggableScrollableSheet(
+                initialChildSize: 0.25,
+                minChildSize: 0.18,
+                maxChildSize: 0.6,
+                builder: (context, scrollController) {
+                  return Container(
+                    decoration: const BoxDecoration(
+                      color: _sheet,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(26),
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    const Row(
-                      children: [
-                        SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
-                            valueColor: AlwaysStoppedAnimation<Color>(_accent),
-                          ),
-                        ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            "Waiting for collector",
-                            style: TextStyle(
-                              color: _textPrimary,
-                              fontSize: 19,
-                              fontWeight: FontWeight.w900,
+                    child: SingleChildScrollView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 44,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: _border,
+                                borderRadius: BorderRadius.circular(100),
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      "Stay available while a collector reviews and accepts your pickup request.",
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontSize: 14,
-                        height: 1.45,
+                          const SizedBox(height: 16),
+
+                          const Row(
+                            children: [
+                              SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  valueColor: AlwaysStoppedAnimation<Color>(_accent),
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  "Waiting for collector",
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 8),
+
+                          const Text(
+                            "Stay available while a collector reviews and accepts your pickup request.",
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontSize: 14,
+                              height: 1.45,
+                            ),
+                          ),
+
+                          const SizedBox(height: 14),
+
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: _surface,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: _border),
+                            ),
+                            child: const Text(
+                              "Your pickup location is centered on the map. This page will automatically go to your Order tab once the collector accepts.",
+                              style: TextStyle(
+                                color: _textPrimary,
+                                fontWeight: FontWeight.w700,
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _surface,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: _border),
-                      ),
-                      child: const Text(
-                        "Your pickup location is centered on the map. This page will automatically go to your Order tab once the collector accepts.",
-                        style: TextStyle(
-                          color: _textPrimary,
-                          fontWeight: FontWeight.w700,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
           ],
