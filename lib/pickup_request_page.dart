@@ -53,6 +53,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
   String? _selectedBagKey;
 
+  String? _selectedSubdivision;
   String? _driverError;
   String? _windowError;
   String? _bagError;
@@ -62,10 +63,20 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
   String? _phoneError;
 
   final TextEditingController _streetController = TextEditingController();
-  final TextEditingController _subdivisionController = TextEditingController();
   final TextEditingController _landmarkController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
 
+  static const List<String> _subdivisionOptions = [
+    'San Francisco Heights (Suntrust)',
+    'PHirst Park Homes Calamba',
+    'Lynville Residences Palo Alto',
+    'Palo Alto Executive Village',
+    'Southwynd Residences',
+    'Pacific Hill Subdivision',
+    'Hacienda Hill',
+    'Palo Alto Highland 1',
+    'Palo Alto Highland 2',
+  ];
   static const List<Map<String, dynamic>> _bagOptions = [
     {
       "key": "small",
@@ -107,16 +118,9 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
   @override
   void dispose() {
     _streetController.dispose();
-    _subdivisionController.dispose();
     _landmarkController.dispose();
     _phoneController.dispose();
     super.dispose();
-  }
-
-  String get _pickupLocationLabel {
-    return widget.pickupSource == "pin"
-        ? "Pinned Location"
-        : "Current Location";
   }
 
   String get _scheduleSummary {
@@ -282,7 +286,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
   bool _validateForm() {
     final street = _streetController.text.trim();
-    final subdivision = _subdivisionController.text.trim();
+    final subdivision = _selectedSubdivision ?? '';
     final landmark = _landmarkController.text.trim();
     final phone = _phoneController.text.trim();
 
@@ -298,7 +302,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
           : null;
       _streetError = street.isEmpty ? "Please enter your street." : null;
       _subdivisionError =
-          subdivision.isEmpty ? "Please enter your subdivision." : null;
+    _selectedSubdivision == null ? "Please select your subdivision." : null;
       _landmarkError = landmark.isEmpty ? "Please enter a landmark." : null;
 
       if (phone.isEmpty) {
@@ -349,7 +353,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     }
 
     final street = _streetController.text.trim();
-    final subdivision = _subdivisionController.text.trim();
+    final subdivision = _selectedSubdivision!;
     final landmark = _landmarkController.text.trim();
     final phoneNumber = _normalizePHPhone(_phoneController.text.trim());
 
@@ -556,16 +560,18 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
   }
 
   Widget _inputField({
-    required TextEditingController controller,
-    required String hint,
-    TextInputType keyboardType = TextInputType.text,
-    int maxLines = 1,
-    String? errorText,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
+  required TextEditingController controller,
+  required String hint,
+  TextInputType keyboardType = TextInputType.text,
+  int maxLines = 1,
+  String? errorText,
+}) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
           decoration: BoxDecoration(
             color: _surface,
             borderRadius: BorderRadius.circular(14),
@@ -582,9 +588,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
               fontWeight: FontWeight.w700,
             ),
             cursorColor: _accent,
-            decoration: const InputDecoration().copyWith(
-              filled: true,
-              fillColor: _surface,
+            decoration: InputDecoration(
               hintText: hint,
               hintStyle: const TextStyle(color: _textMuted),
               border: InputBorder.none,
@@ -598,27 +602,27 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
             onChanged: (_) {
               setState(() {
                 if (controller == _streetController) _streetError = null;
-                if (controller == _subdivisionController) _subdivisionError = null;
                 if (controller == _landmarkController) _landmarkError = null;
                 if (controller == _phoneController) _phoneError = null;
               });
             },
           ),
         ),
-        if (errorText != null) ...[
-          const SizedBox(height: 6),
-          Text(
-            errorText,
-            style: const TextStyle(
-              color: _danger,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
+      ),
+      if (errorText != null) ...[
+        const SizedBox(height: 6),
+        Text(
+          errorText,
+          style: const TextStyle(
+            color: _danger,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
           ),
-        ],
+        ),
       ],
-    );
-  }
+    ],
+  );
+}
 
   Widget _sectionTitle(String text) {
     return Text(
@@ -657,7 +661,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     final windowOk = !isWindow || (_windowStart != null && _windowEnd != null);
 
     final addressOk = _streetController.text.trim().isNotEmpty &&
-        _subdivisionController.text.trim().isNotEmpty &&
+        _selectedSubdivision != null &&
         _landmarkController.text.trim().isNotEmpty &&
         _phoneController.text.trim().isNotEmpty &&
         _isValidPHPhone(_phoneController.text.trim());
@@ -721,20 +725,6 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
                   color: _surface,
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: _border),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _sectionTitle("PICKUP LOCATION"),
-                    const SizedBox(height: 8),
-                    Text(
-                      _pickupLocationLabel,
-                      style: const TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
                 ),
               ),
 
@@ -960,11 +950,62 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
                 errorText: _streetError,
               ),
               const SizedBox(height: 10),
-              _inputField(
-                controller: _subdivisionController,
-                hint: "Subdivision",
-                errorText: _subdivisionError,
+              Column(
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: _subdivisionError != null ? _danger : _border,
+        ),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedSubdivision,
+          dropdownColor: _dropdown,
+          isExpanded: true,
+          hint: const Text(
+            "Select Subdivision",
+            style: TextStyle(color: _textMuted),
+          ),
+          style: const TextStyle(color: _textPrimary),
+          items: _subdivisionOptions.map((sub) {
+            return DropdownMenuItem<String>(
+              value: sub,
+              child: Text(
+                sub,
+                style: const TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
+            );
+          }).toList(),
+          onChanged: (value) {
+            setState(() {
+              _selectedSubdivision = value;
+              _subdivisionError = null;
+            });
+          },
+        ),
+      ),
+    ),
+    if (_subdivisionError != null) ...[
+      const SizedBox(height: 6),
+      Text(
+        _subdivisionError!,
+        style: const TextStyle(
+          color: _danger,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    ],
+  ],
+),
               const SizedBox(height: 10),
               _inputField(
                 controller: _landmarkController,

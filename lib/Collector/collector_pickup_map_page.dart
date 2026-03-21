@@ -364,7 +364,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   String _formatPickupSchedule(Map<String, dynamic> data) {
     final type = (data['pickupType'] ?? '').toString();
-    if (type == 'now') return "Now (ASAP)";
+    if (type == 'now') return "Now";
 
     Timestamp? ts(dynamic v) => v is Timestamp ? v : null;
 

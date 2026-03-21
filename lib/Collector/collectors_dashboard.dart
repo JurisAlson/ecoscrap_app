@@ -77,6 +77,22 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         .orderBy('updatedAt', descending: true);
   }
 
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _ongoingCollectorPickupStream() {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) {
+    return const Stream.empty();
+  }
+
+  return _requestsRef
+      .where('type', isEqualTo: 'pickup')
+      .where('collectorId', isEqualTo: user.uid)
+      .where('active', isEqualTo: true)
+      .where('status', whereIn: activePickupStatuses)
+      .limit(1)
+      .snapshots();
+}
+
   Query<Map<String, dynamic>> _openMineRequestsQuery(String collectorId) {
     return _requestsRef
         .where('type', isEqualTo: 'pickup')
@@ -301,7 +317,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   String _formatPickupSchedule(Map<String, dynamic> data) {
     final type = (data['pickupType'] ?? '').toString();
-    if (type == 'now') return "Now (ASAP)";
+    if (type == 'now') return "Now";
 
     final startTs =
         _asTimestamp(data['windowStart']) ?? _asTimestamp(data['scheduledAt']);
@@ -641,6 +657,127 @@ final collectorName =
     }
   }
 
+  Widget _ongoingPickupBanner() {
+  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: _ongoingCollectorPickupStream(),
+    builder: (context, snap) {
+      if (!snap.hasData || snap.data!.docs.isEmpty) {
+        return const SizedBox.shrink();
+      }
+
+      final doc = snap.data!.docs.first;
+      final data = doc.data();
+
+      final household = _householdName(data);
+      final address = _pickupAddress(data, fallback: 'Pickup location');
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+      final scheduleText = _formatPickupSchedule(data);
+
+      String title;
+      if (status == 'ongoing') {
+        title = "You have an ongoing pickup";
+      } else if (status == 'arrived') {
+        title = "You're at a pickup location";
+      } else if (status == 'scheduled') {
+        title = "Upcoming scheduled pickup";
+      } else {
+        title = "Active pickup in progress";
+      }
+
+      String subtitle;
+      if (status == 'scheduled') {
+        subtitle = "$household • $scheduleText";
+      } else {
+        subtitle = "$household • $address";
+      }
+
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              // ✅ Resume pickup → go to map
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CollectorPickupMapPage(
+                    requestIds: [doc.id],
+                  ),
+                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 11,
+              ),
+              decoration: BoxDecoration(
+                color: primaryColor.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: primaryColor.withOpacity(0.35),
+                ),
+              ),
+              child: Row(
+                children: [
+                  // subtle status indicator
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // subtle arrow (optional but good UX hint)
+                  Icon(
+                    Icons.chevron_right,
+                    color: Colors.grey.shade500,
+                    size: 18,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
   Widget _pill(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -863,6 +1000,7 @@ final collectorName =
       await _confirmAndDeclinePickup(requestId);
     }
   }
+  
 
   Widget _notificationsDrawer() {
     final user = FirebaseAuth.instance.currentUser;
@@ -1834,7 +1972,16 @@ _CollectorHomeTab(
                 left: -120,
                 child: _blurCircle(Colors.green.withOpacity(0.10), 360),
               ),
-              SafeArea(child: pages[_tabIndex]),
+              SafeArea(
+  child: Column(
+    children: [
+      if (_tabIndex == 0) _ongoingPickupBanner(),
+      Expanded(
+        child: pages[_tabIndex],
+      ),
+    ],
+  ),
+),
             ],
           ),
           bottomNavigationBar: _collectorFooter(
@@ -1930,11 +2077,12 @@ class _CollectorHomeTab extends StatelessWidget {
   static const Color borderColor = Color(0xFF263244);
   static const Color textMuted = Color(0xFF94A3B8);
 
-  static const List<String> activePickupStatuses = [
-    'accepted',
-    'arrived',
-    'scheduled',
-  ];
+static const List<String> activePickupStatuses = [
+  'accepted',
+  'arrived',
+  'scheduled',
+  'ongoing',
+];
 
   static const List<String> openPickupStatuses = [
     'pending',
@@ -1983,14 +2131,14 @@ class _CollectorHomeTab extends StatelessWidget {
         final activeRequestIds = activeDocs.map((d) => d.id).toList();
 
         void openActiveMap() {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => CollectorPickupMapPage(
-                requestIds: activeRequestIds,
-              ),
-            ),
-          );
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (_) => CollectorPickupMapPage(
+      requestIds: activeRequestIds,
+    ),
+  ),
+);
         }
 
         return StreamBuilder<QuerySnapshot>(
