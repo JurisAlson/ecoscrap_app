@@ -143,6 +143,15 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       _stopDashboardLiveTracking(clearFirestore: false);
     }
   }
+  Future<void> setCollectorOnline(bool value) async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return;
+
+  await FirebaseFirestore.instance.collection('collectors').doc(uid).set({
+    'isOnline': value,
+    'lastSeenAt': FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
+}
 
   Future<bool> _ensureLocationPermission() async {
     final enabled = await Geolocator.isLocationServiceEnabled();
@@ -315,7 +324,41 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     final e = endTs.toDate();
     return "$date • ${hm(s)}–${hm(e)}";
   }
+Future<void> _handleLogoutPressed(BuildContext context) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
+  final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
+
+  if (activeDocs.docs.isNotEmpty) {
+    if (!context.mounted) return;
+
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: bgColor,
+        title: const Text(
+          "Logout unavailable",
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          "You cannot log out while a pickup is ongoing. Please finish the current pickup first.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("OK"),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
+
+  Navigator.pop(context);
+  await _logout(context);
+}
   Future<void> _logout(BuildContext context) async {
     await _setOnline(false);
     await _stopDashboardLiveTracking(clearFirestore: true);
@@ -1423,10 +1466,9 @@ final collectorName =
             width: double.infinity,
             height: 48,
             child: ElevatedButton.icon(
-              onPressed: () async {
-                Navigator.pop(context);
-                await _logout(context);
-              },
+onPressed: () async {
+  await _handleLogoutPressed(context);
+},
               icon: const Icon(Icons.logout),
               label: const Text("Logout"),
               style: ElevatedButton.styleFrom(
@@ -1506,9 +1548,9 @@ final collectorName =
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton.icon(
-                  onPressed: () async {
-                    await _logout(context);
-                  },
+onPressed: () async {
+  await _handleLogoutPressed(context);
+},
                   icon: const Icon(Icons.logout),
                   label: const Text("Logout"),
                   style: ElevatedButton.styleFrom(

@@ -1033,49 +1033,67 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<void> _openCollectorReceipt() async {
-    final stop = _currentStop;
-    if (stop == null) return;
+  final stop = _currentStop;
+  if (stop == null) return;
 
-    final s = stop.status.toLowerCase();
-    if (s != "arrived") {
+  final s = stop.status.toLowerCase();
+  if (s != "arrived") {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Create receipt is available once you are ARRIVED.")),
+    );
+    return;
+  }
+
+  try {
+    final reqDoc = await FirebaseFirestore.instance
+        .collection('requests')
+        .doc(stop.requestId)
+        .get();
+
+    final data = reqDoc.data() ?? {};
+    final hasReceipt = data['hasCollectorReceipt'] == true;
+
+    if (hasReceipt) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Create receipt is available once you are ARRIVED.")),
+        const SnackBar(content: Text("Order already created for this pickup.")),
       );
       return;
     }
+  } catch (_) {}
 
-    try {
-      final reqDoc = await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(stop.requestId)
-          .get();
+  if (!mounted) return;
 
-      final data = reqDoc.data() ?? {};
-      final hasReceipt = data['hasCollectorReceipt'] == true;
-
-      if (hasReceipt) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Order already created for this pickup.")),
-        );
-        return;
-      }
-    } catch (_) {}
-
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CollectorTransactionPage(
-          requestId: stop.requestId,
-          embedded: false,
-        ),
+  final saved = await Navigator.push<bool>(
+    context,
+    MaterialPageRoute(
+      builder: (_) => CollectorTransactionPage(
+        requestId: stop.requestId,
+        embedded: false,
       ),
-    );
+    ),
+  );
+
+if (saved == true) {
+  final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
+  if (idx != -1 && mounted) {
+    setState(() {
+      _stops[idx] = _stops[idx].copyWith(
+        status: 'completed',
+        hasCollectorReceipt: true,
+      );
+    });
   }
 
+  // 🔴 ADD THIS LINE
+  await _stopLiveLocationSharing(clearFirestore: true);
+  await _moveToNextStopAfterComplete();
+}
+}
+
   Future<void> _moveToNextStopAfterComplete() async {
+    _junkshopChatEnsured = false;
     final nextIndex = _currentStopIndex + 1;
 
     if (!mounted) return;
@@ -1115,114 +1133,83 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
-  Future<void> _markArrivedOrComplete() async {
-    final stop = _currentStop;
-    if (stop == null) return;
+ Future<void> _markArrivedOrComplete() async {
+  final stop = _currentStop;
+  if (stop == null) return;
 
-    final s = stop.status.toLowerCase();
+  final s = stop.status.toLowerCase();
 
-    if (s == 'arrived') {
-      try {
-        await FirebaseFirestore.instance
-            .collection('requests')
-            .doc(stop.requestId)
-            .update({
-          'status': 'completed',
-          'active': false,
-          'completedAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-          'junkshopId': _junkshopUid,
-          'junkshopName': _junkshopName,
-          'sharingLiveLocation': false,
-        });
-
-        final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
-        if (idx != -1 && mounted) {
-          setState(() {
-            _stops[idx] = _stops[idx].copyWith(status: 'completed');
-          });
-        }
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Marked as completed.")),
-        );
-
-        await _stopLiveLocationSharing(clearFirestore: true);
-        await _moveToNextStopAfterComplete();
-      } on FirebaseException catch (e) {
-        debugPrint("❌ Complete failed: ${e.code} | ${e.message}");
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Complete failed: ${e.code}")),
-        );
-      } catch (e) {
-        debugPrint("❌ Complete failed: $e");
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Complete failed: $e")),
-        );
-      }
-      return;
-    }
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(stop.requestId)
-          .update({
-        'status': 'arrived',
-        'arrived': true,
-        'arrivedAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-
-      final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
-      if (idx != -1 && mounted) {
-        setState(() {
-          _stops[idx] = _stops[idx].copyWith(status: 'arrived');
-        });
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Marked as arrived.")),
-      );
-    } on FirebaseException catch (e) {
-      debugPrint("❌ Arrived failed: ${e.code} | ${e.message}");
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Arrived failed: ${e.code}")),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: $e")),
-      );
-    }
+  // If already arrived, don't complete here anymore.
+  // Completion should happen only after SAVE in receipt screen.
+  if (s == 'arrived') {
+    await _openCollectorReceipt();
+    return;
   }
 
-  @override
-  void dispose() {
-    unawaited(_stopLiveLocationSharing(clearFirestore: true));
-    _map?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _goToStop(int index) async {
-    if (index < 0 || index >= _stops.length) return;
-
-    await _stopLiveLocationSharing();
-
-    setState(() {
-      _currentStopIndex = index;
+  try {
+    await FirebaseFirestore.instance
+        .collection('requests')
+        .doc(stop.requestId)
+        .update({
+      'status': 'arrived',
+      'arrived': true,
+      'arrivedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    await _ensureJunkshopChatIfNeeded();
-    await _buildMultiStopRoute();
-    await _focusCameraOnCurrentStop();
-    await _startLiveLocationSharing();
+    final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
+    if (idx != -1 && mounted) {
+      setState(() {
+        _stops[idx] = _stops[idx].copyWith(status: 'arrived');
+      });
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Marked as arrived.")),
+    );
+
+    // Go directly to receipt/audit screen after ARRIVED
+    await _openCollectorReceipt();
+  } on FirebaseException catch (e) {
+    debugPrint("❌ Arrived failed: ${e.code} | ${e.message}");
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Arrived failed: ${e.code}")),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Error: $e")),
+    );
   }
+}
+
+@override
+void dispose() {
+  _liveLocationSub?.cancel();
+  _map?.dispose();
+  super.dispose();
+}
+
+Future<void> _goToStop(int index) async {
+  if (index < 0 || index >= _stops.length) return;
+
+  // 🔴 STOP previous request tracking FIRST
+  await _stopLiveLocationSharing(clearFirestore: true);
+
+  // reset junkshop guard for new request
+  _junkshopChatEnsured = false;
+
+  setState(() {
+    _currentStopIndex = index;
+  });
+
+  await _ensureJunkshopChatIfNeeded();
+  await _buildMultiStopRoute();
+  await _focusCameraOnCurrentStop();
+  await _startLiveLocationSharing();
+}
 
   Set<Marker> _buildMarkers() {
     return <Marker>{
@@ -1696,23 +1683,20 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: _actionWide(
-                                  icon: currentStop?.status.toLowerCase() ==
-                                          'arrived'
-                                      ? Icons.check_circle
-                                      : Icons.location_on_outlined,
-                                  title: currentStop?.status.toLowerCase() ==
-                                          'arrived'
-                                      ? "COMPLETE"
-                                      : "ARRIVED",
-                                  subtitle: currentStop?.status.toLowerCase() ==
-                                          'arrived'
-                                      ? "Finish current stop"
-                                      : "Mark current stop",
-                                  bg: _accent,
-                                  fg: _bg,
-                                  onTap: _markArrivedOrComplete,
-                                ),
+                                icon: currentStop?.status.toLowerCase() == 'arrived'
+                                    ? Icons.receipt_long
+                                    : Icons.location_on_outlined,
+                                title: currentStop?.status.toLowerCase() == 'arrived'
+                                    ? "save & complete"
+                                    : "ARRIVED",
+                                subtitle: currentStop?.status.toLowerCase() == 'arrived'
+                                    ? "COMPLETE & SAVE"
+                                    : "Mark current stop",
+                                bg: _accent,
+                                fg: _bg,
+                                onTap: _markArrivedOrComplete,
                               ),
+                               ),
                             ],
                           ),
                         
@@ -1728,25 +1712,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                               onTap: _callCurrentStop,
                             ),
                           const SizedBox(height: 10),
-                          if (currentStop?.status.toLowerCase() == "arrived")
-                            _actionWide(
-                              icon: (currentStop?.hasCollectorReceipt == true)
-                                  ? Icons.receipt
-                                  : Icons.receipt_long,
-                              title: (currentStop?.hasCollectorReceipt == true)
-                                  ? "BUYING SAVED"
-                                  : "BUYING",
-                              subtitle:
-                                  (currentStop?.hasCollectorReceipt == true)
-                                      ? "Already created"
-                                      : "Create buying Order",
-                              bg: Colors.white.withOpacity(0.10),
-                              fg: Colors.white,
-                              border: Colors.white.withOpacity(0.14),
-                              onTap: (currentStop?.hasCollectorReceipt == true)
-                                  ? null
-                                  : _openCollectorReceipt,
-                            ),
                         ],
                       ],
                     ),

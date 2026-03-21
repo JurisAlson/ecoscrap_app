@@ -248,85 +248,137 @@ class _BuyFormState extends State<_BuyForm> {
   bool _saving = false;
 
   Future<void> _saveBuyReceipt(Map<String, dynamic> requestData) async {
-    if (_saving) return;
+  if (_saving) return;
 
-    final requestId = widget.requestId;
-    if (requestId == null || requestId.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Open BUY from an ARRIVED pickup.")),
-      );
-      return;
-    }
+  final requestId = widget.requestId;
+  if (requestId == null || requestId.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Open BUY from an ARRIVED pickup.")),
+    );
+    return;
+  }
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    final alreadyReceipted = requestData['hasCollectorReceipt'] == true;
-    if (alreadyReceipted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Receipt already saved for this pickup.")),
-      );
-      return;
-    }
-
-    final bagKg = ((requestData['bagKg'] as num?) ?? 0).toDouble();
-    final bagKey = (requestData['bagKey'] ?? "").toString();
-    final bagLabel = (requestData['bagLabel'] ?? "Bag").toString();
-
-    if (bagKg <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Missing or invalid bagKg in request.")),
-      );
-      return;
-    }
-
-    final householdId = (requestData['householdId'] ?? "").toString();
-    final householdName =
-        (requestData['householdName'] ?? "Household").toString();
-
-    if (householdId.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Missing householdId in request document."),
-        ),
-      );
-      return;
-    }
-
-    final collectorId = user.uid;
-    final collectorName = _TransactionUi.collectorName(
-      user: user,
-      requestData: requestData,
+  final alreadyReceipted = requestData['hasCollectorReceipt'] == true;
+  if (alreadyReceipted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Receipt already saved for this pickup.")),
     );
 
-    final totalAmount = bagKg * buyPricePerKg;
+    // Return success so parent page can still continue flow if needed
+    Navigator.pop(context, true);
+    return;
+  }
 
-    setState(() => _saving = true);
+  final bagKg = ((requestData['bagKg'] as num?) ?? 0).toDouble();
+  final bagKey = (requestData['bagKey'] ?? "").toString();
+  final bagLabel = (requestData['bagLabel'] ?? "Bag").toString();
 
-    try {
-      final db = FirebaseFirestore.instance;
+  if (bagKg <= 0) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Missing or invalid bagKg in request.")),
+    );
+    return;
+  }
 
-      final reqRef = db.collection('requests').doc(requestId);
-      final receiptRef = reqRef.collection('collector_receipts').doc();
-      final inventoryRef = db
-          .collection('Users')
-          .doc(collectorId)
-          .collection('inventory')
-          .doc('summary');
-      final txnRef = db
-          .collection('Users')
-          .doc(collectorId)
-          .collection('transactions')
-          .doc();
+  final householdId = (requestData['householdId'] ?? "").toString();
+  final householdName =
+      (requestData['householdName'] ?? "Household").toString();
 
-      await db.runTransaction((trx) async {
-        final reqSnap = await trx.get(reqRef);
-        if (!reqSnap.exists) {
-          throw Exception("Request not found.");
-        }
+  if (householdId.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Missing householdId in request document."),
+      ),
+    );
+    return;
+  }
 
-        trx.set(receiptRef, {
-          "kind": "collector_buy",
+  final collectorId = user.uid;
+  final collectorName = _TransactionUi.collectorName(
+    user: user,
+    requestData: requestData,
+  );
+
+  final totalAmount = bagKg * buyPricePerKg;
+
+  setState(() => _saving = true);
+
+  try {
+    final db = FirebaseFirestore.instance;
+
+    final reqRef = db.collection('requests').doc(requestId);
+    final receiptRef = reqRef.collection('collector_receipts').doc();
+    final inventoryRef = db
+        .collection('Users')
+        .doc(collectorId)
+        .collection('inventory')
+        .doc('summary');
+    final txnRef = db
+        .collection('Users')
+        .doc(collectorId)
+        .collection('transactions')
+        .doc();
+
+    final householdTxnRef = db
+        .collection('Users')
+        .doc(householdId)
+        .collection('transactions')
+        .doc(requestId);
+
+    await db.runTransaction((trx) async {
+      final reqSnap = await trx.get(reqRef);
+      if (!reqSnap.exists) {
+        throw Exception("Request not found.");
+      }
+
+      final latestReq = reqSnap.data() as Map<String, dynamic>? ?? {};
+      final latestAlreadyReceipted = latestReq['hasCollectorReceipt'] == true;
+
+      if (latestAlreadyReceipted) {
+        return;
+      }
+
+      // Collector receipt
+      trx.set(receiptRef, {
+        "kind": "collector_buy",
+        "requestId": requestId,
+        "collectorId": collectorId,
+        "collectorName": collectorName,
+        "householdId": householdId,
+        "householdName": householdName,
+        "bagKey": bagKey,
+        "bagLabel": bagLabel,
+        "kg": bagKg,
+        "pricePerKg": buyPricePerKg,
+        "totalAmount": totalAmount,
+        "status": "completed",
+        "createdAt": FieldValue.serverTimestamp(),
+      });
+
+      // Collector history
+      trx.set(txnRef, {
+        "kind": "buy",
+        "requestId": requestId,
+        "householdId": householdId,
+        "householdName": householdName,
+        "bagKey": bagKey,
+        "bagLabel": bagLabel,
+        "kg": bagKg,
+        "pricePerKg": buyPricePerKg,
+        "totalAmount": totalAmount,
+        "status": "completed",
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      // Household/residence history
+      trx.set(
+        householdTxnRef,
+        {
+          "kind": "pickup_completed",
           "requestId": requestId,
           "collectorId": collectorId,
           "collectorName": collectorName,
@@ -338,57 +390,76 @@ class _BuyFormState extends State<_BuyForm> {
           "pricePerKg": buyPricePerKg,
           "totalAmount": totalAmount,
           "status": "completed",
-          "createdAt": FieldValue.serverTimestamp(),
-        });
-
-        trx.set(txnRef, {
-          "kind": "buy",
-          "requestId": requestId,
-          "householdId": householdId,
-          "householdName": householdName,
-          "bagKey": bagKey,
-          "bagLabel": bagLabel,
-          "kg": bagKg,
-          "pricePerKg": buyPricePerKg,
-          "totalAmount": totalAmount,
-          "createdAt": FieldValue.serverTimestamp(),
-        });
-
-        trx.set(
-          inventoryRef,
-          {
-            "totalKg": FieldValue.increment(bagKg),
-            "totalValueSpent": FieldValue.increment(totalAmount),
-            "updatedAt": FieldValue.serverTimestamp(),
-            "createdAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
-        trx.set(
-          reqRef,
-          {
-            "hasCollectorReceipt": true,
-            "collectorReceiptAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      });
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Buy receipt saved and inventory updated.")),
+          "completedAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
       );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Save failed: $e")),
+
+      // Collector inventory update
+      trx.set(
+        inventoryRef,
+        {
+          "totalKg": FieldValue.increment(bagKg),
+          "totalValueSpent": FieldValue.increment(totalAmount),
+          "updatedAt": FieldValue.serverTimestamp(),
+          "createdAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
       );
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
+
+      // Main request termination for BOTH collector and residence
+trx.set(
+  reqRef,
+  {
+    "hasCollectorReceipt": true,
+    "collectorReceiptAt": FieldValue.serverTimestamp(),
+    "updatedAt": FieldValue.serverTimestamp(),
+  },
+  SetOptions(merge: true),
+);
+
+trx.set(
+  reqRef,
+  {
+    "status": "completed",
+    "active": false,
+    "completedAt": FieldValue.serverTimestamp(),
+    "sharingLiveLocation": false,
+    "updatedAt": FieldValue.serverTimestamp(),
+  },
+  SetOptions(merge: true),
+);
+
+      // Collector availability reset
+trx.set(
+  db.collection('Users').doc(collectorId),
+  {
+    "isAvailableForHousehold": true,
+    "availabilityStatus": "available",
+    "activeRequestId": FieldValue.delete(),
+    "updatedAt": FieldValue.serverTimestamp(),
+  },
+  SetOptions(merge: true),
+);
+    });
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Transaction saved and completed.")),
+    );
+
+    // Close receipt screen and tell previous page that save succeeded
+    Navigator.pop(context, true);
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Save failed: $e")),
+    );
+  } finally {
+    if (mounted) setState(() => _saving = false);
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -615,7 +686,7 @@ class _BuyFormState extends State<_BuyForm> {
                             ? "SAVING..."
                             : alreadyReceipted
                                 ? "TRANSACTION ALREADY SAVED"
-                                : "SAVE TRANSACTION",
+                                : "SAVE & COMPLETE",
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -1065,12 +1136,6 @@ class _SellFormState extends State<_SellForm> {
 
     // Allowed from 7:00 AM up to before 5:00 PM
     return hour >= 7 && hour < 17;
-  }
-
-  @override
-  void dispose() {
-    _kgCtrl.dispose();
-    super.dispose();
   }
 
   Future<void> _submitSell(double currentKg) async {
