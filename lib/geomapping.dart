@@ -1223,9 +1223,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       ),
     );
 
-    final LatLng? residenceLatLng = _pinnedPickupLatLng != null
-        ? _pinnedPickupLatLng
-        : (_currentPosition != null
+    final LatLng? residenceLatLng = _pinnedPickupLatLng ?? (_currentPosition != null
             ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
             : null);
 
