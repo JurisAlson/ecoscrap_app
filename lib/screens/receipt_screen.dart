@@ -900,6 +900,23 @@ if (fromHouseholdDropoff &&
       }
       if (fromCollectorSellRequest &&
           collectorIdFromSellRequest != null &&
+          collectorIdFromSellRequest.isNotEmpty) {
+        final collectorRef = db.collection('Users').doc(collectorIdFromSellRequest);
+
+  trx.set(
+    collectorRef,
+    {
+      'isOnline': true,
+      'availabilityStatus': 'available',
+      'isAvailableForHousehold': true,
+      'activeMoresSellRequestId': FieldValue.delete(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    },
+    SetOptions(merge: true),
+  );
+}
+      if (fromCollectorSellRequest &&
+          collectorIdFromSellRequest != null &&
           collectorIdFromSellRequest.isNotEmpty &&
           collectorTransactionIdFromSellRequest != null &&
           collectorTransactionIdFromSellRequest.isNotEmpty) {

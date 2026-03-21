@@ -219,7 +219,7 @@ Future<void> _restoreCollectorAvailability() async {
       .set({
     "isOnline": true,
     "availabilityStatus": "available",
-    "isAvailableForHousehold": false,
+    "isAvailableForHousehold": true,
     "activeMoresSellRequestId": FieldValue.delete(),
     "updatedAt": FieldValue.serverTimestamp(),
   }, SetOptions(merge: true));

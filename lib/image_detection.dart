@@ -539,99 +539,113 @@ class _ImageDetectionPageState extends State<ImageDetectionPage> {
   }
 
   Future<void> _analyzeImage(File file) async {
-    if (_isAnalyzing) return;
+  if (_isAnalyzing) return;
+
+  if (!mounted) return;
+  setState(() {
+    _isAnalyzing = true;
+  });
+
+  try {
+    debugPrint('ANALYZE: start');
 
     if (!mounted) return;
+
+    AppLoader.show(
+      context,
+      title: "Scanning your photo…",
+      message: "Analyzing plastic type. This will only take a moment.",
+      preview: Image.file(
+        file,
+        fit: BoxFit.cover,
+        cacheWidth: 256,
+        filterQuality: FilterQuality.low,
+        gaplessPlayback: true,
+      ),
+    );
+
+    debugPrint('ANALYZE: loader shown');
+
+    await Future.delayed(Duration.zero);
+    await WidgetsBinding.instance.endOfFrame;
+
+    debugPrint('ANALYZE: before runModel');
+
+    final double p = await TFLiteService.runModel(file.path)
+        .timeout(const Duration(seconds: 20));
+
+    debugPrint('ANALYZE: runModel finished, p=$p');
+
+    const double yesThreshold = 0.80;
+    const double noThreshold = 0.35;
+
+    late DetectionStatus status;
+    late String itemName;
+    late double confidence;
+
+    if (p >= yesThreshold) {
+      status = DetectionStatus.recyclable;
+      itemName = "Recyclable Plastic";
+      confidence = p;
+    } else if (p <= noThreshold) {
+      status = DetectionStatus.nonRecyclable;
+      itemName = "Non-Recyclable Item";
+      confidence = 1.0 - p;
+    } else {
+      status = DetectionStatus.uncertain;
+      itemName = "Uncertain Result";
+      confidence = (p - 0.5).abs() * 2.0;
+    }
+
+    if (!mounted) return;
+    AppLoader.hide(context);
+    debugPrint('ANALYZE: loader hidden');
+
+    final action = await Navigator.push<DetectionResultAction>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DetectionResultPage(
+          status: status,
+          itemName: itemName,
+          confidence: confidence,
+        ),
+      ),
+    );
+
+    debugPrint('ANALYZE: result page returned $action');
+
+    if (!mounted) return;
+
     setState(() {
-      _isAnalyzing = true;
+      _image = null;
     });
 
-    try {
-      if (!mounted) return;
+    imageCache.clearLiveImages();
+    imageCache.clear();
 
-      AppLoader.show(
-        context,
-        title: "Scanning your photo…",
-        message: "Analyzing plastic type. This will only take a moment.",
-        preview: Image.file(
-          file,
-          fit: BoxFit.cover,
-          cacheWidth: 256,
-          filterQuality: FilterQuality.low,
-          gaplessPlayback: true,
-        ),
-      );
-
-      await Future.delayed(Duration.zero);
-      await WidgetsBinding.instance.endOfFrame;
-
-      final double p = await TFLiteService.runModel(file.path);
-
-      const double yesThreshold = 0.80;
-      const double noThreshold = 0.35;
-
-      late DetectionStatus status;
-      late String itemName;
-      late double confidence;
-
-      if (p >= yesThreshold) {
-        status = DetectionStatus.recyclable;
-        itemName = "Recyclable Plastic";
-        confidence = p;
-      } else if (p <= noThreshold) {
-        status = DetectionStatus.nonRecyclable;
-        itemName = "Non-Recyclable Item";
-        confidence = 1.0 - p;
-      } else {
-        status = DetectionStatus.uncertain;
-        itemName = "Uncertain Result";
-        confidence = (p - 0.5).abs() * 2.0;
-      }
-
-      if (!mounted) return;
-      AppLoader.hide(context);
-
-      final action = await Navigator.push<DetectionResultAction>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => DetectionResultPage(
-            status: status,
-            itemName: itemName,
-            confidence: confidence,
-          ),
-        ),
-      );
-
-      if (!mounted) return;
-
-      setState(() {
-        _image = null;
-      });
-
-      imageCache.clearLiveImages();
-      imageCache.clear();
-
-      if (action == DetectionResultAction.dashboard) {
-        Navigator.popUntil(context, (route) => route.isFirst);
-      }
-    } catch (e, st) {
-      debugPrint('Analyze image error: $e');
-      debugPrintStack(stackTrace: st);
-
-      if (!mounted) return;
-      AppLoader.hide(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Analysis failed. Please try another image.'),
-        ),
-      );
-    } finally {
-      if (!mounted) return;
-      setState(() {
-        _isAnalyzing = false;
-      });
+    if (action == DetectionResultAction.dashboard) {
+      Navigator.popUntil(context, (route) => route.isFirst);
     }
+  } catch (e, st) {
+    debugPrint('ANALYZE ERROR: $e');
+    debugPrintStack(stackTrace: st);
+
+    if (!mounted) return;
+    AppLoader.hide(context);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Analysis failed: $e'),
+      ),
+    );
+  } finally {
+    if (!mounted) return;
+    setState(() {
+      _isAnalyzing = false;
+    });
+    debugPrint('ANALYZE: done');
   }
+}
 
   @override
   Widget build(BuildContext context) {
