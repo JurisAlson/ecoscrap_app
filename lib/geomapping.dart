@@ -358,6 +358,36 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       _snack("Failed to open chat.");
     }
   }
+  Future<void> _restoreActivePickupIfAny() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  final snap = await FirebaseFirestore.instance
+      .collection('requests')
+      .where('householdId', isEqualTo: user.uid)
+      .where('type', isEqualTo: 'pickup')
+      .where('active', isEqualTo: true)
+      .limit(1)
+      .get();
+
+  if (snap.docs.isEmpty) return;
+
+  final doc = snap.docs.first;
+  final data = doc.data();
+  final status = (data['status'] ?? '').toString().toLowerCase();
+
+  if (status == 'accepted' ||
+      status == 'arrived' ||
+      status == 'scheduled' ||
+      status == 'pending') {
+    setState(() {
+      _activePickupRequestId = doc.id;
+      _tripStage = TripStage.pickup;
+    });
+
+    _listenToActivePickupRequest(doc.id);
+  }
+}
 
   Future<void> _deleteDropoffChat(String requestId) async {
     final db = FirebaseFirestore.instance;
@@ -412,6 +442,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     });
 
     await _restoreActiveDropoffIfAny();
+    await _restoreActivePickupIfAny();
   }
 
   Future<bool> _ensureLocationPermission() async {
