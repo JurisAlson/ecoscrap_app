@@ -248,8 +248,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               return !readByJunkshop &&
                   !receiptSaved &&
                   !cleared &&
-                  status != 'completed' &&
-                  status != 'confirmed';
+                  status != 'completed';
             }).length;
 
             final unreadCount = sellUnread + dropUnread;
@@ -547,7 +546,6 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
                       if (receiptSaved ||
                           status == 'completed' ||
-                          status == 'confirmed' ||
                           cleared) {
                         continue;
                       }
@@ -634,61 +632,122 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                               ),
                             ),
                             child: ListTile(
-                              onTap: status == 'arrived'
+                              onTap: (status == 'arrived' || status == 'confirmed')
                                   ? () async {
-                                      final action = await showDialog<String>(
-                                        context: context,
-                                        builder: (_) => AlertDialog(
-                                          backgroundColor:
-                                              const Color(0xFF0F172A),
-                                          title: const Text(
-                                            "Confirm arrival",
-                                            style:
-                                                TextStyle(color: Colors.white),
-                                          ),
-                                          content: Text(
-                                            collectorName.isEmpty
-                                                ? "Did the collector really arrive at Mores Scrap?"
-                                                : "Did $collectorName really arrive at Mores Scrap?",
-                                            style: const TextStyle(
-                                              color: Colors.white70,
+                                      if (status == 'arrived') {
+                                        final action = await showDialog<String>(
+                                          context: context,
+                                          builder: (_) => AlertDialog(
+                                            backgroundColor: const Color(0xFF0F172A),
+                                            title: const Text(
+                                              "Confirm arrival",
+                                              style: TextStyle(color: Colors.white),
                                             ),
-                                          ),
-                                          actions: [
-                                            TextButton(
-                                              onPressed: () => Navigator.pop(
-                                                context,
-                                                'dismiss',
-                                              ),
-                                              child: const Text(
-                                                "NOT HERE",
-                                                style: TextStyle(
-                                                  color: Colors.redAccent,
+                                            content: Text(
+                                              collectorName.isEmpty
+                                                  ? "Did the collector really arrive at Mores Scrap?"
+                                                  : "Did $collectorName really arrive at Mores Scrap?",
+                                              style: const TextStyle(color: Colors.white70),
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(context, 'dismiss'),
+                                                child: const Text(
+                                                  "NOT HERE",
+                                                  style: TextStyle(color: Colors.redAccent),
                                                 ),
                                               ),
-                                            ),
-                                            TextButton(
-                                              onPressed: () => Navigator.pop(
-                                                context,
-                                                'proceed',
-                                              ),
-                                              child: const Text(
-                                                "PROCEED",
-                                                style: TextStyle(
-                                                  color: Colors.greenAccent,
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(context, 'proceed'),
+                                                child: const Text(
+                                                  "PROCEED",
+                                                  style: TextStyle(color: Colors.greenAccent),
                                                 ),
                                               ),
-                                            ),
-                                          ],
-                                        ),
-                                      );
+                                            ],
+                                          ),
+                                        );
 
-                                      if (action == 'dismiss') {
+                                        if (action == 'dismiss') {
+                                          final collectorIdForUpdate =
+                                              (data['collectorId'] ?? '').toString();
+                                          final collectorTxnId =
+                                              (data['collectorTransactionId'] ?? '').toString();
+
+                                          final db = FirebaseFirestore.instance;
+                                          final batch = db.batch();
+
+                                          final sellReqRef = db
+                                              .collection('Users')
+                                              .doc(user.uid)
+                                              .collection('sell_requests')
+                                              .doc(docId);
+
+                                          batch.set(
+                                            sellReqRef,
+                                            {
+                                              'seen': true,
+                                              'status': 'rejected',
+                                              'junkshopRejected': true,
+                                              'junkshopRejectedAt': FieldValue.serverTimestamp(),
+                                              'updatedAt': FieldValue.serverTimestamp(),
+                                            },
+                                            SetOptions(merge: true),
+                                          );
+
+                                          if (collectorIdForUpdate.isNotEmpty) {
+                                            final collectorRef = db
+                                                .collection('Users')
+                                                .doc(collectorIdForUpdate);
+
+                                            batch.set(
+                                              collectorRef,
+                                              {
+                                                'isOnline': true,
+                                                'availabilityStatus': 'available',
+                                                'isAvailableForHousehold': true,
+                                                'activeMoresSellRequestId': FieldValue.delete(),
+                                                'updatedAt': FieldValue.serverTimestamp(),
+                                              },
+                                              SetOptions(merge: true),
+                                            );
+                                          }
+
+                                          if (collectorIdForUpdate.isNotEmpty &&
+                                              collectorTxnId.isNotEmpty) {
+                                            final collectorTxnRef = db
+                                                .collection('Users')
+                                                .doc(collectorIdForUpdate)
+                                                .collection('transactions')
+                                                .doc(collectorTxnId);
+
+                                            batch.set(
+                                              collectorTxnRef,
+                                              {
+                                                'status': 'rejected',
+                                                'junkshopRejected': true,
+                                                'junkshopRejectedAt': FieldValue.serverTimestamp(),
+                                                'updatedAt': FieldValue.serverTimestamp(),
+                                              },
+                                              SetOptions(merge: true),
+                                            );
+                                          }
+
+                                          await batch.commit();
+
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text("Sell request rejected.")),
+                                          );
+                                          return;
+                                        }
+
+                                        if (action != 'proceed') return;
+
                                         final collectorIdForUpdate =
                                             (data['collectorId'] ?? '').toString();
                                         final collectorTxnId =
-                                            (data['collectorTransactionId'] ?? '')
-                                                .toString();
+                                            (data['collectorTransactionId'] ?? '').toString();
 
                                         final db = FirebaseFirestore.instance;
                                         final batch = db.batch();
@@ -703,35 +762,12 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                           sellReqRef,
                                           {
                                             'seen': true,
-                                            'status': 'rejected',
-                                            'junkshopRejected': true,
-                                            'junkshopRejectedAt':
-                                                FieldValue.serverTimestamp(),
-                                            'updatedAt':
-                                                FieldValue.serverTimestamp(),
+                                            'status': 'confirmed',
+                                            'junkshopConfirmedArrival': true,
+                                            'updatedAt': FieldValue.serverTimestamp(),
                                           },
                                           SetOptions(merge: true),
                                         );
-
-                                        if (collectorIdForUpdate.isNotEmpty) {
-                                          final collectorRef = db
-                                              .collection('Users')
-                                              .doc(collectorIdForUpdate);
-
-                                          batch.set(
-                                            collectorRef,
-                                            {
-                                              'isOnline': true,
-                                              'availabilityStatus': 'available',
-                                              'isAvailableForHousehold': true,
-                                              'activeMoresSellRequestId':
-                                                  FieldValue.delete(),
-                                              'updatedAt':
-                                                  FieldValue.serverTimestamp(),
-                                            },
-                                            SetOptions(merge: true),
-                                          );
-                                        }
 
                                         if (collectorIdForUpdate.isNotEmpty &&
                                             collectorTxnId.isNotEmpty) {
@@ -744,78 +780,16 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                           batch.set(
                                             collectorTxnRef,
                                             {
-                                              'status': 'rejected',
-                                              'junkshopRejected': true,
-                                              'junkshopRejectedAt':
-                                                  FieldValue.serverTimestamp(),
-                                              'updatedAt':
-                                                  FieldValue.serverTimestamp(),
+                                              'status': 'confirmed',
+                                              'junkshopConfirmedArrival': true,
+                                              'updatedAt': FieldValue.serverTimestamp(),
                                             },
                                             SetOptions(merge: true),
                                           );
                                         }
 
                                         await batch.commit();
-
-                                        if (!context.mounted) return;
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(
-                                            content: Text("Sell request rejected."),
-                                          ),
-                                        );
-                                        return;
                                       }
-
-                                      if (action != 'proceed') return;
-
-                                      final collectorIdForUpdate =
-                                          (data['collectorId'] ?? '').toString();
-                                      final collectorTxnId =
-                                          (data['collectorTransactionId'] ?? '')
-                                              .toString();
-
-                                      final db = FirebaseFirestore.instance;
-                                      final batch = db.batch();
-
-                                      final sellReqRef = db
-                                          .collection('Users')
-                                          .doc(user.uid)
-                                          .collection('sell_requests')
-                                          .doc(docId);
-
-                                      batch.set(
-                                        sellReqRef,
-                                        {
-                                          'seen': true,
-                                          'status': 'confirmed',
-                                          'junkshopConfirmedArrival': true,
-                                          'updatedAt':
-                                              FieldValue.serverTimestamp(),
-                                        },
-                                        SetOptions(merge: true),
-                                      );
-
-                                      if (collectorIdForUpdate.isNotEmpty &&
-                                          collectorTxnId.isNotEmpty) {
-                                        final collectorTxnRef = db
-                                            .collection('Users')
-                                            .doc(collectorIdForUpdate)
-                                            .collection('transactions')
-                                            .doc(collectorTxnId);
-
-                                        batch.set(
-                                          collectorTxnRef,
-                                          {
-                                            'status': 'confirmed',
-                                            'junkshopConfirmedArrival': true,
-                                            'updatedAt':
-                                                FieldValue.serverTimestamp(),
-                                          },
-                                          SetOptions(merge: true),
-                                        );
-                                      }
-
-                                      await batch.commit();
 
                                       if (!context.mounted) return;
                                       Navigator.pop(context);
@@ -826,13 +800,9 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                           builder: (_) => receipt.ReceiptScreen(
                                             shopID: user.uid,
                                             prefillCollectorName:
-                                                collectorName.isEmpty
-                                                    ? null
-                                                    : collectorName,
+                                                collectorName.isEmpty ? null : collectorName,
                                             prefillCollectorId:
-                                                collectorId.isEmpty
-                                                    ? null
-                                                    : collectorId,
+                                                collectorId.isEmpty ? null : collectorId,
                                             sellRequestId: docId,
                                             prefillSourceType: "collector",
                                             initialTransactionType: "buy",
@@ -849,8 +819,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                               .doc(docId)
                                               .set({
                                             'seen': true,
-                                            'updatedAt':
-                                                FieldValue.serverTimestamp(),
+                                            'updatedAt': FieldValue.serverTimestamp(),
                                           }, SetOptions(merge: true));
                                         }
                                       : () async {
@@ -937,80 +906,62 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                             ),
                           ),
                           child: ListTile(
-                            onTap: status == 'awaiting_confirmation'
+                            onTap: (status == 'awaiting_confirmation' || status == 'confirmed')
                                 ? () async {
-                                    final action = await showDialog<String>(
-                                      context: context,
-                                      builder: (_) => AlertDialog(
-                                        backgroundColor:
-                                            const Color(0xFF0F172A),
-                                        title: const Text(
-                                          "Confirm arrival",
-                                          style:
-                                              TextStyle(color: Colors.white),
-                                        ),
-                                        content: Text(
-                                          householdName.isEmpty
-                                              ? "Has the resident really arrived?"
-                                              : "Has $householdName really arrived at the junkshop?",
-                                          style: const TextStyle(
-                                            color: Colors.white70,
+                                    if (status == 'awaiting_confirmation') {
+                                      final action = await showDialog<String>(
+                                        context: context,
+                                        builder: (_) => AlertDialog(
+                                          backgroundColor: const Color(0xFF0F172A),
+                                          title: const Text(
+                                            "Confirm arrival",
+                                            style: TextStyle(color: Colors.white),
                                           ),
-                                        ),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.pop(
-                                              context,
-                                              'dismiss',
-                                            ),
-                                            child: const Text(
-                                              "NOT HERE",
-                                              style: TextStyle(
-                                                color: Colors.redAccent,
-                                              ),
-                                            ),
-                                          ),
-                                          TextButton(
-                                            onPressed: () => Navigator.pop(
-                                              context,
-                                              'proceed',
-                                            ),
-                                            child: const Text(
-                                              "CONFIRM",
-                                              style: TextStyle(
-                                                color: Colors.greenAccent,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-
-                                    if (action == 'dismiss') {
-                                      await FirebaseFirestore.instance
-                                          .collection('dropoff_requests')
-                                          .doc(docId)
-                                          .set({
-                                        'readByJunkshop': true,
-                                        'updatedAt':
-                                            FieldValue.serverTimestamp(),
-                                      }, SetOptions(merge: true));
-
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
                                           content: Text(
-                                            "Arrival not confirmed.",
+                                            householdName.isEmpty
+                                                ? "Has the resident really arrived?"
+                                                : "Has $householdName really arrived at the junkshop?",
+                                            style: const TextStyle(color: Colors.white70),
                                           ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context, 'dismiss'),
+                                              child: const Text(
+                                                "NOT HERE",
+                                                style: TextStyle(color: Colors.redAccent),
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context, 'proceed'),
+                                              child: const Text(
+                                                "CONFIRM",
+                                                style: TextStyle(color: Colors.greenAccent),
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       );
-                                      return;
+
+                                      if (action == 'dismiss') {
+                                        await FirebaseFirestore.instance
+                                            .collection('dropoff_requests')
+                                            .doc(docId)
+                                            .set({
+                                          'readByJunkshop': true,
+                                          'updatedAt': FieldValue.serverTimestamp(),
+                                        }, SetOptions(merge: true));
+
+                                        if (!context.mounted) return;
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text("Arrival not confirmed.")),
+                                        );
+                                        return;
+                                      }
+
+                                      if (action != 'proceed') return;
+
+                                      await confirmDropoff(docId);
                                     }
-
-                                    if (action != 'proceed') return;
-
-                                    await confirmDropoff(docId);
 
                                     if (!context.mounted) return;
                                     Navigator.pop(context);
@@ -1021,13 +972,9 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                         builder: (_) => receipt.ReceiptScreen(
                                           shopID: user.uid,
                                           prefillCollectorName:
-                                              householdName.isEmpty
-                                                  ? null
-                                                  : householdName,
+                                              householdName.isEmpty ? null : householdName,
                                           prefillCollectorId:
-                                              householdId.isEmpty
-                                                  ? null
-                                                  : householdId,
+                                              householdId.isEmpty ? null : householdId,
                                           prefillSourceType: "household",
                                           sellRequestId: docId,
                                           initialTransactionType: "buy",
