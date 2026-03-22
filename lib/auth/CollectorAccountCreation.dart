@@ -3,6 +3,9 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
+import 'package:image/image.dart' as img;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -35,6 +38,94 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     );
   }
 
+  Future<String?> _validatePhotoQuality(String path) async {
+  try {
+    final inputImage = InputImage.fromFilePath(path);
+
+    // ML Kit object detector
+    final objectDetector = ObjectDetector(
+      options: ObjectDetectorOptions(
+        mode: DetectionMode.single,
+        classifyObjects: false,
+        multipleObjects: false,
+      ),
+    );
+
+    final objects = await objectDetector.processImage(inputImage);
+    await objectDetector.close();
+
+    // If ML Kit cannot detect any main object, image is likely too poor,
+    // too dark, too far, or badly framed.
+    if (objects.isEmpty) {
+      return "No clear object detected. Please retake the photo and make sure the whole collection device is visible.";
+    }
+
+    // Blur / sharpness check using image edges
+    final bytes = await File(path).readAsBytes();
+    final decoded = img.decodeImage(bytes);
+
+    if (decoded == null) {
+      return "Could not read the image. Please try another photo.";
+    }
+
+    final resized = img.copyResize(decoded, width: 320);
+    final gray = img.grayscale(resized);
+
+    final sharpness = _calculateSharpness(gray);
+
+    // Tune this threshold on your test devices
+    if (sharpness < 12.0) {
+      return "The photo looks blurry. Please retake it with better focus and lighting.";
+    }
+
+    // Very dark image check
+    final brightness = _averageBrightness(gray);
+    if (brightness < 45) {
+      return "The photo is too dark. Please retake it in a brighter place.";
+    }
+
+    return null; // valid
+  } catch (e) {
+    return "Failed to analyze the photo. Please try again.";
+  }
+}
+
+double _calculateSharpness(img.Image image) {
+  // Simple edge-based sharpness score using pixel differences
+  double total = 0;
+  int count = 0;
+
+  for (int y = 1; y < image.height - 1; y++) {
+    for (int x = 1; x < image.width - 1; x++) {
+      final c = img.getLuminance(image.getPixel(x, y));
+      final r = img.getLuminance(image.getPixel(x + 1, y));
+      final b = img.getLuminance(image.getPixel(x, y + 1));
+
+      final dx = (c - r).abs();
+      final dy = (c - b).abs();
+
+      total += dx + dy;
+      count++;
+    }
+  }
+
+  return count == 0 ? 0 : total / count;
+}
+
+double _averageBrightness(img.Image image) {
+  double total = 0;
+  int count = 0;
+
+  for (int y = 0; y < image.height; y++) {
+    for (int x = 0; x < image.width; x++) {
+      total += img.getLuminance(image.getPixel(x, y));
+      count++;
+    }
+  }
+
+  return count == 0 ? 0 : total / count;
+}
+
   Future<void> _showInfoDialog({
     required String title,
     required String message,
@@ -66,59 +157,74 @@ class _CollectorAccountCreationState extends State<CollectorAccountCreation> {
     );
   }
 
-  Future<void> _pickEquipmentPhoto() async {
-    await _showInfoDialog(
-      title: "Upload Collection Device Photo",
-      icon: Icons.photo_camera_back_outlined,
-      message:
-          "Please upload 1 clear photo of your collection device.\n\n"
-          "The photo must:\n"
-          "• Show the whole device\n"
-          "• Show the capacity/container area\n"
-          "• Clearly show that it can carry at least 20KG of plastic materials\n\n"
-          "Accepted examples:\n"
-          "• Kulong-kulong\n"
-          "• Sidecar\n"
-          "• Kariton\n"
-          "• Other collection device\n\n"
-          "Accepted file types: JPG, PNG (max 10MB).",
-    );
+Future<void> _pickEquipmentPhoto() async {
+  await _showInfoDialog(
+    title: "Upload Collection Device Photo",
+    icon: Icons.photo_camera_back_outlined,
+    message:
+        "Please upload 1 clear photo of your collection device.\n\n"
+        "The photo must:\n"
+        "• Show the whole device\n"
+        "• Show the capacity/container area\n"
+        "• Clearly show that it can carry at least 20KG of plastic materials\n\n"
+        "Accepted examples:\n"
+        "• Kulong-kulong\n"
+        "• Sidecar\n"
+        "• Kariton\n"
+        "• Other collection device\n\n"
+        "Accepted file types: JPG, PNG (max 10MB).",
+  );
 
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['jpg', 'jpeg', 'png'],
-      withData: false,
-    );
+  final result = await FilePicker.platform.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: ['jpg', 'jpeg', 'png'],
+    withData: false,
+  );
 
-    if (result == null || result.files.isEmpty) return;
+  if (result == null || result.files.isEmpty) return;
 
-    final file = result.files.first;
-    if (file.path == null) {
-      _toast("Invalid file. Please try again.", error: true);
-      return;
-    }
+  final file = result.files.first;
+  if (file.path == null) {
+    _toast("Invalid file. Please try again.", error: true);
+    return;
+  }
 
-    if (file.size > 10 * 1024 * 1024) {
-      _toast("File too large (Max 10MB).", error: true);
-      return;
-    }
+  if (file.size > 10 * 1024 * 1024) {
+    _toast("File too large (Max 10MB).", error: true);
+    return;
+  }
 
-    final ext = (file.extension ?? "").toLowerCase();
-    if (!['jpg', 'jpeg', 'png'].contains(ext)) {
-      _toast("Invalid file type. Use JPG/PNG only.", error: true);
+  final ext = (file.extension ?? "").toLowerCase();
+  if (!['jpg', 'jpeg', 'png'].contains(ext)) {
+    _toast("Invalid file type. Use JPG/PNG only.", error: true);
+    return;
+  }
+
+  setState(() => _loading = true);
+
+  try {
+    final qualityError = await _validatePhotoQuality(file.path!);
+
+    if (qualityError != null) {
+      _toast(qualityError, error: true);
       return;
     }
 
     setState(() => _equipmentPhoto = file);
 
     await _showInfoDialog(
-      title: "Photo Selected",
+      title: "Photo Accepted",
       icon: Icons.check_circle_outline,
       message:
           "Selected: ${file.name}\n\n"
-          "Your photo will be used only for verification.",
+          "Your photo passed the quality check and will be used only for verification.",
     );
+  } finally {
+    if (mounted) {
+      setState(() => _loading = false);
+    }
   }
+}
 
   String _randId([int len = 16]) {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
