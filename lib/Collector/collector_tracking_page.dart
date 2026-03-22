@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../household/household_dashboard.dart';
+import '../collector/collectors_dashboard.dart';
 extension TrackingOpacityFix on Color {
   Color o(double opacity) =>
       withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
@@ -355,6 +356,29 @@ static const String _darkMapStyle = r'''
 
       if (audited) {
         await _restoreCollectorAvailability();
+
+        if (_sentToDashboard || !mounted) return;
+        _sentToDashboard = true;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Transaction completed"),
+            duration: Duration(seconds: 1),
+          ),
+        );
+
+        await Future.delayed(const Duration(milliseconds: 800));
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (_) => const CollectorsDashboardPage(),
+            ),
+            (route) => false,
+          );
+        });
       }
     });
   }
