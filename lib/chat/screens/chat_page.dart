@@ -84,6 +84,107 @@ class _FullScreenImagePage extends StatelessWidget {
     );
   }
 }
+class _CameraPreviewPage extends StatelessWidget {
+  final File imageFile;
+  final Function(File) onSend;
+
+  const _CameraPreviewPage({
+    required this.imageFile,
+    required this.onSend,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // IMAGE PREVIEW
+          Positioned.fill(
+            child: Image.file(
+              imageFile,
+              fit: BoxFit.contain,
+            ),
+          ),
+
+          // TOP BAR (X button)
+          Positioned(
+            top: 40,
+            left: 16,
+            child: InkWell(
+              onTap: () {
+                Navigator.pop(context); // retake
+              },
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.6),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.close,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+
+          // BOTTOM BUTTONS
+          Positioned(
+            bottom: 40,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // RETAKE (optional big button)
+                InkWell(
+                  onTap: () {
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.9),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(width: 40),
+
+                // SEND
+                InkWell(
+                  onTap: () async {
+                    await onSend(imageFile);
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.check,
+                      color: Colors.white,
+                      size: 30,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _ChatPageState extends State<ChatPage> {
   static const Color bgColor = Color(0xFF0F172A);
@@ -94,12 +195,11 @@ class _ChatPageState extends State<ChatPage> {
   final _scroll = ScrollController();
   final _picker = ImagePicker();
 
-  // queue before sending
   final List<File> _pendingImages = [];
-
-  // uploads currently being sent
   final List<PendingUploadItem> _uploadingImages = [];
-  
+
+  bool _isMarkingSeen = false;
+  String? _lastMarkedUnreadMessageId;
 
   String? get _me => FirebaseAuth.instance.currentUser?.uid;
 
@@ -109,6 +209,8 @@ class _ChatPageState extends State<ChatPage> {
     _scroll.dispose();
     super.dispose();
   }
+
+  
 
   Future<void> _send() async {
     final text = _controller.text.trim();
@@ -157,6 +259,42 @@ class _ChatPageState extends State<ChatPage> {
 
     _jumpToBottomSoon();
   }
+
+  Future<void> _takePhoto() async {
+  try {
+    final picked = await _picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 85,
+    );
+
+    if (picked == null) return;
+
+    if (!mounted) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _CameraPreviewPage(
+          imageFile: File(picked.path),
+          onSend: (file) async {
+            await _chat.sendImageMessage(
+              chatId: widget.chatId,
+              file: file,
+              senderId: _me!,
+            );
+          },
+        ),
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Camera error: $e")),
+    );
+  }
+}
+
+  
 
   Future<void> _startSingleImageUpload(File file) async {
     final id = DateTime.now().microsecondsSinceEpoch.toString();
@@ -233,6 +371,38 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
+  Future<void> _markVisibleMessagesAsSeen(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    final me = _me;
+    if (me == null || _isMarkingSeen || docs.isEmpty) return;
+
+    final unreadIncoming = docs.where((doc) {
+      final data = doc.data();
+      final senderId = (data['senderId'] ?? '').toString();
+      final seenAt = data['seenAt'];
+      return senderId != me && seenAt == null;
+    }).toList();
+
+    if (unreadIncoming.isEmpty) return;
+
+    final newestUnreadId = unreadIncoming.last.id;
+    if (_lastMarkedUnreadMessageId == newestUnreadId) return;
+
+    _isMarkingSeen = true;
+    try {
+      await _chat.markMessagesAsSeen(
+        chatId: widget.chatId,
+        currentUserId: me,
+      );
+      _lastMarkedUnreadMessageId = newestUnreadId;
+    } catch (_) {
+      // silent on purpose
+    } finally {
+      _isMarkingSeen = false;
+    }
+  }
+
   String _formatTime(dynamic ts) {
     if (ts is! Timestamp) return "";
     final dt = ts.toDate();
@@ -244,298 +414,325 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final me = _me;
-    final otherName = widget.title.trim().isEmpty ? "User" : widget.title.trim();
+Widget build(BuildContext context) {
+  final me = _me;
+  final otherName = widget.title.trim().isEmpty ? "User" : widget.title.trim();
 
-    return Scaffold(
+  return Scaffold(
+    backgroundColor: bgColor,
+    appBar: AppBar(
       backgroundColor: bgColor,
-      appBar: AppBar(
-        backgroundColor: bgColor,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('Users')
-              .doc(widget.otherUserId)
-              .snapshots(),
-          builder: (context, snap) {
-            bool isOnline = false;
-            Timestamp? lastSeen;
+      elevation: 0,
+      iconTheme: const IconThemeData(color: Colors.white),
+      title: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('Users')
+            .doc(widget.otherUserId)
+            .snapshots(),
+        builder: (context, snap) {
+          bool isOnline = false;
+          Timestamp? lastSeen;
 
-            if (snap.hasData && snap.data!.data() != null) {
-              final data = snap.data!.data()!;
-              isOnline = (data['isOnline'] ?? false) as bool;
-              lastSeen = data['lastSeen'] as Timestamp?;
-            }
+          if (snap.hasData && snap.data!.data() != null) {
+            final data = snap.data!.data()!;
+            isOnline = (data['isOnline'] ?? false) as bool;
+            lastSeen = data['lastSeen'] as Timestamp?;
+          }
 
-            String statusText;
-            if (isOnline) {
-              statusText = "Online";
-            } else if (lastSeen != null) {
-              statusText = "Last seen ${_formatTime(lastSeen)}";
-            } else {
-              statusText = "Offline";
-            }
+          String statusText;
+          if (isOnline) {
+            statusText = "Online";
+          } else if (lastSeen != null) {
+            statusText = "Last seen ${_formatTime(lastSeen)}";
+          } else {
+            statusText = "Offline";
+          }
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  otherName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  statusText,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-      body: Stack(
-        children: [
-          Positioned(
-            top: -120,
-            right: -120,
-            child: _blurCircle(primaryColor.withOpacity(0.14), 320),
-          ),
-          Positioned(
-            bottom: 100,
-            left: -120,
-            child: _blurCircle(Colors.green.withOpacity(0.10), 360),
-          ),
-          Column(
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: _chat.messagesStream(widget.chatId),
-                  builder: (context, snap) {
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    if (snap.hasError) {
-                      return Center(
-                        child: Text(
-                          "Error: ${snap.error}",
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                      );
-                    }
-
-                    final docs = snap.data?.docs ?? [];
-
-                    if (docs.isEmpty && _uploadingImages.isEmpty) {
-                      return const Center(
-                        child: Text(
-                          "No messages yet.",
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      );
-                    }
-
-                    return ListView.builder(
-                      controller: _scroll,
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                      itemCount: docs.length + _uploadingImages.length,
-                      itemBuilder: (context, i) {
-                        if (i < docs.length) {
-                          final d = docs[i];
-                          final data = d.data();
-
-                          final text = (data['text'] ?? '').toString();
-                          final senderId = (data['senderId'] ?? '').toString();
-                          final createdAt = data['createdAt'];
-                          final type = (data['type'] ?? 'text').toString();
-                          final imageUrl = (data['imageUrl'] ?? '').toString();
-
-                          final isMe = me != null && senderId == me;
-
-                          final prevSenderId = (i > 0)
-                              ? (docs[i - 1].data()['senderId'] ?? '').toString()
-                              : null;
-
-                          final showName =
-                              !isMe && (i == 0 || senderId != prevSenderId);
-
-                          return _MessageBubble(
-                            type: type,
-                            imageUrl: imageUrl,
-                            text: text,
-                            isMe: isMe,
-                            timeText: _formatTime(createdAt),
-                            otherName: otherName,
-                            showName: showName,
-                          );
-                        }
-
-                        final upload = _uploadingImages[i - docs.length];
-                        return _UploadingImageBubble(
-                          item: upload,
-                          onRetry: upload.failed ? () => _retryUpload(upload) : null,
-                          onRemove: () => _removeUploadingItem(upload.id),
-                        );
-                      },
-                    );
-                  },
+              Text(
+                otherName,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
+              const SizedBox(height: 2),
+              Text(
+                statusText,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+    body: Stack(
+      children: [
+        Positioned(
+          top: -120,
+          right: -120,
+          child: _blurCircle(primaryColor.withOpacity(0.14), 320),
+        ),
+        Positioned(
+          bottom: 100,
+          left: -120,
+          child: _blurCircle(Colors.green.withOpacity(0.10), 360),
+        ),
+        Column(
+          children: [
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _chat.messagesStream(widget.chatId),
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
 
-              SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.06),
-                          border: Border.all(color: Colors.white.withOpacity(0.08)),
-                          borderRadius: BorderRadius.circular(18),
+                  if (snap.hasError) {
+                    return Center(
+                      child: Text(
+                        "Error: ${snap.error}",
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    );
+                  }
+
+                  final docs = snap.data?.docs ?? [];
+
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    _markVisibleMessagesAsSeen(docs);
+                  });
+                     
+
+                  if (docs.isEmpty && _uploadingImages.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        "No messages yet.",
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    );
+                  }
+
+                  return ListView.builder(
+                    controller: _scroll,
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    itemCount: docs.length + _uploadingImages.length,
+                    itemBuilder: (context, i) {
+                      if (i < docs.length) {
+                        final d = docs[i];
+                        final data = d.data();
+
+                        final text = (data['text'] ?? '').toString();
+                        final senderId = (data['senderId'] ?? '').toString();
+                        final createdAt = data['createdAt'];
+                        final seenAt = data['seenAt'];
+                        final type = (data['type'] ?? 'text').toString();
+                        final imageUrl = (data['imageUrl'] ?? '').toString();
+
+                        final isMe = me != null && senderId == me;
+
+                        final prevSenderId = (i > 0)
+                            ? (docs[i - 1].data()['senderId'] ?? '').toString()
+                            : null;
+
+                        final showName =
+                            !isMe && (i == 0 || senderId != prevSenderId);
+
+                        final isLatestOutgoingMessage =
+                            isMe && i == docs.length - 1;
+
+                        final showStatusBelow = isLatestOutgoingMessage;
+                        final statusTextBelow =
+                            seenAt != null ? 'Seen' : 'Delivered';
+
+                        return _MessageBubble(
+                          type: type,
+                          imageUrl: imageUrl,
+                          text: text,
+                          isMe: isMe,
+                          timeText: _formatTime(createdAt),
+                          otherName: otherName,
+                          showName: showName,
+                          showStatusBelow: showStatusBelow,
+                          statusTextBelow: statusTextBelow,
+                        );
+                      }
+
+                      final upload = _uploadingImages[i - docs.length];
+                      return _UploadingImageBubble(
+                        item: upload,
+                        onRetry:
+                            upload.failed ? () => _retryUpload(upload) : null,
+                        onRemove: () => _removeUploadingItem(upload.id),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.08),
                         ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (_pendingImages.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-                                child: SizedBox(
-                                  height: 110,
-                                  child: ListView.separated(
-                                    scrollDirection: Axis.horizontal,
-                                    itemCount: _pendingImages.length,
-                                    separatorBuilder: (_, __) =>
-                                        const SizedBox(width: 8),
-                                    itemBuilder: (context, index) {
-                                      final file = _pendingImages[index];
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_pendingImages.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                              child: SizedBox(
+                                height: 110,
+                                child: ListView.separated(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: _pendingImages.length,
+                                  separatorBuilder: (_, __) =>
+                                      const SizedBox(width: 8),
+                                  itemBuilder: (context, index) {
+                                    final file = _pendingImages[index];
 
-                                      return Stack(
-                                        children: [
-                                          ClipRRect(
-                                            borderRadius: BorderRadius.circular(12),
-                                            child: Image.file(
-                                              file,
-                                              height: 110,
-                                              width: 110,
-                                              fit: BoxFit.cover,
-                                            ),
+                                    return Stack(
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          child: Image.file(
+                                            file,
+                                            height: 110,
+                                            width: 110,
+                                            fit: BoxFit.cover,
                                           ),
-                                          Positioned(
-                                            right: 4,
-                                            top: 4,
-                                            child: InkWell(
-                                              onTap: () {
-                                                setState(() {
-                                                  _pendingImages.removeAt(index);
-                                                });
-                                              },
-                                              borderRadius:
-                                                  BorderRadius.circular(999),
-                                              child: Container(
-                                                padding: const EdgeInsets.all(4),
-                                                decoration: BoxDecoration(
-                                                  color:
-                                                      Colors.black.withOpacity(0.6),
-                                                  shape: BoxShape.circle,
-                                                ),
-                                                child: const Icon(
-                                                  Icons.close,
-                                                  size: 16,
-                                                  color: Colors.white,
-                                                ),
+                                        ),
+                                        Positioned(
+                                          right: 4,
+                                          top: 4,
+                                          child: InkWell(
+                                            onTap: () {
+                                              setState(() {
+                                                _pendingImages.removeAt(index);
+                                              });
+                                            },
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.all(4),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black
+                                                    .withOpacity(0.6),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const Icon(
+                                                Icons.close,
+                                                size: 16,
+                                                color: Colors.white,
                                               ),
                                             ),
                                           ),
-                                        ],
-                                      );
-                                    },
-                                  ),
+                                        ),
+                                      ],
+                                    );
+                                  },
                                 ),
                               ),
-
-                            Row(
-                              children: [
-                                IconButton(
-                                  onPressed: _pickImages,
-                                  icon: const Icon(
-                                    Icons.image_outlined,
-                                    color: Colors.white,
-                                  ),
+                            ),
+                          Row(
+                            children: [
+                              IconButton(
+                                onPressed: _takePhoto,
+                                icon: const Icon(
+                                  Icons.camera_alt_outlined,
+                                  color: Colors.white,
                                 ),
-                                Expanded(
-                                  child: TextField(
-                                    controller: _controller,
-                                    style: const TextStyle(color: Colors.white),
-                                    cursorColor: primaryColor,
-                                    decoration: InputDecoration(
-                                      hintText: _pendingImages.isNotEmpty
-                                          ? "Add a caption or press send..."
-                                          : "Type a message.",
-                                      hintStyle:
-                                          TextStyle(color: Colors.grey.shade400),
-                                      border: InputBorder.none,
+                              ),
+                              IconButton(
+                                onPressed: _pickImages,
+                                icon: const Icon(
+                                  Icons.image_outlined,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Expanded(
+                                child: TextField(
+                                  controller: _controller,
+                                  style: const TextStyle(color: Colors.white),
+                                  cursorColor: primaryColor,
+                                  decoration: InputDecoration(
+                                    hintText: _pendingImages.isNotEmpty
+                                        ? "Add a caption or press send..."
+                                        : "Type a message.",
+                                    hintStyle: TextStyle(
+                                      color: Colors.grey.shade400,
                                     ),
-                                    textInputAction: TextInputAction.send,
-                                    onSubmitted: (_) {
-                                      if (_pendingImages.isNotEmpty) {
-                                        _sendPendingImages();
-                                      } else {
-                                        _send();
-                                      }
-                                    },
+                                    border: InputBorder.none,
                                   ),
-                                ),
-                                const SizedBox(width: 6),
-                                InkWell(
-                                  onTap: () {
+                                  textInputAction: TextInputAction.send,
+                                  onSubmitted: (_) {
                                     if (_pendingImages.isNotEmpty) {
                                       _sendPendingImages();
                                     } else {
                                       _send();
                                     }
                                   },
-                                  borderRadius: BorderRadius.circular(14),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: primaryColor.withOpacity(0.95),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: const Icon(
-                                      Icons.send,
-                                      color: Colors.white,
-                                      size: 18,
-                                    ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              InkWell(
+                                onTap: () {
+                                  if (_pendingImages.isNotEmpty) {
+                                    _sendPendingImages();
+                                  } else {
+                                    _send();
+                                  }
+                                },
+                                borderRadius: BorderRadius.circular(14),
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: primaryColor.withOpacity(0.95),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: const Icon(
+                                    Icons.send,
+                                    color: Colors.white,
+                                    size: 18,
                                   ),
                                 ),
-                              ],
-                            ),
-                          ],
-                        ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
 
   static Widget _blurCircle(Color color, double size) {
     return Container(
@@ -731,6 +928,8 @@ class _MessageBubble extends StatelessWidget {
     required this.timeText,
     required this.otherName,
     required this.showName,
+    required this.showStatusBelow,
+    required this.statusTextBelow,
   });
 
   final String type;
@@ -740,6 +939,8 @@ class _MessageBubble extends StatelessWidget {
   final String timeText;
   final String otherName;
   final bool showName;
+  final bool showStatusBelow;
+  final String statusTextBelow;
 
   static const Color primaryColor = Color(0xFF1FA9A7);
 
@@ -839,19 +1040,33 @@ class _MessageBubble extends StatelessWidget {
                     isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                 children: [
                   content,
-                  if (timeText.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      timeText,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.75),
-                        fontSize: 11,
-                      ),
+                 if (timeText.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    timeText,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.75),
+                      fontSize: 11,
                     ),
-                  ],
+                  ),
+                ],
                 ],
               ),
             ),
+            if (showStatusBelow)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, right: 6),
+                child: Text(
+                  statusTextBelow,
+                  style: TextStyle(
+                    color: statusTextBelow == 'Seen'
+                        ? Colors.lightBlueAccent.withOpacity(0.95)
+                        : Colors.white.withOpacity(0.72),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
           ],
         ),
       ),
