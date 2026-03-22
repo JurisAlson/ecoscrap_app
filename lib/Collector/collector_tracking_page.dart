@@ -8,7 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-
+import '../household/household_dashboard.dart';
 extension TrackingOpacityFix on Color {
   Color o(double opacity) =>
       withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
@@ -25,6 +25,7 @@ class CollectorTrackingPage extends StatefulWidget {
   final bool showArrivedButton;
   final String trackingType; // "pickup" or "sell"
   final String? sellRequestId;
+  
 
   const CollectorTrackingPage({
     super.key,
@@ -62,6 +63,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   static const Color _textSecondary = Color(0xFF94A3B8);
   static const Color _textMuted = Color(0xFF64748B);
   static const String _moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
+  bool _sentToDashboard = false;
 
 static const String _darkMapStyle = r'''
 [
@@ -179,6 +181,7 @@ static const String _darkMapStyle = r'''
   }
 ]
 ''';
+  
 
   final FirebaseFunctions _functions =
       FirebaseFunctions.instanceFor(region: 'asia-southeast1');
@@ -289,6 +292,35 @@ static const String _darkMapStyle = r'''
     } else {
       _listenToRequest();
     }
+  }
+
+  void _goToDashboardIfTransactionEnded(Map<String, dynamic> data) {
+    if (_sentToDashboard || !mounted) return;
+
+    final status = (data['status'] ?? '').toString().trim().toLowerCase();
+    final active = data['active'] == true;
+
+    final isFinished =
+        !active ||
+        status == 'completed' ||
+        status == 'done' ||
+        status == 'cancelled' ||
+        status == 'confirmed';
+
+    if (!isFinished) return;
+
+    _sentToDashboard = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const DashboardPage(),
+        ),
+        (route) => false,
+      );
+    });
   }
 
   void _listenToSellRequest() {
@@ -616,6 +648,8 @@ static const String _darkMapStyle = r'''
 
       final data = doc.data() ?? {};
 
+      _goToDashboardIfTransactionEnded(data);
+
       final pickupGp = data['pickupLocation'];
       final collectorGp =
           data['collectorLiveLocation'] ?? data['collectorLocation'];
@@ -847,59 +881,33 @@ static const String _darkMapStyle = r'''
     return normalized < 0 ? normalized + 360 : normalized;
   }
 
-Set<Marker> _buildMarkers() {
-  final markers = <Marker>{};
+  Set<Marker> _buildMarkers() {
+    final markers = <Marker>{};
 
-  if (_pickupLatLng != null) {
-    double householdRotation = 0;
-
-    if (_collectorRoutePoints.length >= 2) {
-      final p1 = _collectorRoutePoints[_collectorRoutePoints.length - 2];
-      final p2 = _collectorRoutePoints.last;
-      householdRotation = _bearingBetween(p1, p2);
+    if (_pickupLatLng != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId("pickup"),
+          position: _pickupLatLng!,
+          anchor: const Offset(0.5, 0.55),
+          icon: _householdMarkerIcon ?? BitmapDescriptor.defaultMarker,
+        ),
+      );
     }
 
-    markers.add(
-      Marker(
-        markerId: const MarkerId('pickup'),
-        position: _pickupLatLng!,
-        infoWindow: InfoWindow(title: _pickupMarkerTitle),
-        icon: _householdMarkerIcon ??
-            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
-        rotation: _normalizeRotation(householdRotation + 90),
-        flat: true,
-        anchor: const Offset(0.5, 0.5),
-        zIndex: 1,
-      ),
-    );
-  }
-
-  if (_collectorLatLng != null) {
-    double rotation = _collectorHeading;
-
-    if (rotation == 0 && _collectorRoutePoints.length >= 2) {
-      final p1 = _collectorRoutePoints.first;
-      final p2 = _collectorRoutePoints[1];
-      rotation = _bearingBetween(p1, p2);
+    if (_collectorLatLng != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId("collector"),
+          position: _collectorLatLng!,
+          anchor: const Offset(0.5, 0.55),
+          icon: _collectorIcon ?? BitmapDescriptor.defaultMarker,
+        ),
+      );
     }
 
-    markers.add(
-      Marker(
-        markerId: const MarkerId('collector'),
-        position: _collectorLatLng!,
-        infoWindow: InfoWindow(title: _displayCollectorName),
-        icon: _collectorIcon ??
-            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-        rotation: _normalizeRotation(rotation + 140),
-        flat: true,
-        anchor: const Offset(0.5, 0.5),
-        zIndex: 3,
-      ),
-    );
+    return markers;
   }
-
-  return markers;
-}
 
   Set<Polyline> _buildPolylines() {
     if (_collectorRoutePoints.isEmpty) return <Polyline>{};
