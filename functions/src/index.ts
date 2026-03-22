@@ -23,19 +23,15 @@ setGlobalOptions({ maxInstances: 10 });
 async function getAdminUids(): Promise<string[]> {
   const db = admin.firestore();
 
-  const snapA = await db
-    .collection("Users")
-    .where("Roles", "in", ["admin", "admins", "Admin", "Admins"])
-    .get();
-
-  const snapB = await db
-    .collection("Users")
-    .where("role", "in", ["admin", "admins", "Admin", "Admins"])
-    .get();
+  const queries = await Promise.all([
+    db.collection("Users").where("Roles", "in", ["admin", "Admin"]).get(),
+    db.collection("Users").where("role", "in", ["admin", "Admin"]).get(),
+  ]);
 
   const set = new Set<string>();
-  snapA.docs.forEach((d) => set.add(d.id));
-  snapB.docs.forEach((d) => set.add(d.id));
+  for (const snap of queries) {
+    snap.docs.forEach((d) => set.add(d.id));
+  }
 
   return [...set];
 }
@@ -177,10 +173,30 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
         to: email,
         message: {
           subject: "EcoScrap Verification Rejected",
-          text: reason
-            ? `Your registration was rejected.\n\nReason: ${reason}`
-            : "Your registration was rejected by the admin.",
-        },
+          html: `
+              <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+
+                <p>Dear ${name},</p>
+
+                <p>We regret to inform you that your <strong>collector application has been declined</strong>.</p>
+
+                <p>You may review your submission and reapply at any time.</p>
+
+                <p>If you have questions, you may contact our team at 
+                <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+
+                <br/>
+
+                <p>Best regards,<br/>
+                <strong>EcoScrap Team</strong></p>
+
+                <hr style="margin-top:20px;" />
+                <small style="color:#777;">
+                  This is an automated message. Please do not reply directly to this email.
+                </small>
+              </div>
+              `,
+        }
       });
     }
 
@@ -1226,32 +1242,43 @@ export const notifyAdminOnCollectorApply = onDocumentWritten(
 /* ====================================================
   ADMIN NOTIFIED: resident apply (pending)
 ==================================================== */
-export const notifyAdminOnResidentApply = onDocumentWritten(
+export const notifyAdminOnResidentApply = onDocumentCreated(
   { document: "residentRequests/{uid}", region: "asia-southeast1" },
   async (event) => {
-    const before = event.data?.before?.data() as any | undefined;
-    const after = event.data?.after?.data() as any | undefined;
-    if (!after) return;
+    const data = event.data?.data();
+    if (!data) return;
+
+    const status = String(data.status || "").toLowerCase();
+
+    // only notify if pending
+    if (status !== "pending") return;
 
     const uid = String(event.params.uid);
 
-    const b = String(before?.status || "").trim().toLowerCase();
-    const a = String(after?.status || "").trim().toLowerCase();
-
-    if (a !== "pending" || a === b) return;
-
-    const name = String(after.publicName || "Resident");
-    const email = String(after.emailDisplay || "");
+    const name = String(data.publicName || "Resident");
+    const email = String(data.emailDisplay || "");
 
     const admins = await getAdminUids();
-    logger.info("notifyAdminOnResidentApply", { uid, a, b, adminCount: admins.length });
-    if (admins.length === 0) return;
+
+    logger.info("Resident request created.", {
+      uid,
+      status,
+      adminCount: admins.length,
+    });
+
+    if (admins.length === 0) {
+      logger.warn("No admin found");
+      return;
+    }
 
     await sendPushToMany(
       admins,
-      "New Resident Request 🏠",
-      `${name}${email ? ` (${email})` : ""} submitted a resident verification request.`,
-      { type: "admin_new_resident_request", residentUid: uid }
+      "New Resident Request.",
+      `${name}${email ? ` (${email})` : ""} submitted a request.`,
+      {
+        type: "admin_new_resident_request",
+        residentUid: uid,
+      }
     );
   }
 );
@@ -1350,7 +1377,7 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
     if (a === "adminapproved" || a === "approved") {
       await sendPushToUser(
         uid,
-        "Collector approved ✅",
+        "Collector approved",
         "Your collector application has been approved by the admin.",
         { type: "collector_admin_approved" }
       );
@@ -1395,7 +1422,7 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
 
       await sendPushToUser(
         uid,
-        "Collector rejected ❌",
+        "Collector rejected",
         reason.length > 0
           ? `Your collector application was rejected. Reason: ${reason}`
           : "Your collector application was rejected by the admin.",
@@ -1409,7 +1436,6 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
             subject: "EcoScrap Collector Application Rejected",
             html: `
               <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                <h2 style="color:#1FA9A7;">EcoScrap</h2>
 
                 <p>Dear ${name},</p>
 
@@ -1486,7 +1512,7 @@ export const notifyResidentAdminApproved = onDocumentUpdated(
 
     await sendPushToUser(
       uid,
-      "Resident approved ✅",
+      "Resident approved",
       "Your residency request has been approved.",
       { type: "resident_admin_approved" }
     );
@@ -1769,14 +1795,14 @@ export const adminSetUserRestricted = onCall(
 
         await sendPushToUser(
           uid,
-          "Account restricted ⚠️",
+          "Account restricted",
           `Your EcoScrap account was restricted.\nReason: ${reasonLine}\n\nPlease contact the admin if you believe this is a mistake.`,
           { type: "account_restricted", reasonCode, reasonText }
         );
       } else {
         await sendPushToUser(
           uid,
-          "Account restored ✅",
+          "Account restored",
           "Your EcoScrap account access has been restored.",
           { type: "account_unrestricted" }
         );

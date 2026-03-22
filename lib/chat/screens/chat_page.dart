@@ -40,6 +40,51 @@ class PendingUploadItem {
   });
 }
 
+class _FullScreenImagePage extends StatelessWidget {
+  const _FullScreenImagePage({
+    required this.imageUrl,
+  });
+
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: SafeArea(
+        child: Center(
+          child: InteractiveViewer(
+            minScale: 0.8,
+            maxScale: 5.0,
+            child: Image.network(
+              imageUrl,
+              fit: BoxFit.contain,
+              loadingBuilder: (context, child, progress) {
+                if (progress == null) return child;
+                return const Center(
+                  child: CircularProgressIndicator(color: Colors.white),
+                );
+              },
+              errorBuilder: (_, __, ___) => const Center(
+                child: Icon(
+                  Icons.broken_image_outlined,
+                  color: Colors.white70,
+                  size: 42,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ChatPageState extends State<ChatPage> {
   static const Color bgColor = Color(0xFF0F172A);
   static const Color primaryColor = Color(0xFF1FA9A7);
@@ -714,30 +759,39 @@ class _MessageBubble extends StatelessWidget {
 
     Widget content;
     if (type == 'image' && imageUrl.isNotEmpty) {
-      content = ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Image.network(
-          imageUrl,
-          width: 240,
-          height: 180,
-          fit: BoxFit.cover,
-          loadingBuilder: (context, child, progress) {
-            if (progress == null) return child;
-            return const SizedBox(
-              width: 240,
-              height: 180,
-              child: Center(child: CircularProgressIndicator()),
-            );
-          },
-          errorBuilder: (_, __, ___) => Container(
+      content = GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => _FullScreenImagePage(imageUrl: imageUrl),
+            ),
+          );
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Image.network(
+            imageUrl,
             width: 240,
             height: 180,
-            color: Colors.black26,
-            alignment: Alignment.center,
-            child: const Icon(
-              Icons.broken_image_outlined,
-              color: Colors.white70,
-              size: 36,
+            fit: BoxFit.cover,
+            loadingBuilder: (context, child, progress) {
+              if (progress == null) return child;
+              return const SizedBox(
+                width: 240,
+                height: 180,
+                child: Center(child: CircularProgressIndicator()),
+              );
+            },
+            errorBuilder: (_, __, ___) => Container(
+              width: 240,
+              height: 180,
+              color: Colors.black26,
+              alignment: Alignment.center,
+              child: const Icon(
+                Icons.broken_image_outlined,
+                color: Colors.white70,
+                size: 36,
+              ),
             ),
           ),
         ),

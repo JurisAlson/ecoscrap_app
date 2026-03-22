@@ -1799,7 +1799,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
                         return _notificationLogTile(
                           title: _pickupStatusToTitle(status),
-                          subtitle: "Driver: $driver",
+                          subtitle: "Collector: $driver",
                           time: _formatTimestamp(updatedAt),
                           unread: false,
                         );
