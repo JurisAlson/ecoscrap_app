@@ -35,6 +35,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     'accepted',
     'arrived',
     'scheduled',
+    'ongoing'
   ];
 
   static const List<String> openPickupStatuses = [
@@ -159,15 +160,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       _stopDashboardLiveTracking(clearFirestore: false);
     }
   }
-  Future<void> setCollectorOnline(bool value) async {
-  final uid = FirebaseAuth.instance.currentUser?.uid;
-  if (uid == null) return;
-
-  await FirebaseFirestore.instance.collection('collectors').doc(uid).set({
-    'isOnline': value,
-    'lastSeenAt': FieldValue.serverTimestamp(),
-  }, SetOptions(merge: true));
-}
 
   Future<bool> _ensureLocationPermission() async {
     final enabled = await Geolocator.isLocationServiceEnabled();
@@ -188,19 +180,15 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   }
 
   Future<void> _startDashboardLiveTracking() async {
+    debugPrint('DASHBOARD: _startDashboardLiveTracking called');
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+
     if (_isSendingLiveLocation) return;
 
     final hasPermission = await _ensureLocationPermission();
     if (!hasPermission) return;
-
-    final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
-
-    if (activeDocs.docs.isEmpty) {
-      await _stopDashboardLiveTracking(clearFirestore: true);
-      return;
-    }
 
     _isSendingLiveLocation = true;
 
@@ -208,24 +196,29 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       desiredAccuracy: LocationAccuracy.best,
     );
 
-    final batch = _db.batch();
-    for (final doc in activeDocs.docs) {
-      batch.set(
-        doc.reference,
-        {
-          'collectorLiveLocation': GeoPoint(
-            firstPos.latitude,
-            firstPos.longitude,
-          ),
-          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          'collectorHeading': firstPos.heading,
-          'collectorSpeedMps': firstPos.speed,
-          'sharingLiveLocation': true,
-        },
-        SetOptions(merge: true),
-      );
+    // ALWAYS update collector location in Users
+    await _updateCollectorUserLiveLocation(firstPos);
+
+    // ONLY mirror into request docs if there are active assigned pickups
+    final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
+    if (activeDocs.docs.isNotEmpty) {
+      final batch = _db.batch();
+      for (final doc in activeDocs.docs) {
+        batch.set(
+          doc.reference,
+          {
+            'collectorLiveLocation': GeoPoint(
+              firstPos.latitude,
+              firstPos.longitude,
+            ),
+            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+            'sharingLiveLocation': true,
+          },
+          SetOptions(merge: true),
+        );
+      }
+      await batch.commit();
     }
-    await batch.commit();
 
     await _liveLocationSub?.cancel();
 
@@ -238,32 +231,30 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser == null) return;
 
-      final activeNow =
-          await _activeCollectorRequestsQuery(currentUser.uid).get();
+      // ALWAYS keep Users/{uid} updated
+      await _updateCollectorUserLiveLocation(position);
 
-      if (activeNow.docs.isEmpty) {
-        await _stopDashboardLiveTracking(clearFirestore: true);
-        return;
-      }
+      // ONLY update assigned active requests if any exist
+      final activeNow = await _activeCollectorRequestsQuery(currentUser.uid).get();
 
-      final batch = _db.batch();
-      for (final doc in activeNow.docs) {
-        batch.set(
-          doc.reference,
-          {
-            'collectorLiveLocation': GeoPoint(
-              position.latitude,
-              position.longitude,
-            ),
-            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-            'collectorHeading': position.heading,
-            'collectorSpeedMps': position.speed,
-            'sharingLiveLocation': true,
-          },
-          SetOptions(merge: true),
-        );
+      if (activeNow.docs.isNotEmpty) {
+        final batch = _db.batch();
+        for (final doc in activeNow.docs) {
+          batch.set(
+            doc.reference,
+            {
+              'collectorLiveLocation': GeoPoint(
+                position.latitude,
+                position.longitude,
+              ),
+              'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+              'sharingLiveLocation': true,
+            },
+            SetOptions(merge: true),
+          );
+        }
+        await batch.commit();
       }
-      await batch.commit();
     });
   }
 
@@ -273,6 +264,12 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     await _liveLocationSub?.cancel();
     _liveLocationSub = null;
     _isSendingLiveLocation = false;
+
+    if (user != null) {
+      await _userRef(user.uid).set({
+        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
 
     if (!clearFirestore || user == null) return;
 
@@ -291,6 +288,24 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       );
     }
     await batch.commit();
+  }
+
+  Future<void> _updateCollectorUserLiveLocation(Position position) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .set({
+      'collectorLiveLocation': GeoPoint(
+        position.latitude,
+        position.longitude,
+      ),
+      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      'isOnline': true,
+      'isAvailableForHousehold': true,
+    }, SetOptions(merge: true));
   }
 
   double _getRequestKg(Map<String, dynamic> data) {
