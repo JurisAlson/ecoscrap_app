@@ -1432,45 +1432,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
               ),
             ),
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                height: 52,
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [_bg.o(0.92), _bg.o(0.18)],
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      _timeString,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 14,
-                        color: _textPrimary,
-                      ),
-                    ),
-                    const Row(
-                      children: [
-                        Icon(Icons.signal_cellular_alt,
-                            size: 14, color: _textPrimary),
-                        SizedBox(width: 6),
-                        Icon(Icons.wifi, size: 14, color: _textPrimary),
-                        SizedBox(width: 6),
-                        Icon(Icons.battery_full, size: 14, color: _textPrimary),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            Positioned(
               top: 44,
               left: 16,
               right: 16,
