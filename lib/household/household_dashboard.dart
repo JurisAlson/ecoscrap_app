@@ -1730,8 +1730,8 @@ class _DashboardPageState extends State<DashboardPage> {
                     const SnackBar(content: Text("Notifications cleared")),
                   );
                 },
-                icon: const Icon(Icons.done_all, size: 18),
                 label: const Text("Clear"),
+                
               ),
             ],
           ),

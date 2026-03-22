@@ -862,84 +862,90 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<void> _openJunkshopChat() async {
-    final stop = _currentStop;
-    if (stop == null) return;
+  try {
+    final collectorUid = FirebaseAuth.instance.currentUser?.uid;
+    if (collectorUid == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be logged in to open chat.')),
+      );
+      return;
+    }
 
-    final s = stop.status.toLowerCase();
-    final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
+    final stop = _currentStop;
+    if (stop == null || stop.requestId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No active stop found for chat.')),
+      );
+      return;
+    }
+
+    if (_junkshopUid.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Junkshop account not available.')),
+      );
+      return;
+    }
+
+    final requestSnap = await FirebaseFirestore.instance
+        .collection('requests')
+        .doc(stop.requestId)
+        .get();
+
+    if (!requestSnap.exists) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Request not found.')),
+      );
+      return;
+    }
+
+    final data = requestSnap.data() ?? {};
+    final status = (data['status'] ?? '').toString();
+    final active = data['active'] == true;
+
+    final canChat = active &&
+        (status == 'pending' ||
+            status == 'accepted' ||
+            status == 'arrived' ||
+            status == 'scheduled');
 
     if (!canChat) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("Junkshop chat is available once pickup is accepted."),
+          content: Text('Chat is only available during an active transaction.'),
         ),
       );
       return;
     }
 
-    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-    var collectorUid = stop.collectorId.trim();
+    await _chat.ensureJunkshopChatForRequest(
+      requestId: stop.requestId,
+      junkshopUid: _junkshopUid,
+      collectorUid: collectorUid,
+    );
 
-    if (me.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Collector ID not loaded yet.")),
-      );
-      return;
-    }
+    if (!mounted) return;
 
-    if (collectorUid.isEmpty) {
-      collectorUid = me;
-      try {
-        await FirebaseFirestore.instance
-            .collection('requests')
-            .doc(stop.requestId)
-            .update({
-          'collectorId': me,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-
-        final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
-        if (idx != -1 && mounted) {
-          setState(() {
-            _stops[idx] = _stops[idx].copyWith(collectorId: me);
-          });
-        }
-      } catch (e) {
-        debugPrint("❌ Failed to write collectorId for junkshop chat: $e");
-      }
-    }
-
-    try {
-      await _chat.ensureJunkshopChatForRequest(
-        requestId: stop.requestId,
-        junkshopUid: _junkshopUid,
-        collectorUid: collectorUid,
-      );
-
-      final chatId = "junkshop_pickup_${stop.requestId}";
-      await _markChatRead(chatId);
-
-      if (!mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ChatPage(
-            chatId: chatId,
-            title: _junkshopName,
-            otherUserId: _junkshopUid,
-          ),
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChatPage(
+          chatId: 'junkshop_pickup_${stop.requestId}',
+          title: _junkshopName.trim().isEmpty ? 'Junkshop' : _junkshopName,
+          otherUserId: _junkshopUid,
         ),
-      );
-    } catch (e) {
-      debugPrint("❌ Failed to open junkshop chat: $e");
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to open junkshop chat: $e")),
-      );
-    }
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Unable to open junkshop chat: $e')),
+    );
   }
+}
 
   Future<void> _openPickupChat() async {
     final stop = _currentStop;

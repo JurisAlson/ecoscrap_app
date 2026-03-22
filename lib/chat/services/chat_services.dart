@@ -96,6 +96,8 @@ class ChatService {
       'imageUrl': imageUrl,
       'text': '',
       'createdAt': Timestamp.now(),
+      'deliveredAt': FieldValue.serverTimestamp(), // ✅ ADD
+      'seenAt': null, // ✅ ADD
     });
 
     await _db.collection('chats').doc(chatId).update({
@@ -192,6 +194,8 @@ Future<String> ensureDropoffChat({
         'imageUrl': imageUrl,
         'text': '',
         'createdAt': Timestamp.now(),
+        'deliveredAt': FieldValue.serverTimestamp(), // ✅ ADD
+        'seenAt': null, // ✅ ADD
       });
 
       await _db.collection('chats').doc(chatId).update({
@@ -220,29 +224,70 @@ Future<String> ensureDropoffChat({
   // ✅ SEND TEXT
   // ==========================================================
   Future<void> sendText({
-    required String chatId,
-    required String text,
-  }) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) throw Exception("Not logged in");
-    if (text.trim().isEmpty) return;
+  required String chatId,
+  required String text,
+}) async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) throw Exception("Not logged in");
+  if (text.trim().isEmpty) return;
 
-    final msgRef =
-        _db.collection('chats').doc(chatId).collection('messages').doc();
+  final msgRef =
+      _db.collection('chats').doc(chatId).collection('messages').doc();
 
-    await msgRef.set({
-      'senderId': uid,
-      'type': 'text',
-      'text': text.trim(),
-      'createdAt': Timestamp.now(),
+  final now = FieldValue.serverTimestamp();
+
+  await msgRef.set({
+    'senderId': uid,
+    'type': 'text',
+    'text': text.trim(),
+    'createdAt': now,
+    'deliveredAt': now, // ✅ ADD THIS
+    'seenAt': null,     // ✅ ADD THIS
+  });
+
+  await _db.collection('chats').doc(chatId).update({
+    'lastMessage': text.trim(),
+    'lastMessageAt': now,
+    'lastMessageSenderId': uid,
+  });
+}
+
+Future<void> markMessagesAsSeen({
+  required String chatId,
+  required String currentUserId,
+}) async {
+  final messagesRef = _db
+      .collection('chats')
+      .doc(chatId)
+      .collection('messages');
+
+  final unreadSnap = await messagesRef
+      .where('seenAt', isNull: true)
+      .get();
+
+  if (unreadSnap.docs.isEmpty) return;
+
+  final batch = _db.batch();
+  bool hasUpdates = false;
+
+  for (final doc in unreadSnap.docs) {
+    final data = doc.data();
+    final senderId = (data['senderId'] ?? '').toString();
+
+    // ❗ Only mark messages from OTHER USER
+    if (senderId == currentUserId) continue;
+
+    batch.update(doc.reference, {
+      'seenAt': FieldValue.serverTimestamp(),
     });
 
-    await _db.collection('chats').doc(chatId).update({
-      'lastMessage': text.trim(),
-      'lastMessageAt': FieldValue.serverTimestamp(),
-      'lastMessageSenderId': uid,
-    });
+    hasUpdates = true;
   }
+
+  if (hasUpdates) {
+    await batch.commit();
+  }
+}
 
   // ==========================================================
   // ✅ ENSURE PICKUP CHAT
@@ -355,6 +400,45 @@ Future<String> ensureDropoffChat({
 
     return chatId;
   }
+
+  Future<void> sendImageMessage({
+  required String chatId,
+  required File file,
+  required String senderId,
+}) async {
+  final firestore = FirebaseFirestore.instance;
+  final storage = FirebaseStorage.instance;
+
+  final msgRef = firestore
+      .collection('chats')
+      .doc(chatId)
+      .collection('messages')
+      .doc();
+
+  final fileName = "${msgRef.id}.jpg";
+
+  final storageRef = storage
+      .ref()
+      .child('chat_images')
+      .child(chatId)
+      .child(fileName);
+
+  // upload file
+  await storageRef.putFile(file);
+
+  final imageUrl = await storageRef.getDownloadURL();
+
+  // save message
+  await msgRef.set({
+    "senderId": senderId,
+    "type": "image",
+    "imageUrl": imageUrl,
+    "text": "",
+    "createdAt": FieldValue.serverTimestamp(),
+    "deliveredAt": FieldValue.serverTimestamp(),
+    "seenAt": null,
+  });
+}
 
   Future<void> ensureJunkshopChatForRequest({
     required String requestId,
