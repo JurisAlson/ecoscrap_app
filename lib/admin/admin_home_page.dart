@@ -47,6 +47,47 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
+  Future<void> _clearAllNotifications() async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return;
+
+  final snap = await FirebaseFirestore.instance
+      .collection('Users')
+      .doc(uid)
+      .collection('notifications')
+      .get();
+
+  if (snap.docs.isEmpty) return;
+
+  final batch = FirebaseFirestore.instance.batch();
+
+  for (final doc in snap.docs) {
+    batch.delete(doc.reference);
+  }
+
+  await batch.commit();
+}
+
+  Future<void> _markAllNotificationsAsRead() async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return;
+
+  final snap = await FirebaseFirestore.instance
+      .collection('Users')
+      .doc(uid)
+      .collection('notifications')
+      .where('read', isEqualTo: false)
+      .get();
+
+  if (snap.docs.isEmpty) return;
+
+  final batch = FirebaseFirestore.instance.batch();
+  for (final doc in snap.docs) {
+    batch.set(doc.reference, {'read': true}, SetOptions(merge: true));
+  }
+  await batch.commit();
+}
+
   // -----------------------------
   // Streams for badges / counts
   // -----------------------------
@@ -59,6 +100,19 @@ class _AdminHomePageState extends State<AdminHomePage> {
         .snapshots()
         .map((s) => s.size);
   }
+
+  Stream<int> _unreadNotificationsCount() {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return const Stream.empty();
+
+  return FirebaseFirestore.instance
+      .collection('Users')
+      .doc(uid)
+      .collection('notifications')
+      .where('read', isEqualTo: false)
+      .snapshots()
+      .map((s) => s.size);
+}
 
   // Pending resident requests
   Stream<int> _pendingResidentsCount() {
@@ -73,143 +127,155 @@ class _AdminHomePageState extends State<AdminHomePage> {
   // This excludes: pending / rejected / unverified
 
   @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+Widget build(BuildContext context) {
+  final user = FirebaseAuth.instance.currentUser;
 
-    return Scaffold(
-      key: _scaffoldKey,
+  return Scaffold(
+    key: _scaffoldKey,
+    backgroundColor: bgColor,
+    extendBody: true,
+
+    drawer: Drawer(
       backgroundColor: bgColor,
-      extendBody: true,
+      child: SafeArea(child: _profileDrawer(user)),
+    ),
 
-      drawer: Drawer(
-        backgroundColor: bgColor,
-        child: SafeArea(child: _profileDrawer(user)),
-      ),
+    endDrawer: Drawer(
+      backgroundColor: bgColor,
+      child: SafeArea(child: _notificationsDrawer()),
+    ),
 
-      endDrawer: Drawer(
-        backgroundColor: bgColor,
-        child: SafeArea(child: _notificationsDrawer()),
-      ),
-
-      body: Stack(
-        children: [
-          _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
-          _blurCircle(Colors.green.withOpacity(0.10), 350, bottom: 100, left: -100),
-          SafeArea(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                  child: Row(
-                    children: [
-                      GestureDetector(
-                        onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                        child: Container(
-                          width: 45,
-                          height: 45,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [primaryColor, Colors.green]),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.person, color: Colors.white),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              "Admin Panel",
-                              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                            ),
-                            const Text(
-                              "Administrator",
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-
-                            // ✅ show "Users: X" but count ONLY approved users
-                          ],
-                        ),
-                      ),
-
-                      // Notifications icon (keep yours)
-                      _iconButton(
-                        Icons.notifications_outlined,
-                        badge: false,
-                        onTap: () => _scaffoldKey.currentState?.openEndDrawer(),
-                      ),
-                    ],
-                  ),
-                ),
-
-                Expanded(
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 220),
-                    child: KeyedSubtree(
-                      key: ValueKey(_index),
-                      child: _pages[_index],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-
-      bottomNavigationBar: SizedBox(
-        height: _bottomBarHeight,
-        child: Container(
-          height: _bottomBarHeight,
-          decoration: BoxDecoration(
-            color: bgColor.withOpacity(0.86),
-            border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
-          ),
-          child: ClipRRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 10),
+    body: Stack(
+      children: [
+        _blurCircle(primaryColor.withOpacity(0.15), 300, top: -100, right: -100),
+        _blurCircle(Colors.green.withOpacity(0.10), 350, bottom: 100, left: -100),
+        SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _navItem(0, Icons.dashboard_outlined, "Overview"),
+                    GestureDetector(
+                      onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                      child: Container(
+                        width: 45,
+                        height: 45,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(colors: [primaryColor, Colors.green]),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.person, color: Colors.white),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
 
-                    // ✅ Collectors with pending badge
-                    StreamBuilder<int>(
-                      stream: _pendingCollectorsCount(),
-                      builder: (context, snap) {
-                        final pending = (snap.data ?? 0) > 0;
-                        return _navItem(1, Icons.local_shipping_outlined, "Collectors",
-                            badge: pending);
-                      },
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Admin Panel",
+                            style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                          ),
+                          const Text(
+                            "Administrator",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
 
-                    // ✅ Residents with pending badge
-                    StreamBuilder<int>(
-                      stream: _pendingResidentsCount(),
-                      builder: (context, snap) {
-                        final pending = (snap.data ?? 0) > 0;
-                        return _navItem(2, Icons.home_outlined, "Residents",
-                            badge: pending);
+                    /// 🔥 FIXED NOTIFICATION BELL
+                    StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection('Users')
+                          .doc(FirebaseAuth.instance.currentUser!.uid)
+                          .collection('notifications')
+                          .where('read', isEqualTo: false)
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        final hasUnread = (snapshot.data?.docs.length ?? 0) > 0;
+
+                        return _iconButton(
+                          Icons.notifications_outlined,
+                          badge: hasUnread,
+                          onTap: () async {
+                            _scaffoldKey.currentState?.openEndDrawer();
+                            await _markAllNotificationsAsRead();
+                          },
+                        );
                       },
                     ),
-
-                    _navItem(3, Icons.people_alt_outlined, "Users"),
                   ],
                 ),
+              ),
+
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  child: KeyedSubtree(
+                    key: ValueKey(_index),
+                    child: _pages[_index],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+
+    bottomNavigationBar: SizedBox(
+      height: _bottomBarHeight,
+      child: Container(
+        height: _bottomBarHeight,
+        decoration: BoxDecoration(
+          color: bgColor.withOpacity(0.86),
+          border: Border(top: BorderSide(color: Colors.white.withOpacity(0.08))),
+        ),
+        child: ClipRRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _navItem(0, Icons.dashboard_outlined, "Overview"),
+
+                  StreamBuilder<int>(
+                    stream: _pendingCollectorsCount(),
+                    builder: (context, snap) {
+                      final pending = (snap.data ?? 0) > 0;
+                      return _navItem(1, Icons.local_shipping_outlined, "Collectors",
+                          badge: pending);
+                    },
+                  ),
+
+                  StreamBuilder<int>(
+                    stream: _pendingResidentsCount(),
+                    builder: (context, snap) {
+                      final pending = (snap.data ?? 0) > 0;
+                      return _navItem(2, Icons.home_outlined, "Residents",
+                          badge: pending);
+                    },
+                  ),
+
+                  _navItem(3, Icons.people_alt_outlined, "Users"),
+                ],
               ),
             ),
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Future<void> runChatCleanup() async {
   try {
@@ -273,34 +339,122 @@ class _AdminHomePageState extends State<AdminHomePage> {
   }
 
   Widget _notificationsDrawer() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                "Notifications",
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          _notificationTile(
-            icon: Icons.info_outline,
-            title: "Admin",
-            subtitle: "No notifications yet.",
-          ),
-        ],
-      ),
-    );
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+
+  if (uid == null) {
+    return const Center(child: Text("Not logged in"));
   }
+
+  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: FirebaseFirestore.instance
+        .collection('Users')
+        .doc(uid)
+        .collection('notifications')
+        .orderBy('createdAt', descending: true)
+        .snapshots(),
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return Center(
+          child: Text(
+            'Error: ${snapshot.error}',
+            style: const TextStyle(color: Colors.white),
+          ),
+        );
+      }
+
+      if (!snapshot.hasData) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      final docs = snapshot.data!.docs;
+
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            /// 🔝 Header
+            Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                const SizedBox(width: 8),
+
+                const Expanded(
+                  child: Text(
+                    "Notifications",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+
+                TextButton(
+                  onPressed: _clearAllNotifications,
+                  child: const Text(
+                    "Clear",
+                    style: TextStyle(
+                      color: Colors.redAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+
+            /// ❌ Empty state
+            if (docs.isEmpty)
+              _notificationTile(
+                icon: Icons.info_outline,
+                title: "Admin",
+                subtitle: "No notifications yet.",
+              ),
+
+            /// 🔔 Notifications list
+            ...docs.map((doc) {
+              final data = doc.data();
+
+              final title = (data['title'] ?? 'Notification').toString();
+              final body = (data['body'] ?? '').toString();
+              final isRead = data['read'] == true;
+
+              return GestureDetector(
+                onTap: () {
+                  final type = (data['type'] ?? '').toString();
+
+                  Navigator.pop(context);
+
+                  if (type == 'admin_new_resident_request') {
+                    setState(() => _index = 2);
+                  } else if (type == 'admin_new_collector_request') {
+                    setState(() => _index = 1);
+                  }
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: _notificationTile(
+                    icon: isRead
+                        ? Icons.notifications_none
+                        : Icons.notifications_active,
+                    title: title,
+                    subtitle: body,
+                  ),
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+      );
+    },
+  );
+}
+
 
   Widget _notificationTile({
     required IconData icon,
@@ -415,7 +569,11 @@ class _AdminHomePageState extends State<AdminHomePage> {
     );
   }
 
-  Widget _iconButton(IconData icon, {bool badge = false, required VoidCallback onTap}) {
+  Widget _iconButton(
+    IconData icon, {
+    bool badge = false,
+    required VoidCallback onTap,
+  }) {
     return Stack(
       children: [
         GestureDetector(
@@ -426,7 +584,10 @@ class _AdminHomePageState extends State<AdminHomePage> {
               color: Colors.white.withOpacity(0.05),
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, color: Colors.grey.shade300),
+            child: Icon(
+              icon,
+              color: badge ? Colors.amber : Colors.grey.shade300,
+            ),
           ),
         ),
         if (badge)
@@ -436,7 +597,10 @@ class _AdminHomePageState extends State<AdminHomePage> {
             child: Container(
               width: 8,
               height: 8,
-              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+              decoration: const BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+              ),
             ),
           ),
       ],
