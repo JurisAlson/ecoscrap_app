@@ -322,11 +322,11 @@ class _BuyFormState extends State<_BuyForm> {
         .collection('transactions')
         .doc();
 
-    final householdTxnRef = db
-        .collection('Users')
-        .doc(householdId)
-        .collection('transactions')
-        .doc(requestId);
+    // final householdTxnRef = db
+    //     .collection('Users')
+    //     .doc(householdId)
+    //     .collection('transactions')
+    //     .doc(requestId);
 
     await db.runTransaction((trx) async {
       final reqSnap = await trx.get(reqRef);
@@ -375,26 +375,26 @@ class _BuyFormState extends State<_BuyForm> {
       });
 
       // Household/residence history
-      trx.set(
-        householdTxnRef,
-        {
-          "kind": "pickup_completed",
-          "requestId": requestId,
-          "collectorId": collectorId,
-          "collectorName": collectorName,
-          "householdId": householdId,
-          "householdName": householdName,
-          "bagKey": bagKey,
-          "bagLabel": bagLabel,
-          "kg": bagKg,
-          "pricePerKg": buyPricePerKg,
-          "totalAmount": totalAmount,
-          "status": "completed",
-          "completedAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
+      // trx.set(
+      //   householdTxnRef,
+      //   {
+      //     "kind": "pickup_completed",
+      //     "requestId": requestId,
+      //     "collectorId": collectorId,
+      //     "collectorName": collectorName,
+      //     "householdId": householdId,
+      //     "householdName": householdName,
+      //     "bagKey": bagKey,
+      //     "bagLabel": bagLabel,
+      //     "kg": bagKg,
+      //     "pricePerKg": buyPricePerKg,
+      //     "totalAmount": totalAmount,
+      //     "status": "completed",
+      //     "completedAt": FieldValue.serverTimestamp(),
+      //     "updatedAt": FieldValue.serverTimestamp(),
+      //   },
+      //   SetOptions(merge: true),
+      // );
 
       // Collector inventory update
       trx.set(
@@ -1141,16 +1141,16 @@ class _SellFormState extends State<_SellForm> {
   Future<void> _submitSell(double currentKg) async {
   if (_saving) return;
 
-  if (!_isWithinMoresWorkingHours()) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          "Mores Scrap only accepts sell transactions from 7:00 AM to 5:00 PM.",
-        ),
-      ),
-    );
-    return;
-  }
+  // if (!_isWithinMoresWorkingHours()) {
+  //   ScaffoldMessenger.of(context).showSnackBar(
+  //     const SnackBar(
+  //       content: Text(
+  //         "Mores Scrap only accepts sell transactions from 7:00 AM to 5:00 PM.",
+  //       ),
+  //     ),
+  //   );
+  //   return;
+  // }
 
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return;
