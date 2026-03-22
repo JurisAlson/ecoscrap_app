@@ -78,11 +78,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   String? _activePickupRequestId;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _pickupReqSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _availableCollectorsSub;
+  String? _activeCollectorId;
   LatLng? _collectorLatLng;
   String? _collectorName;
   List<LatLng> _collectorRoutePoints = [];
   String? _selectedCollectorId;
   List<Map<String, String>> _availableCollectors = [];
+  final Map<String, Marker> _onlineCollectorMarkers = {};
 
   String? _activeDropoffRequestId;
   String _dropoffStatus = "";
@@ -182,6 +185,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     _posSub?.cancel();
     _pickupReqSub?.cancel();
     _dropoffReqSub?.cancel();
+    _availableCollectorsSub?.cancel();
     super.dispose();
   }
 
@@ -591,7 +595,9 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   }
 
   void _listenAvailableCollectors() {
-    FirebaseFirestore.instance
+    _availableCollectorsSub?.cancel();
+
+    _availableCollectorsSub = FirebaseFirestore.instance
         .collection('Users')
         .where('Roles', isEqualTo: 'collector')
         .where('isOnline', isEqualTo: true)
@@ -599,19 +605,76 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         .snapshots()
         .listen((snap) {
       final list = <Map<String, String>>[];
+      final markers = <String, Marker>{};
+
+      final base = _effectivePickupLatLng;
+      final temp = <Map<String, dynamic>>[];
 
       for (final d in snap.docs) {
         final data = d.data();
         final uid = d.id;
         final name =
             (data['Name'] ?? data['displayName'] ?? "Collector").toString();
-        list.add({'uid': uid, 'name': name});
+
+        final gp = data['collectorLiveLocation'];
+        if (gp is! GeoPoint) continue;
+
+        final latLng = LatLng(gp.latitude, gp.longitude);
+
+        final distanceMeters = Geolocator.distanceBetween(
+          base.latitude,
+          base.longitude,
+          latLng.latitude,
+          latLng.longitude,
+        );
+
+        temp.add({
+          'uid': uid,
+          'name': name,
+          'latLng': latLng,
+          'distanceMeters': distanceMeters,
+        });
+      }
+
+      temp.sort((a, b) =>
+          (a['distanceMeters'] as double)
+              .compareTo(b['distanceMeters'] as double));
+
+      for (final item in temp) {
+        final uid = item['uid'] as String;
+        final name = item['name'] as String;
+        final latLng = item['latLng'] as LatLng;
+        final distanceKm =
+            ((item['distanceMeters'] as double) / 1000).toStringAsFixed(1);
+
+        list.add({
+          'uid': uid,
+          'name': name,
+        });
+
+        markers[uid] = Marker(
+          markerId: MarkerId('online_collector_$uid'),
+          position: latLng,
+          anchor: const Offset(0.5, 0.55),
+          infoWindow: InfoWindow(
+            title: name,
+            snippet: "$distanceKm km away",
+          ),
+          icon: _collectorMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueViolet,
+              ),
+          zIndex: 3,
+        );
       }
 
       if (!mounted) return;
 
       setState(() {
         _availableCollectors = list;
+        _onlineCollectorMarkers
+          ..clear()
+          ..addAll(markers);
 
         final stillThere = _selectedCollectorId != null &&
             _availableCollectors.any((c) => c['uid'] == _selectedCollectorId);
@@ -634,6 +697,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       final data = doc.data() ?? {};
       final collectorName = (data['collectorName'] ?? 'Collector').toString();
       final gp = data['collectorLiveLocation'];
+      final collectorId = (data['collectorId'] ?? '').toString();
 
       LatLng? liveCollector;
       if (gp is GeoPoint) {
@@ -642,6 +706,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
       if (!mounted) return;
       setState(() {
+        _activeCollectorId = collectorId;
         _collectorName = collectorName;
         _collectorLatLng = liveCollector;
       });
@@ -1264,6 +1329,12 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
           zIndex: 4,
         ),
       );
+    }
+    for (final entry in _onlineCollectorMarkers.entries) {
+      if (_activeCollectorId != null && entry.key == _activeCollectorId) {
+        continue;
+      }
+      markers.add(entry.value);
     }
 
     return markers;

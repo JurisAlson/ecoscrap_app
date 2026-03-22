@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-
+import 'dart:async';
 import 'forgot_password.dart';
 import 'UserAccountCreation.dart';
 import '../role_gate.dart';
@@ -119,48 +119,72 @@ class _LoginPageState extends State<LoginPage> {
         password: password,
       );
 
-      final u = cred.user;
-      if (u == null) {
+      final user = cred.user;
+      if (user == null) {
         _showToast("Login failed.", isError: true);
         return;
       }
 
-      debugPrint("LOGIN OK UID=${u.uid} EMAIL=${u.email}");
-      debugPrint("PROJECT=${Firebase.app().options.projectId}");
+      try {
+        await _ensureUserProfile(user);
+      } catch (e, s) {
+        debugPrint("PROFILE ERROR: $e");
+        debugPrintStack(stackTrace: s);
+      }
 
-      await _ensureUserProfile(u);
-      await saveFcmToken();
+      unawaited(_trySaveFcmToken());
 
       if (!mounted) return;
-
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const RoleGate()),
         (_) => false,
       );
     } on FirebaseAuthException catch (e) {
+      debugPrint("AUTH ERROR: ${e.code} / ${e.message}");
+
       if (e.code == "user-disabled") {
         _showToast(
           "Your account has been restricted. Please contact the admin.",
           isError: true,
         );
-        return;
-      }
-
-      if (e.code == "wrong-password" || e.code == "invalid-credential") {
+      } else if (e.code == "wrong-password" ||
+          e.code == "invalid-credential") {
         _showToast("Incorrect email or password.", isError: true);
-        return;
-      }
-
-      if (e.code == "user-not-found") {
+      } else if (e.code == "user-not-found") {
         _showToast("No account found for that email.", isError: true);
-        return;
+      } else {
+        _showToast(e.message ?? "Login failed", isError: true);
       }
-
-      _showToast(e.message ?? "Login failed", isError: true);
-    } catch (e) {
-      _showToast("Login failed: $e", isError: true);
+    } catch (e, s) {
+      debugPrint("GENERAL LOGIN ERROR: $e");
+      debugPrintStack(stackTrace: s);
+      _showToast("Login failed. Please try again.", isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _trySaveFcmToken() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+
+      await messaging.requestPermission();
+
+      final token = await messaging.getToken();
+      debugPrint("FCM token: $token");
+
+      if (token == null) return;
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+        'fcmToken': token,
+        'fcmUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e, s) {
+      debugPrint("FCM TOKEN ERROR: $e");
+      debugPrintStack(stackTrace: s);
     }
   }
 

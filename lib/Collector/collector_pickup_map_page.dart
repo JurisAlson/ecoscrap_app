@@ -407,8 +407,10 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     if (stop == null) return;
 
     final status = stop.status.toLowerCase();
-    final shouldShare =
-        status == 'accepted' || status == 'arrived' || status == 'scheduled';
+    final shouldShare = status == 'accepted' ||
+        status == 'arrived' ||
+        status == 'scheduled' ||
+        status == 'ongoing';
 
     if (!shouldShare) return;
 
@@ -427,14 +429,14 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       });
     }
 
+    await _updateCollectorUserLiveLocation(position);
+
     await FirebaseFirestore.instance
         .collection('requests')
         .doc(stop.requestId)
         .set({
       'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
       'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-      'collectorHeading': position.heading,
-      'collectorSpeedMps': position.speed,
       'sharingLiveLocation': true,
     }, SetOptions(merge: true));
 
@@ -445,29 +447,19 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         distanceFilter: 10,
       ),
     ).listen((position) async {
-      final currentStop = _currentStop;
-      if (currentStop == null) return;
-
       try {
+        await _updateCollectorUserLiveLocation(position);
+
         await FirebaseFirestore.instance
             .collection('requests')
-            .doc(currentStop.requestId)
+            .doc(stop.requestId)
             .set({
-          'collectorLiveLocation':
-              GeoPoint(position.latitude, position.longitude),
+          'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
           'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          'collectorHeading': position.heading,
-          'collectorSpeedMps': position.speed,
           'sharingLiveLocation': true,
         }, SetOptions(merge: true));
-
-        if (mounted) {
-          setState(() {
-            _pos = position;
-          });
-        }
       } catch (e) {
-        debugPrint("❌ live location write failed: $e");
+        debugPrint('LIVE LOCATION UPDATE ERROR: $e');
       }
     });
   }
@@ -476,6 +468,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     await _liveLocationSub?.cancel();
     _liveLocationSub = null;
     _isSendingLiveLocation = false;
+
+    await _clearCollectorUserLiveLocation();
 
     if (!clearFirestore) return;
 
@@ -505,6 +499,35 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       await _focusCameraOnCurrentStop();
       await _startLiveLocationSharing();
     }
+  }
+
+  Future<void> _updateCollectorUserLiveLocation(Position position) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .set({
+      'collectorLiveLocation': GeoPoint(
+        position.latitude,
+        position.longitude,
+      ),
+      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      'isOnline': true,
+    }, SetOptions(merge: true));
+  }
+  
+  Future<void> _clearCollectorUserLiveLocation() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .set({
+      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> _initLocation() async {
@@ -587,7 +610,12 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       final loadedStops = <PickupStop>[];
       for (final doc in docs) {
         final stop = PickupStop.fromDoc(doc);
-        if (stop != null) loadedStops.add(stop);
+        if (stop == null) continue;
+
+        final status = stop.status.toLowerCase().trim();
+        if (status == 'completed') continue;
+
+        loadedStops.add(stop);
       }
 
       if (_originLatLng != null && loadedStops.isNotEmpty) {
@@ -1034,63 +1062,100 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   Future<void> _openCollectorReceipt() async {
   final stop = _currentStop;
-  if (stop == null) return;
+    if (stop == null) return;
 
-  final s = stop.status.toLowerCase();
-  if (s != "arrived") {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Create receipt is available once you are ARRIVED.")),
-    );
-    return;
-  }
-
-  try {
-    final reqDoc = await FirebaseFirestore.instance
-        .collection('requests')
-        .doc(stop.requestId)
-        .get();
-
-    final data = reqDoc.data() ?? {};
-    final hasReceipt = data['hasCollectorReceipt'] == true;
-
-    if (hasReceipt) {
+    final s = stop.status.toLowerCase();
+    if (s != "arrived") {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Order already created for this pickup.")),
+        const SnackBar(content: Text("Create receipt is available once you are ARRIVED.")),
       );
       return;
     }
-  } catch (_) {}
 
-  if (!mounted) return;
+    try {
+      final reqDoc = await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(stop.requestId)
+          .get();
 
-  final saved = await Navigator.push<bool>(
-    context,
-    MaterialPageRoute(
-      builder: (_) => CollectorTransactionPage(
-        requestId: stop.requestId,
-        embedded: false,
+      final data = reqDoc.data() ?? {};
+      final hasReceipt = data['hasCollectorReceipt'] == true;
+
+      if (hasReceipt) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Order already created for this pickup.")),
+        );
+        return;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CollectorTransactionPage(
+          requestId: stop.requestId,
+          embedded: false,
+        ),
       ),
-    ),
-  );
+    );
 
-if (saved == true) {
-  final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
-  if (idx != -1 && mounted) {
-    setState(() {
-      _stops[idx] = _stops[idx].copyWith(
-        status: 'completed',
-        hasCollectorReceipt: true,
-      );
-    });
+      if (saved == true) {
+      await _stopLiveLocationSharing(clearFirestore: true);
+      await _removeCompletedStopAndMoveNext(stop.requestId);
+    }
   }
 
-  // 🔴 ADD THIS LINE
-  await _stopLiveLocationSharing(clearFirestore: true);
-  await _moveToNextStopAfterComplete();
-}
-}
+  Future<void> _removeCompletedStopAndMoveNext(String requestId) async {
+    final removedIndex = _stops.indexWhere((x) => x.requestId == requestId);
+    if (removedIndex == -1) return;
+
+    if (!mounted) return;
+
+    setState(() {
+      _stops.removeAt(removedIndex);
+
+      if (_stops.isEmpty) {
+        _currentStopIndex = 0;
+        _route = [];
+        _distanceText = "";
+        _durationText = "";
+        _durationValueSec = null;
+        return;
+      }
+
+      if (_currentStopIndex >= _stops.length) {
+        _currentStopIndex = _stops.length - 1;
+      } else if (removedIndex < _currentStopIndex) {
+        _currentStopIndex -= 1;
+      }
+    });
+
+    _junkshopChatEnsured = false;
+
+    if (_stops.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("All pickup stops completed.")),
+      );
+      return;
+    }
+
+    await _ensureJunkshopChatIfNeeded();
+    await _buildMultiStopRoute();
+    await _focusCameraOnCurrentStop();
+    await _startLiveLocationSharing();
+
+    final nextStop = _currentStop;
+    if (!mounted || nextStop == null) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Completed and removed. Next stop: ${nextStop.householdName}")),
+    );
+  }
 
   Future<void> _moveToNextStopAfterComplete() async {
     _junkshopChatEnsured = false;
