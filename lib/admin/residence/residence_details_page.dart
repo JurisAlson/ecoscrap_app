@@ -15,11 +15,15 @@ import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
 import 'package:ecoscrap_app/security/kyc_shared_key.dart';
 
 // ✅ Address decrypt (ADMIN APP)
-import  'package:ecoscrap_app/security/resident_address_decrypt.dart';
+import 'package:ecoscrap_app/security/resident_address_decrypt.dart';
 
 class ResidentDetailsPage extends StatefulWidget {
   final DocumentReference<Map<String, dynamic>> requestRef;
-  const ResidentDetailsPage({super.key, required this.requestRef});
+
+  const ResidentDetailsPage({
+    super.key,
+    required this.requestRef,
+  });
 
   @override
   State<ResidentDetailsPage> createState() => _ResidentDetailsPageState();
@@ -31,104 +35,99 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   static const Color _primary = Color(0xFF1FA9A7);
 
   Future<String?> _pickRejectReason(BuildContext context) async {
-  final reasons = [
-    "Invalid ID submitted",
-    "Blurry or unreadable document",
-    "Information does not match submitted details",
-    "Duplicate account detected",
-    "Incomplete requirements",
-    "Outside service area",
-    "Other",
-  ];
+    final reasons = [
+      "Invalid ID submitted",
+      "Blurry or unreadable document",
+      "Information does not match submitted details",
+      "Duplicate account detected",
+      "Incomplete requirements",
+      "Outside service area",
+      "Other",
+    ];
 
-  String selected = reasons.first;
-  final otherController = TextEditingController();
+    String selected = reasons.first;
+    final otherController = TextEditingController();
 
-  return showDialog<String>(
-    context: context,
-    builder: (context) {
-      return StatefulBuilder(
-        builder: (context, setState) {
-          return AlertDialog(
-            title: const Text("Select rejection reason"),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButton<String>(
-                  value: selected,
-                  isExpanded: true,
-                  items: reasons.map((r) {
-                    return DropdownMenuItem(
-                      value: r,
-                      child: Text(r),
-                    );
-                  }).toList(),
-                  onChanged: (val) {
-                    if (val != null) {
-                      setState(() => selected = val);
-                    }
-                  },
-                ),
-                if (selected == "Other") ...[
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: otherController,
-                    decoration: const InputDecoration(
-                      labelText: "Enter custom reason",
-                      border: OutlineInputBorder(),
-                    ),
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text("Select rejection reason"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButton<String>(
+                    value: selected,
+                    isExpanded: true,
+                    items: reasons.map((r) {
+                      return DropdownMenuItem(
+                        value: r,
+                        child: Text(r),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => selected = val);
+                      }
+                    },
                   ),
+                  if (selected == "Other") ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: otherController,
+                      decoration: const InputDecoration(
+                        labelText: "Enter custom reason",
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
                 ],
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text("Cancel"),
               ),
-              ElevatedButton(
-                onPressed: () {
-                  final result = selected == "Other"
-                      ? otherController.text.trim()
-                      : selected;
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final result = selected == "Other"
+                        ? otherController.text.trim()
+                        : selected;
 
-                  if (result.isEmpty) return;
-                  Navigator.pop(context, result);
-                },
-                child: const Text("Confirm"),
-              ),
-            ],
-          );
-        },
-      );
-    },
-  );
-}
+                    if (result.isEmpty) return;
+                    Navigator.pop(context, result);
+                  },
+                  child: const Text("Confirm"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
 
   // =========================
   // ADMIN: APPROVE
   // =========================
-  Future<void> _adminApproveResident(String uid) async {
-    final db = FirebaseFirestore.instance;
+Future<void> _adminApproveResident(String uid) async {
+  final db = FirebaseFirestore.instance;
 
-    final reqRef = db.collection("residentRequests").doc(uid);
-    final userRef = db.collection("Users").doc(uid);
-    final kycRef = db.collection("residentKYC").doc(uid); // ✅ add
+  final reqRef = db.collection("residentRequests").doc(uid);
+  final userRef = db.collection("Users").doc(uid);
+  final kycRef = db.collection("residentKYC").doc(uid);
 
-    await db.runTransaction((tx) async {
-      final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) throw Exception("Resident request not found");
+  await db.runTransaction((tx) async {
+    final reqSnap = await tx.get(reqRef);
+    if (!reqSnap.exists) throw Exception("Resident request not found");
 
-      tx.set(reqRef, {
-        "status": "adminApproved",
-        "adminReviewedAt": FieldValue.serverTimestamp(),
-        "adminStatus": "approved",
-        "adminVerified": true,
-        "updatedAt": FieldValue.serverTimestamp(),
-        "residentStatus": "approved",
-      }, SetOptions(merge: true));
+    tx.delete(reqRef);
 
-      tx.set(userRef, {
+    tx.set(
+      userRef,
+      {
         "role": "user",
         "Roles": "user",
         "adminReviewedAt": FieldValue.serverTimestamp(),
@@ -136,53 +135,20 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
         "adminVerified": true,
         "updatedAt": FieldValue.serverTimestamp(),
         "residentStatus": "approved",
-      }, SetOptions(merge: true));
+      },
+      SetOptions(merge: true),
+    );
 
-      // ✅ NEW: sync KYC for cleanup logic
-      tx.set(kycRef, {
+    tx.set(
+      kycRef,
+      {
         "status": "approved",
         "approvedAt": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    });
-  }
-
-  Future<void> adminApproveCollector(String uid) async {
-    final db = FirebaseFirestore.instance;
-
-    final reqRef = db.collection("collectorRequests").doc(uid);
-    final userRef = db.collection("Users").doc(uid);
-
-    await db.runTransaction((tx) async {
-      final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) {
-        throw Exception("Collector request not found");
-      }
-
-      tx.set(
-        reqRef,
-        {
-          "status": "adminApproved",
-          "adminApprovedAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-
-      tx.set(
-        userRef,
-        {
-          "collectorStatus": "adminApproved", // ✅ RoleGate expects this
-          "collectorVerified": true,
-          "collectorActive": true,
-          "adminReviewedAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-          "Roles": "collector",
-          "role": "collector",
-        },
-        SetOptions(merge: true),
-      );
-    });
-  }
+      },
+      SetOptions(merge: true),
+    );
+  });
+}
 
   // =========================
   // ADMIN: REJECT + DELETE ACCOUNT
@@ -191,8 +157,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     String uid, {
     String reason = "",
   }) async {
-    final callable = FirebaseFunctions.instanceFor(region: "asia-southeast1")
-        .httpsCallable("rejectResidentAndDeleteAccount");
+    final callable = FirebaseFunctions.instanceFor(
+      region: "asia-southeast1",
+    ).httpsCallable("rejectResidentAndDeleteAccount");
 
     await callable.call({
       "uid": uid,
@@ -237,8 +204,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
     final storagePath = (kyc["storagePath"] ?? "").toString().trim();
     if (storagePath.isEmpty) return null;
 
-    final originalFileName = (kyc["originalFileName"] ?? "").toString();
-
     final ephPubKeyB64 = (kyc["ephPubKeyB64"] ?? "").toString();
     final saltB64 = (kyc["saltB64"] ?? "").toString();
     final nonceB64 = (kyc["nonceB64"] ?? "").toString();
@@ -279,7 +244,6 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
 
     return _DecryptedKyc(
       bytes: plain,
-      originalFileName: originalFileName,
       storagePath: storagePath,
     );
   }
@@ -307,7 +271,11 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
               top: 10,
               right: 10,
               child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                icon: const Icon(
+                  Icons.close,
+                  color: Colors.white,
+                  size: 28,
+                ),
                 onPressed: () => Navigator.pop(context),
               ),
             ),
@@ -320,7 +288,10 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   // =========================
   // UI helpers
   // =========================
-  Widget _panel({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
+  Widget _panel({
+    required Widget child,
+    EdgeInsets padding = const EdgeInsets.all(14),
+  }) {
     return Container(
       width: double.infinity,
       padding: padding,
@@ -351,6 +322,7 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
   Widget _pill(String text, {Color? bg, Color? fg, IconData? icon}) {
     final b = bg ?? Colors.white.withOpacity(0.05);
     final f = fg ?? Colors.white.withOpacity(0.85);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -367,7 +339,11 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
           ],
           Text(
             text,
-            style: TextStyle(color: f, fontWeight: FontWeight.w900, fontSize: 12),
+            style: TextStyle(
+              color: f,
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+            ),
           ),
         ],
       ),
@@ -385,13 +361,18 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
       height: 52,
       child: ElevatedButton.icon(
         icon: Icon(icon),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+        label: Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
           backgroundColor: background,
           foregroundColor: foreground,
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       ),
     );
@@ -406,12 +387,17 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
       height: 52,
       child: OutlinedButton.icon(
         icon: Icon(icon),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+        label: Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
         onPressed: onTap,
         style: OutlinedButton.styleFrom(
           foregroundColor: Colors.white,
           side: BorderSide(color: Colors.white.withOpacity(0.14)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       ),
     );
@@ -450,17 +436,24 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                 ),
               );
             }
+
             if (!snap.hasData) {
-              return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+              return const Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              );
             }
+
             if (!snap.data!.exists) {
               return const Center(
-                child: Text("Request not found.", style: TextStyle(color: Colors.white70)),
+                child: Text(
+                  "Request not found.",
+                  style: TextStyle(color: Colors.white70),
+                ),
               );
             }
 
             final data = snap.data!.data() ?? {};
-            final uid = snap.data!.id; // internal only (do not display)
+            final uid = snap.data!.id;
 
             final name = (data["publicName"] ?? "Resident").toString();
             final email = (data["emailDisplay"] ?? "").toString();
@@ -468,19 +461,30 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
             final isPending = status.trim().toLowerCase() == "pending";
             final accent = _statusAccent(status);
 
-            // ✅ Address block (admin-only decrypt)
             final addressBlock = FutureBuilder<String?>(
               future: _downloadAndDecryptResidentAddress(uid),
               builder: (context, addrSnap) {
                 if (addrSnap.connectionState == ConnectionState.waiting) {
                   return _panel(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                     child: const Row(
                       children: [
-                        SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                        SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
                         SizedBox(width: 10),
-                        Text("Decrypting address...",
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                        Text(
+                          "Decrypting address...",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ],
                     ),
                   );
@@ -491,12 +495,20 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.location_on_outlined, color: Colors.redAccent.withOpacity(0.95), size: 18),
+                        Icon(
+                          Icons.location_on_outlined,
+                          color: Colors.redAccent.withOpacity(0.95),
+                          size: 18,
+                        ),
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Text(
                             "Address could not be opened.",
-                            style: TextStyle(color: Colors.redAccent, height: 1.3, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              color: Colors.redAccent,
+                              height: 1.3,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
@@ -510,12 +522,19 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.location_on_outlined, color: Colors.white.withOpacity(0.65), size: 18),
+                        Icon(
+                          Icons.location_on_outlined,
+                          color: Colors.white.withOpacity(0.65),
+                          size: 18,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             "No address submitted.",
-                            style: TextStyle(color: Colors.white.withOpacity(0.70), fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.70),
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
@@ -529,11 +548,18 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.location_on_outlined, color: Colors.white.withOpacity(0.75), size: 18),
+                          Icon(
+                            Icons.location_on_outlined,
+                            color: Colors.white.withOpacity(0.75),
+                            size: 18,
+                          ),
                           const SizedBox(width: 10),
                           const Text(
                             "Home Address",
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
                           const Spacer(),
                         ],
@@ -558,13 +584,19 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
               builder: (context, kycSnap) {
                 if (kycSnap.connectionState == ConnectionState.waiting) {
                   return _panel(
-                    padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 18,
+                      horizontal: 14,
+                    ),
                     child: const SizedBox(
                       height: 180,
-                      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                      child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                     ),
                   );
                 }
+
                 if (kycSnap.hasError) {
                   return _panel(
                     child: const Text(
@@ -579,12 +611,18 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                   return _panel(
                     child: Row(
                       children: [
-                        Icon(Icons.badge_outlined, color: Colors.white.withOpacity(0.6)),
+                        Icon(
+                          Icons.badge_outlined,
+                          color: Colors.white.withOpacity(0.6),
+                        ),
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Text(
                             "No ID file uploaded.",
-                            style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
@@ -592,8 +630,9 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                   );
                 }
 
-                final fname = kyc.originalFileName.toLowerCase();
-                final isPdf = fname.endsWith(".pdf");
+                final fileType =
+                    (data["fileType"] ?? "image").toString().toLowerCase();
+                final isPdf = fileType == "pdf";
 
                 if (isPdf) {
                   return _panel(
@@ -602,18 +641,27 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.picture_as_pdf_outlined, color: Colors.white.withOpacity(0.75)),
+                            Icon(
+                              Icons.picture_as_pdf_outlined,
+                              color: Colors.white.withOpacity(0.75),
+                            ),
                             const SizedBox(width: 10),
                             const Text(
                               "Government ID (PDF)",
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 10),
                         Text(
                           "To preview it here, add a PDF viewer widget/package.",
-                          style: TextStyle(color: Colors.white.withOpacity(0.65), height: 1.35),
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.65),
+                            height: 1.35,
+                          ),
                         ),
                       ],
                     ),
@@ -627,7 +675,10 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.badge_outlined, color: Colors.white.withOpacity(0.75)),
+                          Icon(
+                            Icons.badge_outlined,
+                            color: Colors.white.withOpacity(0.75),
+                          ),
                           const SizedBox(width: 10),
                           _pill(
                             "Tap to zoom",
@@ -672,9 +723,14 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                           decoration: BoxDecoration(
                             color: _primary.withOpacity(0.16),
                             borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: _primary.withOpacity(0.22)),
+                            border: Border.all(
+                              color: _primary.withOpacity(0.22),
+                            ),
                           ),
-                          child: const Icon(Icons.home_outlined, color: _primary),
+                          child: const Icon(
+                            Icons.home_outlined,
+                            color: _primary,
+                          ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -693,7 +749,10 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                               if (email.isNotEmpty)
                                 Text(
                                   email,
-                                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.65),
+                                    fontSize: 12,
+                                  ),
                                 ),
                               const SizedBox(height: 10),
                               Wrap(
@@ -714,18 +773,20 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 14),
-                  addressBlock, // ✅ added
+                  addressBlock,
                   const SizedBox(height: 12),
                   kycBlock,
                   const SizedBox(height: 12),
-
                   _panel(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.security, color: Colors.blueAccent.withOpacity(0.95), size: 18),
+                        Icon(
+                          Icons.security,
+                          color: Colors.blueAccent.withOpacity(0.95),
+                          size: 18,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -744,25 +805,33 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 14),
-
                   if (_busy)
                     _panel(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                       child: const Row(
                         children: [
-                          SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
                           SizedBox(width: 10),
-                          Text("Processing...", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                          Text(
+                            "Processing...",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ],
                       ),
                     ),
-
                   if (_busy) const SizedBox(height: 12),
-
                   _sectionLabel("Admin Actions"),
-
                   Row(
                     children: [
                       Expanded(
@@ -784,10 +853,20 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                   setState(() => _busy = true);
                                   try {
                                     await _adminApproveResident(uid);
-                                    if (mounted) AdminHelpers.toast(context, "Approved $name");
+                                    if (mounted) {
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Approved $name",
+                                      );
+                                    }
                                     if (mounted) Navigator.pop(context);
                                   } catch (_) {
-                                    if (mounted) AdminHelpers.toast(context, "Approve failed. Please try again.");
+                                    if (mounted) {
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Approve failed. Please try again.",
+                                      );
+                                    }
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }
@@ -805,22 +884,38 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
                                   final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Reject account?",
-                                    body:
-                                        " Are you sure to Reject $name",
+                                    body: "Are you sure to reject $name?",
                                     yesValue: true,
                                     yesLabel: "Reject",
                                   );
                                   if (ok != true) return;
 
+                                  final reason =
+                                      await _pickRejectReason(context);
+                                  if (reason == null || reason.trim().isEmpty) {
+                                    return;
+                                  }
+
                                   setState(() => _busy = true);
                                   try {
-                                    await _rejectAndDeleteResidentAccount(uid);
+                                    await _rejectAndDeleteResidentAccount(
+                                      uid,
+                                      reason: reason.trim(),
+                                    );
                                     if (mounted) {
-                                      AdminHelpers.toast(context, "Rejected $name.");
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Rejected $name.",
+                                      );
                                       Navigator.pop(context);
                                     }
                                   } catch (_) {
-                                    if (mounted) AdminHelpers.toast(context, "Reject failed. Please try again.");
+                                    if (mounted) {
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Reject failed. Please try again.",
+                                      );
+                                    }
                                   } finally {
                                     if (mounted) setState(() => _busy = false);
                                   }
@@ -841,12 +936,10 @@ class _ResidentDetailsPageState extends State<ResidentDetailsPage> {
 
 class _DecryptedKyc {
   final Uint8List bytes;
-  final String originalFileName;
   final String storagePath;
 
   _DecryptedKyc({
     required this.bytes,
-    required this.originalFileName,
     required this.storagePath,
   });
 }

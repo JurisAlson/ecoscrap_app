@@ -447,7 +447,7 @@ Widget build(BuildContext context) {
                   ),
                 ),
               );
-            }).toList(),
+            }),
           ],
         ),
       );
