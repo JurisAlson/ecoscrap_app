@@ -282,6 +282,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   int? _durationValueSec;
 
   StreamSubscription<Position>? _liveLocationSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _requestsSub;
 
   @override
   void initState() {
@@ -306,8 +307,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     if (_pos == null) return null;
     return LatLng(_pos!.latitude, _pos!.longitude);
   }
-
-  String _two(int n) => n.toString().padLeft(2, '0');
 
   Future<BitmapDescriptor> _iconToMarker({
     required IconData icon,
@@ -360,33 +359,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     } catch (e) {
       debugPrint("❌ Failed to build marker icons: $e");
     }
-  }
-
-  String _formatPickupSchedule(Map<String, dynamic> data) {
-    final type = (data['pickupType'] ?? '').toString();
-    if (type == 'now') return "Now";
-
-    Timestamp? ts(dynamic v) => v is Timestamp ? v : null;
-
-    final startTs = ts(data['windowStart']) ?? ts(data['scheduledAt']);
-    final endTs = ts(data['windowEnd']);
-
-    if (startTs == null) return "Scheduled";
-
-    String hm(DateTime d) {
-      int hour = d.hour % 12;
-      if (hour == 0) hour = 12;
-      final ampm = d.hour >= 12 ? "PM" : "AM";
-      return "$hour:${_two(d.minute)} $ampm";
-    }
-
-    final s = startTs.toDate();
-    final date = "${s.year}-${_two(s.month)}-${_two(s.day)}";
-
-    if (endTs == null) return "$date • ${hm(s)}";
-
-    final e = endTs.toDate();
-    return "$date • ${hm(s)}–${hm(e)}";
   }
 
   Future<void> _markChatRead(String chatId) async {
@@ -484,7 +456,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         }
         await batch.commit();
       } catch (e) {
-        debugPrint('LIVE LOCATION UPDATE ERROR: $e');
+        debugPrint('LIVE LOCATION UPDATE ERROR: $e');//pede naman tanggalin katamad lang hahaha
       }
     });
   }
@@ -494,38 +466,16 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     _liveLocationSub = null;
     _isSendingLiveLocation = false;
 
-    await _clearCollectorUserLiveLocation();
-
-    if (!clearFirestore || _stops.isEmpty) return;
-
     try {
-      final batch = FirebaseFirestore.instance.batch();
-      for (final stop in _stops) {
-        batch.set(
-          FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
-          {
-            'sharingLiveLocation': false,
-            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      }
-      await batch.commit();
+      await _clearCollectorUserLiveLocation();
     } catch (e) {
-      debugPrint('❌ stop live location sharing failed: $e');
+      debugPrint('❌ clear collector user live location failed: $e');
     }
   }
 
   Future<void> _initPage() async {
     await _initLocation();
-    await _loadStops();
-
-    if (_stops.isNotEmpty) {
-      await _ensureJunkshopChatIfNeeded();
-      await _buildMultiStopRoute();
-      await _focusCameraOnCurrentStop();
-      await _startLiveLocationSharing();
-    }
+    _listenToStops();
   }
 
   Future<void> _updateCollectorUserLiveLocation(Position position) async {
@@ -616,71 +566,109 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return true;
   }
 
-  Future<void> _loadStops() async {
-    try {
-      if (widget.requestIds.isEmpty) {
+  Future<void> _listenToStops() async {
+    await _requestsSub?.cancel();
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (!mounted) return;
+      setState(() {
+        _loadingStops = false;
+        _stops = [];
+      });
+      return;
+    }
+
+    _requestsSub = FirebaseFirestore.instance
+        .collection('requests')
+        .where('collectorId', isEqualTo: uid)
+        .where('type', isEqualTo: 'pickup')
+        .where('active', isEqualTo: true)
+        .snapshots()
+        .listen((snapshot) async {
+      try {
+        final loadedStops = <PickupStop>[];
+
+        for (final doc in snapshot.docs) {
+          final stop = PickupStop.fromDoc(doc);
+          if (stop == null) continue;
+
+          final status = (doc.data()['status'] ?? '').toString().toLowerCase().trim();
+
+          if (status == 'completed' ||
+              status == 'rejected' ||
+              status == 'cancelled' ||
+              status == 'declined') {
+            continue;
+          }
+
+          loadedStops.add(stop);
+        }
+
+        if (_originLatLng != null && loadedStops.isNotEmpty) {
+          loadedStops.sort((a, b) {
+            final aAccepted = a.acceptedAt?.toDate();
+            final bAccepted = b.acceptedAt?.toDate();
+            if (aAccepted == null && bAccepted == null) return 0;
+            if (aAccepted == null) return 1;
+            if (bAccepted == null) return -1;
+            return aAccepted.compareTo(bAccepted);
+          });
+
+          final ordered = _orderStopsNearest(
+            start: _originLatLng!,
+            stops: loadedStops,
+          );
+
+          if (!mounted) return;
+          setState(() {
+            _stops = ordered;
+            _currentStopIndex = _stops.isEmpty
+                ? 0
+                : (_currentStopIndex >= _stops.length ? _stops.length - 1 : _currentStopIndex);
+            _loadingStops = false;
+          });
+        } else {
+          if (!mounted) return;
+          setState(() {
+            _stops = loadedStops;
+            _currentStopIndex = _stops.isEmpty
+                ? 0
+                : (_currentStopIndex >= _stops.length ? _stops.length - 1 : _currentStopIndex);
+            _loadingStops = false;
+          });
+        }
+
+        if (_stops.isEmpty) {
+          await _stopLiveLocationSharing(clearFirestore: true);
+          if (!mounted) return;
+          setState(() {
+            _route = [];
+            _distanceText = "";
+            _durationText = "";
+            _durationValueSec = null;
+          });
+          return;
+        }
+
+        await _ensureJunkshopChatIfNeeded();
+        await _buildMultiStopRoute();
+        await _focusCameraOnCurrentStop();
+        await _startLiveLocationSharing();
+      } catch (e) {
+        debugPrint("❌ _listenToStops error: $e");
         if (!mounted) return;
         setState(() {
           _loadingStops = false;
-          _stops = [];
-        });
-        return;
-      }
-
-      final ids = widget.requestIds.toSet().toList();
-      final futures = ids.map(
-        (id) => FirebaseFirestore.instance.collection('requests').doc(id).get(),
-      );
-
-      final docs = await Future.wait(futures);
-
-      final loadedStops = <PickupStop>[];
-      for (final doc in docs) {
-        final stop = PickupStop.fromDoc(doc);
-        if (stop == null) continue;
-
-        final status = stop.status.toLowerCase().trim();
-        if (status == 'completed') continue;
-
-        loadedStops.add(stop);
-      }
-
-      if (_originLatLng != null && loadedStops.isNotEmpty) {
-        loadedStops.sort((a, b) {
-          final aAccepted = a.acceptedAt?.toDate();
-          final bAccepted = b.acceptedAt?.toDate();
-          if (aAccepted == null && bAccepted == null) return 0;
-          if (aAccepted == null) return 1;
-          if (bAccepted == null) return -1;
-          return aAccepted.compareTo(bAccepted);
-        });
-
-        final ordered = _orderStopsNearest(
-          start: _originLatLng!,
-          stops: loadedStops,
-        );
-
-        if (!mounted) return;
-        setState(() {
-          _stops = ordered;
-          _currentStopIndex = 0;
-          _loadingStops = false;
-        });
-      } else {
-        if (!mounted) return;
-        setState(() {
-          _stops = loadedStops;
-          _currentStopIndex = 0;
-          _loadingStops = false;
         });
       }
-    } catch (e) {
-      debugPrint("❌ _loadStops error: $e");
+    }, onError: (e) {
+      debugPrint("❌ requests listener error: $e");
       if (!mounted) return;
       setState(() {
         _loadingStops = false;
       });
-    }
+    });
   }
 
   double _distanceSquared(LatLng a, LatLng b) {
@@ -1237,8 +1225,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   final s = stop.status.toLowerCase();
 
-  // If already arrived, don't complete here anymore.
-  // Completion should happen only after SAVE in receipt screen.
   if (s == 'arrived') {
     await _openCollectorReceipt();
     return;
@@ -1285,6 +1271,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
 @override
 void dispose() {
+  _requestsSub?.cancel();
   _liveLocationSub?.cancel();
   _map?.dispose();
   super.dispose();
@@ -1467,6 +1454,18 @@ Future<void> _goToStop(int index) async {
         ),
       ),
     );
+  }
+  @override
+  void didUpdateWidget(covariant CollectorPickupMapPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final oldIds = oldWidget.requestIds.toSet();
+    final newIds = widget.requestIds.toSet();
+
+    if (oldIds.length != newIds.length || !oldIds.containsAll(newIds)) {
+      _loadingStops = true;
+      _listenToStops();
+    }
   }
 
   @override
