@@ -224,8 +224,8 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       title: "Scan ID",
       icon: Icons.document_scanner_outlined,
       message:
-"Please scan your ID.\n\n"
-"Place it clearly inside the frame and remove any surrounding objects.",
+          "Please scan your ID.\n\n"
+          "Place it clearly inside the frame and remove any surrounding objects.",
     );
 
     try {
@@ -278,7 +278,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
         title: "ID Accepted",
         icon: Icons.check_circle_outline,
         message:
-"Your ID has been captured successfully.\n\nIt will be reviewed by the admin.",
+            "Your ID has been captured successfully.\n\nIt will be reviewed by the admin.",
       );
     } on PlatformException catch (e) {
       _toast("Scanner failed: ${e.message ?? e.code}", error: true);
@@ -296,7 +296,7 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
   Future<void> _uploadEncryptedResidentKyc({
     required String uid,
     required Uint8List fileBytes,
-    required String originalFileName,
+    required Map<String, dynamic> addressEnc,
   }) async {
     final eph = await KycSharedKey.newEphemeral();
     final ephPubBytes = await KycSharedKey.publicKeyBytes(eph);
@@ -332,13 +332,13 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       "status": "pending",
       "hasKycFile": true,
       "storagePath": storagePath,
-      "originalFileName": originalFileName,
       "ephPubKeyB64": base64Encode(ephPubBytes),
       "saltB64": base64Encode(Uint8List.fromList(salt)),
       "nonceB64": base64Encode(enc.nonce),
       "macB64": base64Encode(enc.macBytes),
       "submittedAt": FieldValue.serverTimestamp(),
       "updatedAt": FieldValue.serverTimestamp(),
+      "addressEnc": addressEnc,
     }, SetOptions(merge: true));
   }
 
@@ -379,19 +379,25 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       final user = userCredential.user!;
       final uid = user.uid;
 
-      final addressEnc = await ResidentAddressCrypto.encryptForAdmin(
+      final rawAddressEnc = await ResidentAddressCrypto.encryptForAdmin(
         uid: uid,
         address: address,
       );
 
-      final rid = _randId();
-      final kycFileName = "resident_id_$rid.jpg";
+      final cleanAddressEnc = <String, dynamic>{
+        "ctB64": rawAddressEnc["ctB64"],
+        "ephPubKeyB64": rawAddressEnc["ephPubKeyB64"],
+        "macB64": rawAddressEnc["macB64"],
+        "nonceB64": rawAddressEnc["nonceB64"],
+        "saltB64": rawAddressEnc["saltB64"],
+      };
+
       final bytes = await File(_scannedIdPath!).readAsBytes();
 
       await _uploadEncryptedResidentKyc(
         uid: uid,
         fileBytes: Uint8List.fromList(bytes),
-        originalFileName: kycFileName,
+        addressEnc: cleanAddressEnc,
       );
 
       final kycDoc =
@@ -402,41 +408,49 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       final db = FirebaseFirestore.instance;
       final userRef = db.collection("Users").doc(uid);
       final reqRef = db.collection("residentRequests").doc(uid);
-      final kycRef = db.collection("residentKYC").doc(uid);
 
-      await db.runTransaction((tx) async {
-        tx.set(userRef, {
-          "UserID": uid,
-          "Name": name,
-          "Email": email,
-          "role": "user",
-          "Roles": "user",
-          "adminVerified": false,
-          "adminStatus": "pending",
-          "adminReviewedAt": FieldValue.delete(),
-          "residentStatus": "pending",
-          "CreatedAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+await db.runTransaction((tx) async {
+  tx.set(
+    userRef,
+    {
+      "UserID": uid,
+      "Name": name,
+      "Email": email,
+      "role": "user",
+      "Roles": "user",
+      "adminVerified": false,
+      "adminStatus": "pending",
+      "adminReviewedAt": FieldValue.delete(),
+      "residentStatus": "pending",
+      "CreatedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    },
+    SetOptions(merge: true),
+  );
 
-        tx.set(reqRef, {
-          "uid": uid,
-          "publicName": name,
-          "emailDisplay": email,
-          "hasKycFile": true,
-          "status": "pending",
-          "adminVerified": false,
-          "adminStatus": "pending",
-          "submittedAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+  tx.set(
+    reqRef,
+    {
+      "uid": uid,
+      "publicName": name,
+      "emailDisplay": email,
+      "hasKycFile": true,
+      "status": "pending",
+      "adminVerified": false,
+      "adminStatus": "pending",
+      "submittedAt": FieldValue.serverTimestamp(),
+      "updatedAt": FieldValue.serverTimestamp(),
+    },
+    SetOptions(merge: true),
+  );
+});
 
-        tx.set(kycRef, {
-          "uid": uid,
-          "addressEnc": addressEnc,
-          "updatedAt": FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      });
+final check = await FirebaseFirestore.instance
+    .collection("residentRequests")
+    .doc(uid)
+    .get();
+
+print("residentRequests after transaction: ${check.data()}");
 
       await user.updateDisplayName(name);
       await user.sendEmailVerification();
@@ -1044,4 +1058,4 @@ class _ScanTile extends StatelessWidget {
       ),
     );
   }
-} 
+}

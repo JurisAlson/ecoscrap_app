@@ -334,7 +334,7 @@ class _BuyFormState extends State<_BuyForm> {
         throw Exception("Request not found.");
       }
 
-      final latestReq = reqSnap.data() as Map<String, dynamic>? ?? {};
+      final latestReq = reqSnap.data() ?? {};
       final latestAlreadyReceipted = latestReq['hasCollectorReceipt'] == true;
 
       if (latestAlreadyReceipted) {

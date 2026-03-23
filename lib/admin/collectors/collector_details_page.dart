@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 
 import '../admin_helpers.dart';
 import '../admin_theme_page.dart';
@@ -31,54 +31,93 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
   static const Color _primary = Color(0xFF1FA9A7);
 
-  Future<void> _rejectCollectorAndRestoreUser(String uid) async {
-    final db = FirebaseFirestore.instance;
+  Future<String?> _pickRejectReason(BuildContext context) async {
+    final reasons = [
+      "Invalid document submitted",
+      "Blurry or unreadable equipment photo",
+      "Information does not match submitted details",
+      "Duplicate application detected",
+      "Incomplete requirements",
+      "Other",
+    ];
 
-    final userRef = db.collection("Users").doc(uid);
-    final reqRef = db.collection("collectorRequests").doc(uid);
+    String selected = reasons.first;
+    final otherController = TextEditingController();
 
-    await db.runTransaction((tx) async {
-      tx.set(
-        userRef,
-        {
-          "role": "user",
-          "Roles": "user",
-          "collectorVerified": false,
-          "collectorStatus": "rejected",
-          "collectorActive": false,
-          "collectorUpdatedAt": FieldValue.serverTimestamp(),
-          "junkshopId": FieldValue.delete(),
-          "junkshopName": FieldValue.delete(),
-          "assignedJunkshopUid": FieldValue.delete(),
-          "assignedJunkshopName": FieldValue.delete(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text("Select rejection reason"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButton<String>(
+                    value: selected,
+                    isExpanded: true,
+                    items: reasons.map((r) {
+                      return DropdownMenuItem(
+                        value: r,
+                        child: Text(r),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => selected = val);
+                      }
+                    },
+                  ),
+                  if (selected == "Other") ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: otherController,
+                      decoration: const InputDecoration(
+                        labelText: "Enter custom reason",
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final result = selected == "Other"
+                        ? otherController.text.trim()
+                        : selected;
 
-      tx.set(
-        reqRef,
-        {
-          "status": "rejected",
-          "adminRejectedAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-    });
+                    if (result.isEmpty) return;
+                    Navigator.pop(context, result);
+                  },
+                  child: const Text("Confirm"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
-  Future<void> _adminApprove(String uid) async {
+  // =========================
+  // ADMIN: APPROVE COLLECTOR
+  // =========================
+  Future<void> _adminApproveCollector(String uid) async {
     final db = FirebaseFirestore.instance;
 
     final reqRef = db.collection("collectorRequests").doc(uid);
     final userRef = db.collection("Users").doc(uid);
+    final kycRef = db.collection("collectorKYC").doc(uid);
 
     await db.runTransaction((tx) async {
       final reqSnap = await tx.get(reqRef);
-      if (!reqSnap.exists) {
-        throw Exception("Collector request not found");
-      }
+      if (!reqSnap.exists) throw Exception("Collector request not found");
 
       tx.set(
         reqRef,
@@ -93,36 +132,65 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
       tx.set(
         userRef,
         {
-          "role": "collector",
-          "Roles": "collector",
           "collectorStatus": "adminApproved",
-          "collectorActive": true,
           "collectorVerified": true,
-          "collectorUpdatedAt": FieldValue.serverTimestamp(),
+          "collectorActive": true,
+          "adminReviewedAt": FieldValue.serverTimestamp(),
           "updatedAt": FieldValue.serverTimestamp(),
+          "Roles": "collector",
+          "role": "collector",
+        },
+        SetOptions(merge: true),
+      );
+
+      tx.set(
+        kycRef,
+        {
+          "status": "approved",
+          "approvedAt": FieldValue.serverTimestamp(),
         },
         SetOptions(merge: true),
       );
     });
   }
 
+  // =========================
+  // ADMIN: REJECT + DELETE ACCOUNT
+  // =========================
+  Future<void> _rejectAndDeleteCollectorAccount(
+    String uid, {
+    String reason = "",
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(
+      region: "asia-southeast1",
+    ).httpsCallable("rejectCollectorAndDeleteAccount");
+
+    await callable.call({
+      "uid": uid,
+      "reason": reason,
+    });
+  }
+
+  // =========================
+  // KYC / EQUIPMENT PHOTO: DOWNLOAD + DECRYPT
+  // =========================
   Future<_DecryptedEquipmentPhoto?> _downloadAndDecryptEquipmentPhoto(
     String uid,
   ) async {
     final db = FirebaseFirestore.instance;
-    final snap = await db.collection("collectorEquipment").doc(uid).get();
-    final data = snap.data() ?? {};
+    final photoSnap = await db.collection("collectorKYC").doc(uid).get();
+    if (!photoSnap.exists) return null;
 
-    final photo = Map<String, dynamic>.from(data["photo"] ?? {});
+    final photo = photoSnap.data() ?? {};
 
-    final storagePath = (photo["storagePath"] ?? "").toString();
+    final storagePath = (photo["storagePath"] ?? "").toString().trim();
     if (storagePath.isEmpty) return null;
 
-    final originalFileName = (photo["originalFileName"] ?? "").toString();
     final ephPubKeyB64 = (photo["ephPubKeyB64"] ?? "").toString();
     final saltB64 = (photo["saltB64"] ?? "").toString();
     final nonceB64 = (photo["nonceB64"] ?? "").toString();
     final macB64 = (photo["macB64"] ?? "").toString();
+    final fileType = (photo["fileType"] ?? "image").toString().toLowerCase();
 
     if (ephPubKeyB64.isEmpty ||
         saltB64.isEmpty ||
@@ -133,17 +201,16 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
     final ref = FirebaseStorage.instance.ref(storagePath);
     final encryptedBytes = await ref.getData(12 * 1024 * 1024);
-
     if (encryptedBytes == null) {
-      throw Exception("Failed to download encrypted file");
+      throw Exception("Failed to download encrypted equipment file");
     }
 
-    final collectorEphPubBytes = base64Decode(ephPubKeyB64);
+    final ephPubBytes = Uint8List.fromList(base64Decode(ephPubKeyB64));
     final salt = base64Decode(saltB64);
 
     final aesKey = await KycSharedKey.deriveForAdmin(
       adminPrivateKeyB64: AdminKeys.adminPrivateKeyB64,
-      collectorEphemeralPubKeyBytes: Uint8List.fromList(collectorEphPubBytes),
+      collectorEphemeralPubKeyBytes: ephPubBytes,
       salt: salt,
     );
 
@@ -160,8 +227,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
     return _DecryptedEquipmentPhoto(
       bytes: plain,
-      originalFileName: originalFileName,
       storagePath: storagePath,
+      fileType: fileType,
     );
   }
 
@@ -188,7 +255,11 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
               top: 10,
               right: 10,
               child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                icon: const Icon(
+                  Icons.close,
+                  color: Colors.white,
+                  size: 28,
+                ),
                 onPressed: () => Navigator.pop(context),
               ),
             ),
@@ -198,6 +269,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     );
   }
 
+  // =========================
+  // UI helpers
+  // =========================
   Widget _panel({
     required Widget child,
     EdgeInsets padding = const EdgeInsets.all(14),
@@ -321,6 +395,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     return Colors.white54;
   }
 
+  // =========================
+  // PAGE
+  // =========================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -370,10 +447,12 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
             final email = (data["emailDisplay"] ?? "").toString();
             final status = (data["status"] ?? "").toString();
-            final isPending = status.toLowerCase() == "pending";
+            final capacity =
+                (data["minimumRequiredCapacityKg"] ?? "").toString();
+            final isPending = status.trim().toLowerCase() == "pending";
             final accent = _statusAccent(status);
 
-            final equipmentBlock = FutureBuilder<_DecryptedEquipmentPhoto?>(
+            final photoBlock = FutureBuilder<_DecryptedEquipmentPhoto?>(
               future: _downloadAndDecryptEquipmentPhoto(uid),
               builder: (context, photoSnap) {
                 if (photoSnap.connectionState == ConnectionState.waiting) {
@@ -395,10 +474,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                   return _panel(
                     child: const Text(
                       "Equipment photo could not be opened.",
-                      style: TextStyle(
-                        color: Colors.redAccent,
-                        height: 1.3,
-                      ),
+                      style: TextStyle(color: Colors.redAccent, height: 1.3),
                     ),
                   );
                 }
@@ -409,17 +485,53 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                     child: Row(
                       children: [
                         Icon(
-                          Icons.photo_outlined,
+                          Icons.photo_camera_back_outlined,
                           color: Colors.white.withOpacity(0.6),
                         ),
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Text(
-                            "No equipment photo uploaded.",
+                            "No equipment file uploaded.",
                             style: TextStyle(
                               color: Colors.white70,
                               fontWeight: FontWeight.w700,
                             ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                final isPdf = photo.fileType == "pdf";
+
+                if (isPdf) {
+                  return _panel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.picture_as_pdf_outlined,
+                              color: Colors.white.withOpacity(0.75),
+                            ),
+                            const SizedBox(width: 10),
+                            const Text(
+                              "Equipment File (PDF)",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          "To preview it here, add a PDF viewer widget/package.",
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.65),
+                            height: 1.35,
                           ),
                         ),
                       ],
@@ -435,19 +547,10 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       Row(
                         children: [
                           Icon(
-                            Icons.photo_camera_outlined,
+                            Icons.photo_camera_back_outlined,
                             color: Colors.white.withOpacity(0.75),
                           ),
                           const SizedBox(width: 10),
-                          const Expanded(
-                            child: Text(
-                              "Collection Device Photo",
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
                           _pill(
                             "Tap to zoom",
                             bg: Colors.white.withOpacity(0.04),
@@ -522,6 +625,17 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                     fontSize: 12,
                                   ),
                                 ),
+                              if (capacity.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  "Minimum Capacity: $capacity kg",
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.72),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 10),
                               Wrap(
                                 spacing: 8,
@@ -541,8 +655,8 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 14),
-                  equipmentBlock,
+                  const SizedBox(height: 12),
+                  photoBlock,
                   const SizedBox(height: 12),
                   _panel(
                     child: Row(
@@ -557,10 +671,9 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                         Expanded(
                           child: Text(
                             "Confidentiality Notice (Admin Responsibility)\n"
-                            "This uploaded equipment photo is provided for collector verification only. "
-                            "Review it only for official approval purposes and do not share it outside the admin workflow. "
-                            "Never distribute, repost, or misuse submitted images. "
-                            "You are responsible for protecting applicant data during review.",
+                            "This equipment file may contain sensitive submission data. "
+                            "Use it only for collector verification. Do not share, screenshot, "
+                            "download, or distribute it outside official review procedures.",
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.65),
                               height: 1.35,
@@ -608,21 +721,18 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                           onTap: (_busy || !isPending)
                               ? null
                               : () async {
-                                  final ok =
-                                      await AdminHelpers.confirm<bool>(
+                                  final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
                                     title: "Approve collector?",
-                                    body:
-                                        "Approve $name? (This makes the collector visible to junkshops)",
+                                    body: "Approve $name as collector?",
                                     yesValue: true,
                                     yesLabel: "Approve",
                                   );
-
                                   if (ok != true) return;
 
                                   setState(() => _busy = true);
                                   try {
-                                    await _adminApprove(uid);
+                                    await _adminApproveCollector(uid);
                                     if (mounted) {
                                       AdminHelpers.toast(
                                         context,
@@ -638,9 +748,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                       );
                                     }
                                   } finally {
-                                    if (mounted) {
-                                      setState(() => _busy = false);
-                                    }
+                                    if (mounted) setState(() => _busy = false);
                                   }
                                 },
                         ),
@@ -648,43 +756,36 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: _outlineActionButton(
-                          icon: Icons.close,
+                          icon: Icons.delete_forever,
                           label: "Reject",
                           onTap: (_busy || !isPending)
                               ? null
                               : () async {
-                                  final ok =
-                                      await AdminHelpers.confirm<bool>(
+                                  final ok = await AdminHelpers.confirm<bool>(
                                     context: context,
-                                    title: "Reject collector?",
-                                    body:
-                                        "Reject $name? This restores the account to a normal user and allows re-submit.",
+                                    title: "Reject collector account?",
+                                    body: "Are you sure to reject $name?",
                                     yesValue: true,
                                     yesLabel: "Reject",
                                   );
-
                                   if (ok != true) return;
+
+                                  final reason =
+                                      await _pickRejectReason(context);
+                                  if (reason == null || reason.trim().isEmpty) {
+                                    return;
+                                  }
 
                                   setState(() => _busy = true);
                                   try {
-                                    final callable = FirebaseFunctions
-                                        .instanceFor(
-                                          region: "asia-southeast1",
-                                        )
-                                        .httpsCallable("rejectCollector");
-
-                                    await callable.call({
-                                      "uid": uid,
-                                      "reason":
-                                          "Your collector application was rejected by the admin.",
-                                    });
-
-                                    await _rejectCollectorAndRestoreUser(uid);
-
+                                    await _rejectAndDeleteCollectorAccount(
+                                      uid,
+                                      reason: reason.trim(),
+                                    );
                                     if (mounted) {
                                       AdminHelpers.toast(
                                         context,
-                                        "Rejected $name. User restored.",
+                                        "Rejected $name.",
                                       );
                                       Navigator.pop(context);
                                     }
@@ -696,9 +797,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
                                       );
                                     }
                                   } finally {
-                                    if (mounted) {
-                                      setState(() => _busy = false);
-                                    }
+                                    if (mounted) setState(() => _busy = false);
                                   }
                                 },
                         ),
@@ -717,12 +816,12 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
 
 class _DecryptedEquipmentPhoto {
   final Uint8List bytes;
-  final String originalFileName;
   final String storagePath;
+  final String fileType;
 
   _DecryptedEquipmentPhoto({
     required this.bytes,
-    required this.originalFileName,
     required this.storagePath,
+    required this.fileType,
   });
 }

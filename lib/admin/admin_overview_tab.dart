@@ -70,7 +70,7 @@ class AdminOverviewTab extends StatelessWidget {
           const SizedBox(height: 16),
 
           // ✅ Small section label (not a big card)
-          _sectionLabel("Pending Requests", "Not counted as residents/users yet"),
+          _sectionLabel("Pending Requests", ""),
 
           const SizedBox(height: 10),
 

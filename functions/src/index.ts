@@ -217,7 +217,6 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
     }).catch(() => null);
 
     await db.collection("residentKYC").doc(uid).delete().catch(() => null);
-    await db.collection("residentRequests").doc(uid).delete().catch(() => null);
 
     const userRef = db.collection("Users").doc(uid);
     await db.recursiveDelete(userRef).catch(() => null);
@@ -241,35 +240,10 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
 ==================================================== */
 export const sanitizeResidentRequestPII = onDocumentWritten(
   { document: "residentRequests/{uid}", region: "asia-southeast1" },
-  async (event) => {
-    const after = event.data?.after;
-    if (!after?.exists) return;
-
-    const beforeData = event.data?.before?.data() as any | undefined;
-    const afterData = after.data() as any;
-
-    const hasPII =
-      afterData?.emailDisplay != null || afterData?.publicName != null;
-    if (!hasPII) return;
-
-    const alreadySanitized =
-      beforeData != null &&
-      beforeData?.emailDisplay == null &&
-      beforeData?.publicName == null;
-
-    if (alreadySanitized) return;
-
-    await after.ref.update({
-      emailDisplay: admin.firestore.FieldValue.delete(),
-      publicName: admin.firestore.FieldValue.delete(),
-    });
-
-    logger.info("residentRequests sanitized (PII removed)", {
-      uid: event.params.uid,
-    });
+  async () => {
+    return;
   }
 );
-
 /* ====================================================
   ADMIN-ONLY: Set user role in Firestore (routing)
 ==================================================== */
