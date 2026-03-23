@@ -182,8 +182,8 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
 
                 <p>You may review your submission and reapply at any time.</p>
 
-                <p>If you have questions, you may contact our team at 
-                <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+                <p>If you have questions, you may contact the Admin at 
+                <a href="mailto:princeescultura@gmail.com">princeescultura@gmail.com</a>.</p>
 
                 <br/>
 
@@ -1369,8 +1369,8 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
 
               <p>You may now log in and begin using your collector account within EcoScrap.</p>
 
-              <p>If you have any questions or need assistance, you may contact our team at 
-              <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+              <p>If you have any questions or need assistance, you may contact the Admin at 
+              <a href="mailto:princeescultura@gmail.com">princeescultura@gmail.com</a>.</p>
 
               <br/>
 
@@ -1417,8 +1417,8 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
 
                 <p>You may review your submission and reapply at any time.</p>
 
-                <p>If you have questions, you may contact our team at 
-                <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+                <p>If you have questions, you may contact the Admin at 
+                <a href="mailto:princeescultura@gmail.com">princeescultura@gmail.com</a>.</p>
 
                 <br/>
 
@@ -1506,8 +1506,8 @@ export const notifyResidentAdminApproved = onDocumentUpdated(
 
           <p>We are glad to have you as part of our community.</p>
 
-          <p>If you have any questions, you may contact our team at 
-          <a href="mailto:ndoringo@live.mcl.edu.ph">ndoringo@live.mcl.edu.ph</a>.</p>
+          <p>If you have any questions, you may contact the Admin at 
+          <a href="mailto:princeescultura@gmail.com">princeescultura@gmail.com</a>.</p>
 
           <br/>
 

@@ -8,6 +8,9 @@ import 'Collector/collectors_dashboard.dart';
 import 'household/household_dashboard.dart';
 import 'auth/restricted_account_page.dart';
 import 'screens/junkshop/junkshop_dashboard.dart';
+import 'dart:ui';
+import 'package:flutter/material.dart';
+
 
 // Future<void> grantMeAdminClaimIfOwner(User user) async {
 //   if (user.email?.toLowerCase() != "jurisalson@gmail.com") return;
@@ -29,6 +32,7 @@ class RoleGate extends StatefulWidget {
   @override
   State<RoleGate> createState() => _RoleGateState();
 }
+
 
 class _RoleGateState extends State<RoleGate> with WidgetsBindingObserver {
   String _normRole(dynamic raw) {
@@ -354,22 +358,128 @@ class _RoleErrorPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(message, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              if (actionLabel != null && onAction != null)
-                ElevatedButton(
-                  onPressed: onAction,
-                  child: Text(actionLabel!),
-                ),
-            ],
+      backgroundColor: const Color(0xFF0F172A),
+      body: Stack(
+        children: [
+          // 🔵 Top blur circle (same as login page)
+          Positioned(
+            top: -100,
+            left: -100,
+            child: Container(
+              width: 350,
+              height: 350,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1FA9A7).withOpacity(0.20),
+                shape: BoxShape.circle,
+              ),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 120, sigmaY: 120),
+                child: Container(),
+              ),
+            ),
           ),
-        ),
+
+          // 🟢 Bottom blur circle
+          Positioned(
+            bottom: -120,
+            right: -120,
+            child: Container(
+              width: 420,
+              height: 420,
+              decoration: BoxDecoration(
+                color: Colors.greenAccent.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 120, sigmaY: 120),
+                child: Container(),
+              ),
+            ),
+          ),
+
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.10),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 🔁 Dynamic icon based on message
+                      Icon(
+                        message.toLowerCase().contains("rejected")
+                            ? Icons.cancel_outlined
+                            : Icons.hourglass_top,
+                        size: 52,
+                        color: const Color(0xFF1FA9A7),
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      const Text(
+                        "Account Status",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 14,
+                          height: 1.5,
+                        ),
+                      ),
+
+                      if (actionLabel != null && onAction != null) ...[
+                        const SizedBox(height: 24),
+
+                        SizedBox(
+                          width: double.infinity,
+                          height: 54,
+                          child: ElevatedButton(
+                            onPressed: onAction,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF1FA9A7),
+                              foregroundColor: const Color(0xFF0F172A),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            child: Text(
+                              actionLabel!,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
