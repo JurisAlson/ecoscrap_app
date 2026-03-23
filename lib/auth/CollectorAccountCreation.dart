@@ -502,7 +502,7 @@ Future<void> _pickEquipmentPhoto() async {
               ),
               const SizedBox(height: 12),
              Container(
-  height: 190,
+  height: 280,
   decoration: BoxDecoration(
     color: Colors.white.withOpacity(0.04),
     borderRadius: BorderRadius.circular(16),
@@ -512,34 +512,43 @@ Future<void> _pickEquipmentPhoto() async {
   ),
   clipBehavior: Clip.antiAlias,
   child: Stack(
-    fit: StackFit.expand,
     children: [
-      Image.asset(
-        'assets/collector/images.jpg',
-        fit: BoxFit.cover,
+      Padding(
+        padding: const EdgeInsets.all(10), // 👈 adds breathing space
+        child: Image.asset(
+          'assets/collector/images.jpg',
+          fit: BoxFit.contain, // 👈 FIXED (no more cropping)
+          width: double.infinity,
+          height: double.infinity,
+        ),
       ),
+
+      // softer gradient
       Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
+            begin: Alignment.bottomCenter,
+            end: Alignment.center,
             colors: [
-              Colors.black.withOpacity(0.10),
               Colors.black.withOpacity(0.45),
+              Colors.transparent,
             ],
           ),
         ),
       ),
+
+      // caption
       const Align(
         alignment: Alignment.bottomCenter,
         child: Padding(
-          padding: EdgeInsets.all(12),
+          padding: EdgeInsets.all(10),
           child: Text(
             "Example of a valid collection device photo",
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white,
-              fontWeight: FontWeight.w600,
+              fontSize: 12, // 👈 smaller text
+              fontWeight: FontWeight.w500, // 👈 lighter weight
             ),
           ),
         ),

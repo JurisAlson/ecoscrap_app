@@ -72,6 +72,16 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   StreamSubscription<Position>? _posSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _dropoffReqSub;
 
+
+  bool _isWithinDropoffHours() {
+  final now = DateTime.now();
+  final startMinutes = 7 * 60;   // 7:00 AM
+  final endMinutes = 17 * 60;    // 5:00 PM
+  final currentMinutes = now.hour * 60 + now.minute;
+
+  return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+}
+
   bool _pinMode = false;
   LatLng? _pinnedPickupLatLng;
   String _pickupSource = "gps";
@@ -854,48 +864,53 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     return doc.id;
   }
 
-  Future<void> _startDirectionsToMores() async {
-    if (!_locationReady && _pinnedPickupLatLng == null) {
-      _snack("Still getting your location. Please wait...", bg: _surface);
-      return;
-    }
-    if (_hasActivePickupRequest) {
-      _snack("You already have an active pickup request. Cancel it first.");
-      return;
-    }
+Future<void> _startDirectionsToMores() async {
+  if (!_isWithinDropoffHours()) {
+    _snack("Drop-off is only available from 7:00 AM to 5:00 PM.");
+    return;
+  }
 
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: _sheet,
-        title: const Text(
-          "Drop-off",
-          style: TextStyle(color: _textPrimary),
-        ),
-        content: Text(
-          _pinnedPickupLatLng != null
-              ? "Start drop-off using your pinned residence location?"
-              : "Navigate to $_moresName?",
-          style: const TextStyle(color: _textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text(
-              "Cancel",
-              style: TextStyle(color: _textSecondary),
-            ),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              "Confirm",
-              style: TextStyle(color: _accent),
-            ),
-          ),
-        ],
+  if (!_locationReady && _pinnedPickupLatLng == null) {
+    _snack("Still getting your location. Please wait...", bg: _surface);
+    return;
+  }
+  if (_hasActivePickupRequest) {
+    _snack("You already have an active pickup request. Cancel it first.");
+    return;
+  }
+
+  final go = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      backgroundColor: _sheet,
+      title: const Text(
+        "Drop-off",
+        style: TextStyle(color: _textPrimary),
       ),
-    );
+      content: Text(
+        _pinnedPickupLatLng != null
+            ? "Start drop-off using your pinned residence location?"
+            : "Navigate to $_moresName?",
+        style: const TextStyle(color: _textSecondary),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text(
+            "Cancel",
+            style: TextStyle(color: _textSecondary),
+          ),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text(
+            "Confirm",
+            style: TextStyle(color: _accent),
+          ),
+        ),
+      ],
+    ),
+  );
 
     if (go != true) return;
 
@@ -1831,7 +1846,7 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
                                         ? null
                                         : _cancelDropoff,
                                 icon: const Icon(Icons.cancel_outlined),
-                                label: const Text("CANCEL RIDE"),
+                                label: const Text("CANCEL"),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.redAccent,
                                   foregroundColor: _textPrimary,
