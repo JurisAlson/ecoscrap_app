@@ -99,7 +99,7 @@ class _LoginPageState extends State<LoginPage> {
     });
   }
 
-  Future<void> _login() async {
+  /*Future<void> _login() async {
     if (_isLoading) return;
 
     final email = _emailController.text.trim();
@@ -118,7 +118,35 @@ class _LoginPageState extends State<LoginPage> {
         password: password,
       );
 
-      final user = cred.user;
+      await FirebaseAuth.instance.currentUser?.reload();
+      final user = FirebaseAuth.instance.currentUser;
+
+      if (user != null && user.emailVerified) {
+        await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+          'emailVerified': true,
+          'status': 'pending_admin_approval',
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      
+
+      if (user != null) {
+        await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
+          'uid': user.uid,
+          'emailDisplay': user.email ?? '',
+          'Roles': 'user',
+          'role': 'user',
+
+          'emailVerified': false,
+          'status': 'pending_email_verification',
+
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+
+        await user.sendEmailVerification();
+      }
       if (user == null) {
         _showToast("Login failed.", isError: true);
         return;
@@ -162,6 +190,97 @@ class _LoginPageState extends State<LoginPage> {
       if (mounted) setState(() => _isLoading = false);
     }
   }
+  */
+  Future<void> _login() async {
+  if (_isLoading) return;
+
+  final email = _emailController.text.trim();
+  final password = _passwordController.text.trim();
+
+  if (email.isEmpty || password.isEmpty) {
+    _showToast("Email and password are required.", isError: true);
+    return;
+  }
+
+  setState(() => _isLoading = true);
+
+  try {
+    final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    final user = cred.user;
+    if (user == null) {
+      _showToast("Login failed.", isError: true);
+      return;
+    }
+
+    await user.reload();
+    final refreshedUser = FirebaseAuth.instance.currentUser;
+    if (refreshedUser == null) {
+      _showToast("Login failed.", isError: true);
+      return;
+    }
+
+    try {
+      await _ensureUserProfile(refreshedUser);
+
+      if (refreshedUser.emailVerified) {
+        final ref =
+            FirebaseFirestore.instance.collection('Users').doc(refreshedUser.uid);
+
+        final snap = await ref.get();
+        final data = snap.data() ?? {};
+        final currentStatus = (data['status'] ?? '').toString().trim().toLowerCase();
+
+        final updates = <String, dynamic>{
+          'emailVerified': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        };
+
+        if (currentStatus.isEmpty ||
+            currentStatus == 'pending_email_verification') {
+          updates['status'] = 'pending_admin_approval';
+        }
+
+        await ref.set(updates, SetOptions(merge: true));
+      }
+    } catch (e, s) {
+      debugPrint("PROFILE ERROR: $e");
+      debugPrintStack(stackTrace: s);
+    }
+
+    unawaited(_trySaveFcmToken());
+
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const RoleGate()),
+      (_) => false,
+    );
+    } on FirebaseAuthException catch (e) {
+    debugPrint("AUTH ERROR: ${e.code} / ${e.message}");
+
+    if (e.code == "user-disabled") {
+      _showToast(
+        "Your account has been restricted. Please contact the admin.",
+        isError: true,
+      );
+    } else if (e.code == "wrong-password" ||
+              e.code == "invalid-credential" ||
+              e.code == "user-not-found") {
+      _showToast("Incorrect email or password.", isError: true);
+    } else {
+      _showToast(e.message ?? "Login failed", isError: true);
+    }
+  } catch (e, s) {
+    debugPrint("GENERAL LOGIN ERROR: $e");
+    debugPrintStack(stackTrace: s);
+    _showToast("Login failed. Please try again.", isError: true);
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
+  }
+}
 
   Future<void> _trySaveFcmToken() async {
     try {
