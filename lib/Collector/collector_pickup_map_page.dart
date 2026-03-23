@@ -1758,7 +1758,7 @@ Future<void> _goToStop(int index) async {
                                     ? Icons.receipt_long
                                     : Icons.location_on_outlined,
                                 title: currentStop?.status.toLowerCase() == 'arrived'
-                                    ? "save & complete"
+                                    ? "Save & Complete"
                                     : "ARRIVED",
                                 subtitle: currentStop?.status.toLowerCase() == 'arrived'
                                     ? "COMPLETE & SAVE"
