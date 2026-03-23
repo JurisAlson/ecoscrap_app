@@ -434,6 +434,17 @@ Future<void> _handleLogoutPressed(BuildContext context) async {
         }
 
         if ((currentActiveKg + requestKg) > maxCapacityKg) {
+          await _userNotificationsRef(user.uid).add({
+            'type': 'capacity_full',
+            'title': 'Capacity Full',
+            'message':
+                'You cannot accept this pickup because your current load is '
+                '${currentActiveKg.toStringAsFixed(1)} kg out of '
+                '${maxCapacityKg.toStringAsFixed(1)} kg.',
+            'status': 'unread',
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+
           throw Exception(
             "Capacity exceeded. "
             "Current load: ${currentActiveKg.toStringAsFixed(1)} kg, "
@@ -1131,11 +1142,34 @@ final collectorName =
                           return ay.compareTo(ax);
                         });
 
+                        double currentLoadKg = 0.0;
+                        for (final d in pickupDocs) {
+                          final data = d.data() as Map<String, dynamic>;
+                          final collectorId = (data['collectorId'] ?? '').toString().trim();
+
+                          if (collectorId == uid) {
+                            currentLoadKg += _getRequestKg(data);
+                          }
+                        }
+
+                        final bool isFullCapacity = currentLoadKg >= maxCapacityKg;
+
                         final notifDocs = snap.data?.docs ?? [];
 
                         return ListView(
                           padding: const EdgeInsets.only(bottom: 20),
                           children: [
+                            if (isFullCapacity)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _notifTile(
+                                  title: "Capacity Full",
+                                  subtitle:
+                                      "You are already at full capacity (${currentLoadKg.toStringAsFixed(1)} kg / ${maxCapacityKg.toStringAsFixed(1)} kg). Complete an active pickup first before accepting a new one.",
+                                  timeText: "",
+                                  status: "unread",
+                                ),
+                              ),
                             if (pickupDocs.isEmpty)
                               const Padding(
                                 padding: EdgeInsets.symmetric(vertical: 16),

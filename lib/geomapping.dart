@@ -1703,9 +1703,11 @@ Future<void> _startDirectionsToMores() async {
                               children: [
                                 _statItem(
                                   Icons.access_time,
-                                  _dirDurationText.isEmpty
-                                      ? "$_etaMinutes min"
-                                      : _dirDurationText,
+                                  (!_isDelivering && !_isPickup)
+                                      ? "--"
+                                      : (_dirDurationText.isEmpty
+                                          ? "$_etaMinutes min"
+                                          : _dirDurationText),
                                 ),
                                 _statDivider(),
                                 _statItem(
