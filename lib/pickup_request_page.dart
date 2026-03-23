@@ -503,62 +503,6 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     }
   }
 
-  Widget _miniInfoCard({
-    required String title,
-    required String value,
-    required IconData icon,
-    Color? valueColor,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: _surfaceAlt,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _border),
-            ),
-            child: Icon(icon, color: _textSecondary, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title.toUpperCase(),
-                  style: const TextStyle(
-                    fontSize: 10,
-                    color: _textMuted,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: TextStyle(
-                    color: valueColor ?? _textPrimary,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _inputField({
   required TextEditingController controller,
   required String hint,
@@ -710,23 +654,7 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _miniInfoCard(
-                title: "Estimated Trip",
-                value:
-                    "${widget.distanceKm.toStringAsFixed(1)} km • ${widget.etaMinutes} min",
-                icon: Icons.route_outlined,
-                valueColor: _accent,
-              ),
-              const SizedBox(height: 14),
-
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: _surface,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: _border),
-                ),
-              ),
+              
 
               const SizedBox(height: 18),
               _sectionTitle("CHOOSE A DRIVER"),

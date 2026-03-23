@@ -952,6 +952,7 @@ final collectorName =
 
         tx.update(requestRef, {
           'status': 'arrived',
+          'arrived': true,
           'arrivedAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         });
