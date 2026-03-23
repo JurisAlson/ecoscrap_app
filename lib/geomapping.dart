@@ -268,8 +268,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
     required Color iconColor,
     required Color backgroundColor,
     required Color borderColor,
-    required double size,
-    required double iconSize,
+    double size = 112,
+    double iconSize = 54,
     String? label,
   }) async {
     final recorder = ui.PictureRecorder();
@@ -296,15 +296,14 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   Future<void> _loadMapMarkerIcons() async {
     try {
-      _residenceMarkerIcon = await _iconToMarker(
-        icon: Icons.person_pin_circle_rounded,
+          _residenceMarkerIcon = await _iconToMarker(
+        icon: Icons.house_rounded,
         iconColor: Colors.white,
         backgroundColor: const Color(0xFF334155),
-        borderColor: Colors.white.withOpacity(0.16),
+        borderColor: Colors.white.withOpacity(0.18),
         size: 96,
         iconSize: 42,
       );
-
       _moresMarkerIcon = await _iconToMarker(
         icon: Icons.storefront_rounded,
         iconColor: Colors.white,
@@ -316,14 +315,13 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       );
 
       _collectorMarkerIcon = await _iconToMarker(
-        icon: Icons.local_shipping_rounded,
+        icon: Icons.shopping_cart_rounded,
         iconColor: Colors.white,
-        backgroundColor: _blue,
+        backgroundColor: _teal,
         borderColor: Colors.white.withOpacity(0.18),
         size: 78,
         iconSize: 34,
       );
-
       if (mounted) setState(() {});
     } catch (e) {
       debugPrint("Failed to load map marker icons: $e");
