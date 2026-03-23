@@ -306,7 +306,8 @@ static const String _darkMapStyle = r'''
         status == 'completed' ||
         status == 'done' ||
         status == 'cancelled' ||
-        status == 'confirmed';
+        status == 'canceled' ||
+        status == 'declined';
 
     if (!isFinished) return;
 
@@ -958,8 +959,7 @@ static const String _darkMapStyle = r'''
         return 'Pickup scheduled';
       case 'accepted':
         return 'Collector accepted your request';
-      case 'confirmed':
-        return 'Pickup confirmed';
+
       case 'ongoing':
         return 'Collector is on the way';
       case 'arrived':
@@ -979,7 +979,6 @@ static const String _darkMapStyle = r'''
   Color get _statusColor {
     switch (_status) {
       case 'accepted':
-      case 'confirmed':
       case 'ongoing':
       case 'completed':
         return _accent;
@@ -1000,8 +999,6 @@ static const String _darkMapStyle = r'''
   IconData get _statusIcon {
     switch (_status) {
       case 'accepted':
-      case 'confirmed':
-        return Icons.thumb_up_alt_outlined;
       case 'ongoing':
         return Icons.local_shipping_outlined;
       case 'arrived':

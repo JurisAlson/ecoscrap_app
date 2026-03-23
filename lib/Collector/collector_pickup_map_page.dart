@@ -403,16 +403,16 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<void> _startLiveLocationSharing() async {
-    final stop = _currentStop;
-    if (stop == null) return;
+    if (_stops.isEmpty) return;
 
-    final status = stop.status.toLowerCase();
-    final shouldShare = status == 'accepted' ||
-        status == 'arrived' ||
-        status == 'scheduled' ||
-        status == 'ongoing';
+    final activeStops = _stops.where((stop) {
+      final status = stop.status.toLowerCase().trim();
+      return status == 'accepted' ||
+          status == 'arrived' ||
+          status == 'ongoing';
+    }).toList();
 
-    if (!shouldShare) return;
+    if (activeStops.isEmpty) return;
 
     final hasPermission = await _ensureLocationPermission();
     if (!hasPermission) return;
@@ -431,14 +431,19 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     await _updateCollectorUserLiveLocation(position);
 
-    await FirebaseFirestore.instance
-        .collection('requests')
-        .doc(stop.requestId)
-        .set({
-      'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
-      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-      'sharingLiveLocation': true,
-    }, SetOptions(merge: true));
+    final batch = FirebaseFirestore.instance.batch();
+    for (final stop in activeStops) {
+      batch.set(
+        FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
+        {
+          'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
+          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+          'sharingLiveLocation': true,
+        },
+        SetOptions(merge: true),
+      );
+    }
+    await batch.commit();
 
     await _liveLocationSub?.cancel();
     _liveLocationSub = Geolocator.getPositionStream(
@@ -448,16 +453,36 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       ),
     ).listen((position) async {
       try {
+        if (mounted) {
+          setState(() {
+            _pos = position;
+          });
+        }
+
         await _updateCollectorUserLiveLocation(position);
 
-        await FirebaseFirestore.instance
-            .collection('requests')
-            .doc(stop.requestId)
-            .set({
-          'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
-          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          'sharingLiveLocation': true,
-        }, SetOptions(merge: true));
+        final currentActiveStops = _stops.where((stop) {
+          final status = stop.status.toLowerCase().trim();
+          return status == 'accepted' ||
+              status == 'arrived' ||
+              status == 'ongoing';
+        }).toList();
+
+        if (currentActiveStops.isEmpty) return;
+
+        final batch = FirebaseFirestore.instance.batch();
+        for (final stop in currentActiveStops) {
+          batch.set(
+            FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
+            {
+              'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
+              'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+              'sharingLiveLocation': true,
+            },
+            SetOptions(merge: true),
+          );
+        }
+        await batch.commit();
       } catch (e) {
         debugPrint('LIVE LOCATION UPDATE ERROR: $e');
       }
@@ -471,19 +496,21 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     await _clearCollectorUserLiveLocation();
 
-    if (!clearFirestore) return;
-
-    final stop = _currentStop;
-    if (stop == null) return;
+    if (!clearFirestore || _stops.isEmpty) return;
 
     try {
-      await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(stop.requestId)
-          .set({
-        'sharingLiveLocation': false,
-        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      final batch = FirebaseFirestore.instance.batch();
+      for (final stop in _stops) {
+        batch.set(
+          FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
+          {
+            'sharingLiveLocation': false,
+            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+      await batch.commit();
     } catch (e) {
       debugPrint('❌ stop live location sharing failed: $e');
     }
