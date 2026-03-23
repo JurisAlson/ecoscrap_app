@@ -34,7 +34,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   static const List<String> activePickupStatuses = [
     'accepted',
     'arrived',
-    'scheduled',
     'ongoing'
   ];
 
@@ -137,6 +136,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     WidgetsBinding.instance.addObserver(this);
     _setOnline(true);
     _saveFcmToken();
+    _activateReadyScheduledPickups();
     _startDashboardLiveTracking();
   }
 
@@ -152,6 +152,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _setOnline(true);
+      _activateReadyScheduledPickups();
       _startDashboardLiveTracking();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
@@ -188,6 +189,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     if (_isSendingLiveLocation) return;
 
     final hasPermission = await _ensureLocationPermission();
+    debugPrint('📍 HAS LOCATION PERMISSION: $hasPermission');
     if (!hasPermission) return;
 
     _isSendingLiveLocation = true;
@@ -201,7 +203,9 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     // ONLY mirror into request docs if there are active assigned pickups
     final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
+    debugPrint('📦 ACTIVE REQUESTS FOUND: ${activeDocs.docs.length}');
     if (activeDocs.docs.isNotEmpty) {
+      debugPrint('🟢 WRITING FIRST LIVE LOCATION TO REQUESTS');
       final batch = _db.batch();
       for (final doc in activeDocs.docs) {
         batch.set(
@@ -226,8 +230,10 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.best,
         distanceFilter: 10,
+        
       ),
     ).listen((position) async {
+      debugPrint('📡 POSITION UPDATE: ${position.latitude}, ${position.longitude}');
       final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser == null) return;
 
@@ -239,6 +245,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
       if (activeNow.docs.isNotEmpty) {
         final batch = _db.batch();
+        debugPrint('🔁 UPDATING REQUEST DOCS (STREAM)');
         for (final doc in activeNow.docs) {
           batch.set(
             doc.reference,
@@ -346,6 +353,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       final ampm = d.hour >= 12 ? "PM" : "AM";
       return "$hour:${_two(d.minute)} $ampm";
     }
+    
 
     final s = startTs.toDate();
     final date = "${s.year}-${_two(s.month)}-${_two(s.day)}";
@@ -354,6 +362,71 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     final e = endTs.toDate();
     return "$date • ${hm(s)}–${hm(e)}";
+  }
+  bool _isFutureScheduledPickup(Map<String, dynamic> data) {
+    final pickupType = (data['pickupType'] ?? '').toString().toLowerCase();
+
+    if (pickupType == 'now') return false;
+
+    final startTs =
+        _asTimestamp(data['windowStart']) ?? _asTimestamp(data['scheduledAt']);
+
+    if (startTs == null) return false;
+
+    return startTs.toDate().isAfter(DateTime.now());
+  }
+
+  Query<Map<String, dynamic>> _scheduledAcceptedMineQuery(String collectorId) {
+    return _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: true)
+        .orderBy('updatedAt', descending: true);
+  }
+  Query<Map<String, dynamic>> _scheduledInboxQuery(String collectorId) {
+    return _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: false)
+        .where('active', isEqualTo: false)
+        .where('pickupType', isEqualTo: 'window')
+        .orderBy('updatedAt', descending: true);
+  }
+
+  Future<void> _activateReadyScheduledPickups() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snap = await _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: user.uid)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: true)
+        .get();
+
+    if (snap.docs.isEmpty) return;
+
+    final now = DateTime.now();
+    final batch = _db.batch();
+
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final startTs =
+          _asTimestamp(data['windowStart']) ?? _asTimestamp(data['scheduledAt']);
+
+      if (startTs != null && !startTs.toDate().isAfter(now)) {
+        batch.update(doc.reference, {
+          'status': 'accepted',
+          'active': true,
+          'acceptedForLater': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    await batch.commit();
   }
 Future<void> _handleLogoutPressed(BuildContext context) async {
   final user = FirebaseAuth.instance.currentUser;
@@ -412,6 +485,8 @@ Future<void> _handleLogoutPressed(BuildContext context) async {
         currentActiveKg += _getRequestKg(doc.data());
       }
 
+      bool acceptedForLater = false;
+
       await _db.runTransaction((tx) async {
         final requestSnap = await tx.get(requestRef);
         if (!requestSnap.exists) {
@@ -453,19 +528,28 @@ Future<void> _handleLogoutPressed(BuildContext context) async {
           );
         }
 
+        acceptedForLater = _isFutureScheduledPickup(data);
+
         tx.update(requestRef, {
-          'status': 'accepted',
-          'active': true,
+          'status': acceptedForLater ? 'scheduled' : 'accepted',
+          'active': !acceptedForLater,
           'collectorId': user.uid,
           'acceptedAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
-          'queueNumber': activeDocs.docs.length + 1,
+          'acceptedForLater': acceptedForLater,
+          'queueNumber': acceptedForLater ? null : activeDocs.docs.length + 1,
         });
       });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Pickup accepted.")),
+        SnackBar(
+          content: Text(
+            acceptedForLater
+                ? "Scheduled pickup accepted. It will become active at the scheduled time."
+                : "Pickup accepted.",
+          ),
+        ),
       );
 
       await _startDashboardLiveTracking();
@@ -1045,8 +1129,9 @@ final collectorName =
         .orderBy('createdAt', descending: true)
         .snapshots();
 
-    final unassignedQuery = _openUnassignedRequestsQuery();
     final mineQuery = _openMineRequestsQuery(user.uid);
+    final scheduledMineQuery = _scheduledAcceptedMineQuery(user.uid);
+    final scheduledInboxQuery = _scheduledInboxQuery(user.uid);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -1074,476 +1159,552 @@ final collectorName =
           ),
           const SizedBox(height: 10),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: unassignedQuery.snapshots(),
-              builder: (context, aSnap) {
-                if (aSnap.connectionState == ConnectionState.waiting) {
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: mineQuery.snapshots(),
+              builder: (context, mineSnap) {
+                if (mineSnap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
 
-                if (aSnap.hasError) {
+                if (mineSnap.hasError) {
                   return Center(
                     child: Text(
-                      "Failed to load pickups:\n${aSnap.error}",
+                      "Failed to load pickups:\n${mineSnap.error}",
                       style: const TextStyle(color: Colors.white70),
                       textAlign: TextAlign.center,
                     ),
                   );
                 }
 
-                return StreamBuilder<QuerySnapshot>(
-                  stream: mineQuery.snapshots(),
-                  builder: (context, bSnap) {
-                    if (bSnap.connectionState == ConnectionState.waiting) {
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: scheduledMineQuery.snapshots(),
+                  builder: (context, scheduledSnap) {
+                    if (scheduledSnap.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator());
                     }
 
-                    if (bSnap.hasError) {
+                    if (scheduledSnap.hasError) {
                       return Center(
                         child: Text(
-                          "Failed to load pickups:\n${bSnap.error}",
+                          "Failed to load scheduled pickups:\n${scheduledSnap.error}",
                           style: const TextStyle(color: Colors.white70),
                           textAlign: TextAlign.center,
                         ),
                       );
                     }
 
-                    return StreamBuilder<QuerySnapshot>(
-                      stream: notifStream,
-                      builder: (context, snap) {
-                        final uid = user.uid;
-                        final Map<String, QueryDocumentSnapshot> byId = {};
-
-                        for (final d in (aSnap.data?.docs ?? [])) {
-                          final data = d.data() as Map<String, dynamic>;
-                          final cid =
-                              (data['collectorId'] ?? '').toString().trim();
-                          if (cid.isEmpty) byId[d.id] = d;
+                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: scheduledInboxQuery.snapshots(),
+                      builder: (context, inboxSnap) {
+                        if (inboxSnap.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
                         }
 
-                        for (final d in (bSnap.data?.docs ?? [])) {
-                          byId[d.id] = d;
+                        if (inboxSnap.hasError) {
+                          return Center(
+                            child: Text(
+                              "Failed to load scheduled requests:\n${inboxSnap.error}",
+                              style: const TextStyle(color: Colors.white70),
+                              textAlign: TextAlign.center,
+                            ),
+                          );
                         }
 
-                        final pickupDocs = byId.values.where((d) {
-                          final data = d.data() as Map<String, dynamic>;
-                          final declinedBy = (data['declinedBy'] as List?) ?? [];
-                          return !declinedBy.contains(uid);
-                        }).toList();
+                        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                          stream: notifStream,
+                          builder: (context, notifSnap) {
+                            final uid = user.uid;
 
-                        pickupDocs.sort((x, y) {
-                          final dx = x.data() as Map<String, dynamic>;
-                          final dy = y.data() as Map<String, dynamic>;
-                          final tx = _asTimestamp(dx['updatedAt']) ??
-                              _asTimestamp(dx['createdAt']);
-                          final ty = _asTimestamp(dy['updatedAt']) ??
-                              _asTimestamp(dy['createdAt']);
-                          final ax = tx?.toDate().millisecondsSinceEpoch ?? 0;
-                          final ay = ty?.toDate().millisecondsSinceEpoch ?? 0;
-                          return ay.compareTo(ax);
-                        });
+                            final pickupDocs = (mineSnap.data?.docs ?? []).where((d) {
+                              final data = d.data();
+                              final declinedBy = (data['declinedBy'] as List?) ?? [];
+                              return !declinedBy.contains(uid);
+                            }).toList();
 
-                        double currentLoadKg = 0.0;
-                        for (final d in pickupDocs) {
-                          final data = d.data() as Map<String, dynamic>;
-                          final collectorId = (data['collectorId'] ?? '').toString().trim();
+                            final scheduledDocs =
+                                (scheduledSnap.data?.docs ?? []).where((d) {
+                              final data = d.data();
+                              final declinedBy = (data['declinedBy'] as List?) ?? [];
+                              return !declinedBy.contains(uid);
+                            }).toList();
 
-                          if (collectorId == uid) {
-                            currentLoadKg += _getRequestKg(data);
-                          }
-                        }
+                            final scheduledInboxDocs =
+                                (inboxSnap.data?.docs ?? []).where((d) {
+                              final data = d.data();
+                              final declinedBy = (data['declinedBy'] as List?) ?? [];
+                              return !declinedBy.contains(uid);
+                            }).toList();
 
-                        final bool isFullCapacity = currentLoadKg >= maxCapacityKg;
+                            pickupDocs.sort((x, y) {
+                              final dx = x.data();
+                              final dy = y.data();
 
-                        final notifDocs = snap.data?.docs ?? [];
+                              final tx = _asTimestamp(dx['updatedAt']) ??
+                                  _asTimestamp(dx['createdAt']);
+                              final ty = _asTimestamp(dy['updatedAt']) ??
+                                  _asTimestamp(dy['createdAt']);
 
-                        return ListView(
-                          padding: const EdgeInsets.only(bottom: 20),
-                          children: [
-                            if (isFullCapacity)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: _notifTile(
-                                  title: "Capacity Full",
-                                  subtitle:
-                                      "You are already at full capacity (${currentLoadKg.toStringAsFixed(1)} kg / ${maxCapacityKg.toStringAsFixed(1)} kg). Complete an active pickup first before accepting a new one.",
-                                  timeText: "",
-                                  status: "unread",
-                                ),
-                              ),
-                            if (pickupDocs.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 16),
-                                child: Center(
-                                  child: Text(
-                                    "No pending pickup requests.",
-                                    style: TextStyle(color: Colors.white70),
-                                  ),
-                                ),
-                              )
-                            else
-                              ...pickupDocs.map((doc) {
-                                final data = doc.data() as Map<String, dynamic>;
+                              final ax = tx?.toDate().millisecondsSinceEpoch ?? 0;
+                              final ay = ty?.toDate().millisecondsSinceEpoch ?? 0;
 
-                                final household = _householdName(data);
-                                final address = _pickupAddress(data);
-                                final phoneNumber = _phoneNumber(data);
+                              return ay.compareTo(ax);
+                            });
 
-                                final bagLabel =
-                                    (data['bagLabel'] ?? '').toString();
-                                final bagKgValue = _getRequestKg(data);
-                                final bagKg =
-                                    bagKgValue > 0 ? bagKgValue.toInt() : null;
+                            double currentLoadKg = 0.0;
+                            for (final d in pickupDocs) {
+                              currentLoadKg += _getRequestKg(d.data());
+                            }
 
-                                final distanceKm = (data['distanceKm'] is num)
-                                    ? (data['distanceKm'] as num).toDouble()
-                                    : null;
+                            final isFullCapacity = currentLoadKg >= maxCapacityKg;
+                            final notifDocs = notifSnap.data?.docs ?? [];
 
-                                final etaMinutes = (data['etaMinutes'] is num)
-                                    ? (data['etaMinutes'] as num).toInt()
-                                    : null;
-
-                                final scheduleText =
-                                    _formatPickupSchedule(data);
-
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.06),
-                                    borderRadius: BorderRadius.circular(18),
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.08),
+                            return ListView(
+                              padding: const EdgeInsets.only(bottom: 20),
+                              children: [
+                                if (isFullCapacity)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: _notifTile(
+                                      title: "Capacity Full",
+                                      subtitle:
+                                          "You are already at full capacity (${currentLoadKg.toStringAsFixed(1)} kg / ${maxCapacityKg.toStringAsFixed(1)} kg). Complete an active pickup first before accepting a new one.",
+                                      timeText: "",
+                                      status: "unread",
                                     ),
                                   ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      InkWell(
-                                        onTap: () => _promptPickupAction(
-                                          context: context,
-                                          requestId: doc.id,
-                                          data: data,
+
+                                if (pickupDocs.isEmpty &&
+                                    scheduledDocs.isEmpty &&
+                                    scheduledInboxDocs.isEmpty)
+                                  const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 16),
+                                    child: Center(
+                                      child: Text(
+                                        "No pending pickup requests.",
+                                        style: TextStyle(color: Colors.white70),
+                                      ),
+                                    ),
+                                  ),
+
+                                if (scheduledInboxDocs.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    "NEW SCHEDULED REQUESTS",
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 1.1,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ...scheduledInboxDocs.map((doc) {
+                                    final data = doc.data();
+                                    final household = _householdName(data);
+                                    final scheduleText = _formatPickupSchedule(data);
+
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.06),
+                                          borderRadius: BorderRadius.circular(18),
                                         ),
-                                        child: Row(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Container(
-                                              width: 42,
-                                              height: 42,
-                                              decoration: BoxDecoration(
-                                                color: primaryColor
-                                                    .withOpacity(0.18),
-                                                borderRadius:
-                                                    BorderRadius.circular(14),
-                                              ),
-                                              child: const Icon(
-                                                Icons.local_shipping_outlined,
+                                            Text(
+                                              household,
+                                              style: const TextStyle(
                                                 color: Colors.white,
+                                                fontWeight: FontWeight.bold,
                                               ),
                                             ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    household,
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontWeight:
-                                                          FontWeight.w900,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 4),
-                                                  Text(
-                                                    address.isEmpty
-                                                        ? "No address"
-                                                        : address,
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: TextStyle(
-                                                      color:
-                                                          Colors.grey.shade400,
-                                                      fontSize: 12,
-                                                    ),
-                                                  ),
-                                                  if (phoneNumber.isNotEmpty) ...[
-                                                    const SizedBox(height: 4),
-                                                    Text(
-                                                      "Mobile: $phoneNumber",
-                                                      maxLines: 1,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      style: TextStyle(
-                                                        color:
-                                                            Colors.grey.shade300,
-                                                        fontSize: 12,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ],
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              "Scheduled: $scheduleText",
+                                              style: const TextStyle(
+                                                color: Colors.white70,
                                               ),
                                             ),
-                                            Icon(
-                                              Icons.chevron_right,
-                                              color: Colors.grey.shade500,
+                                            const SizedBox(height: 10),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: OutlinedButton(
+                                                    onPressed: () =>
+                                                        _confirmAndDeclinePickup(doc.id),
+                                                    child: const Text("DECLINE"),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _acceptPickup(doc.id),
+                                                    child: const Text("ACCEPT"),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ],
                                         ),
                                       ),
-                                      const SizedBox(height: 10),
-                                      Wrap(
-                                        spacing: 8,
-                                        runSpacing: 8,
-                                        children: [
-                                          _pill("Schedule: $scheduleText"),
-                                          if (bagLabel.isNotEmpty)
-                                            _pill(
-                                              "Bag: $bagLabel${bagKg != null ? " • ${bagKg}kg" : ""}",
-                                            ),
-                                          if (distanceKm != null)
-                                            _pill(
-                                              "Distance: ${distanceKm.toStringAsFixed(2)} km",
-                                            ),
-                                          if (etaMinutes != null)
-                                            _pill("ETA: $etaMinutes min"),
-                                        ],
+                                    );
+                                  }),
+                                ],
+
+                                if (scheduledDocs.isNotEmpty) ...[
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 10),
+                                    child: Text(
+                                      "SCHEDULED PICKUPS",
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 1.1,
                                       ),
-                                      const SizedBox(height: 12),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: OutlinedButton(
-                                              onPressed: () =>
-                                                  _confirmAndDeclinePickup(
-                                                doc.id,
-                                              ),
-                                              style: OutlinedButton.styleFrom(
-                                                foregroundColor: Colors.white,
-                                                side: BorderSide(
-                                                  color: Colors.white
-                                                      .withOpacity(0.18),
-                                                ),
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.circular(14),
-                                                ),
-                                              ),
-                                              child: const Text(
-                                                "DECLINE",
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w900,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            child: ElevatedButton(
-                                              onPressed: () =>
-                                                  _acceptPickup(doc.id),
-                                              style: ElevatedButton.styleFrom(
-                                                backgroundColor: primaryColor,
-                                                foregroundColor: Colors.white,
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.circular(14),
-                                                ),
-                                              ),
-                                              child: const Text(
-                                                "ACCEPT",
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w900,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                    ),
                                   ),
-                                );
-                              }),
-                            if (notifDocs.isNotEmpty) ...[
-                              Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 8),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Divider(
-                                        color: Colors.white.withOpacity(0.10),
-                                        thickness: 1,
-                                      ),
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                      ),
-                                      child: Text(
-                                        "NOTIFICATIONS",
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.55),
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 1.1,
-                                        ),
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: Divider(
-                                        color: Colors.white.withOpacity(0.10),
-                                        thickness: 1,
-                                      ),
-                                    ),
-                                    TextButton(
-                                      onPressed: () async {
-                                        await _clearAllCancelledPickupNotifications();
-                                      },
-                                      child: const Text(
-                                        "Clear",
-                                        style: TextStyle(
-                                          color: Colors.redAccent,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              ...notifDocs.map((doc) {
-                                final n = doc.data() as Map<String, dynamic>;
+                                  ...scheduledDocs.map((doc) {
+                                    final data = doc.data();
+                                    final household = _householdName(data);
+                                    final scheduleText = _formatPickupSchedule(data);
 
-                                final title =
-                                    (n['title'] ?? 'Notification').toString();
-                                final message = (n['message'] ?? '').toString();
-                                final reason = (n['reason'] ??
-                                        n['collectorDeclineReason'] ??
-                                        'No reason provided.')
-                                    .toString();
-                                final status =
-                                    (n['status'] ?? 'unread').toString();
-                                final createdAt = n['createdAt'] as Timestamp?;
-                                final timeText = createdAt != null
-                                    ? _formatNotifTime(createdAt)
-                                    : "";
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: _notifTile(
+                                        title: "Scheduled pickup accepted",
+                                        subtitle:
+                                            "$household • $scheduleText\nThis pickup will become active at the scheduled time.",
+                                        timeText: "",
+                                        status: "unread",
+                                      ),
+                                    );
+                                  }),
+                                ],
 
-                                return Padding(
-                                  padding:
-                                      const EdgeInsets.only(bottom: 12),
-                                  child: _notifTile(
-                                    title: title,
-                                    subtitle: message,
-                                    timeText: timeText,
-                                    status: status,
-                                    onTap: () async {
-                                      await showDialog(
-                                        context: context,
-                                        builder: (dialogContext) => Dialog(
-                                          backgroundColor: Colors.transparent,
-                                          child: Container(
-                                            padding: const EdgeInsets.all(20),
-                                            decoration: BoxDecoration(
-                                              color: bgColor,
-                                              borderRadius:
-                                                  BorderRadius.circular(22),
-                                              border: Border.all(
-                                                color: Colors.white
-                                                    .withOpacity(0.08),
+                                ...pickupDocs.map((doc) {
+                                  final data = doc.data();
+
+                                  final household = _householdName(data);
+                                  final address = _pickupAddress(data);
+                                  final phoneNumber = _phoneNumber(data);
+
+                                  final bagLabel = (data['bagLabel'] ?? '').toString();
+                                  final bagKgValue = _getRequestKg(data);
+                                  final bagKg =
+                                      bagKgValue > 0 ? bagKgValue.toInt() : null;
+
+                                  final distanceKm = (data['distanceKm'] is num)
+                                      ? (data['distanceKm'] as num).toDouble()
+                                      : null;
+
+                                  final etaMinutes = (data['etaMinutes'] is num)
+                                      ? (data['etaMinutes'] as num).toInt()
+                                      : null;
+
+                                  final scheduleText = _formatPickupSchedule(data);
+
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 12),
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.06),
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.08),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        InkWell(
+                                          onTap: () => _promptPickupAction(
+                                            context: context,
+                                            requestId: doc.id,
+                                            data: data,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Container(
+                                                width: 42,
+                                                height: 42,
+                                                decoration: BoxDecoration(
+                                                  color: primaryColor.withOpacity(0.18),
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
+                                                ),
+                                                child: const Icon(
+                                                  Icons.local_shipping_outlined,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      household,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight: FontWeight.w900,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 4),
+                                                    Text(
+                                                      address.isEmpty
+                                                          ? "No address"
+                                                          : address,
+                                                      maxLines: 2,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                        color: Colors.grey.shade400,
+                                                        fontSize: 12,
+                                                      ),
+                                                    ),
+                                                    if (phoneNumber.isNotEmpty) ...[
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        "Mobile: $phoneNumber",
+                                                        maxLines: 1,
+                                                        overflow:
+                                                            TextOverflow.ellipsis,
+                                                        style: TextStyle(
+                                                          color: Colors.grey.shade300,
+                                                          fontSize: 12,
+                                                          fontWeight: FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ),
+                                              Icon(
+                                                Icons.chevron_right,
+                                                color: Colors.grey.shade500,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Wrap(
+                                          spacing: 8,
+                                          runSpacing: 8,
+                                          children: [
+                                            _pill("Schedule: $scheduleText"),
+                                            if (bagLabel.isNotEmpty)
+                                              _pill(
+                                                "Bag: $bagLabel${bagKg != null ? " • ${bagKg}kg" : ""}",
+                                              ),
+                                            if (distanceKm != null)
+                                              _pill(
+                                                "Distance: ${distanceKm.toStringAsFixed(2)} km",
+                                              ),
+                                            if (etaMinutes != null)
+                                              _pill("ETA: $etaMinutes min"),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 12),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: OutlinedButton(
+                                                onPressed: () =>
+                                                    _confirmAndDeclinePickup(doc.id),
+                                                child: const Text("DECLINE"),
                                               ),
                                             ),
-                                            child: SingleChildScrollView(
-                                              child: Column(
-                                                mainAxisSize: MainAxisSize.min,
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    title,
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 22,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                    ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: ElevatedButton(
+                                                onPressed: () => _acceptPickup(doc.id),
+                                                child: const Text("ACCEPT"),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }),
+
+                                if (notifDocs.isNotEmpty) ...[
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Divider(
+                                            color: Colors.white.withOpacity(0.10),
+                                            thickness: 1,
+                                          ),
+                                        ),
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.symmetric(horizontal: 10),
+                                          child: Text(
+                                            "NOTIFICATIONS",
+                                            style: TextStyle(
+                                              color: Colors.white.withOpacity(0.55),
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: 1.1,
+                                            ),
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Divider(
+                                            color: Colors.white.withOpacity(0.10),
+                                            thickness: 1,
+                                          ),
+                                        ),
+                                        TextButton(
+                                          onPressed: () async {
+                                            await _clearAllCancelledPickupNotifications();
+                                          },
+                                          child: const Text(
+                                            "Clear",
+                                            style: TextStyle(
+                                              color: Colors.redAccent,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  ...notifDocs.map((doc) {
+                                    final n = doc.data();
+
+                                    final title =
+                                        (n['title'] ?? 'Notification').toString();
+                                    final message = (n['message'] ?? '').toString();
+                                    final reason = (n['reason'] ??
+                                            n['collectorDeclineReason'] ??
+                                            'No reason provided.')
+                                        .toString();
+                                    final status =
+                                        (n['status'] ?? 'unread').toString();
+                                    final createdAt = n['createdAt'] as Timestamp?;
+                                    final timeText = createdAt != null
+                                        ? _formatNotifTime(createdAt)
+                                        : "";
+
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: _notifTile(
+                                        title: title,
+                                        subtitle: message,
+                                        timeText: timeText,
+                                        status: status,
+                                        onTap: () async {
+                                          await showDialog(
+                                            context: context,
+                                            builder: (dialogContext) => Dialog(
+                                              backgroundColor: Colors.transparent,
+                                              child: Container(
+                                                padding: const EdgeInsets.all(20),
+                                                decoration: BoxDecoration(
+                                                  color: bgColor,
+                                                  borderRadius:
+                                                      BorderRadius.circular(22),
+                                                  border: Border.all(
+                                                    color: Colors.white
+                                                        .withOpacity(0.08),
                                                   ),
-                                                  const SizedBox(height: 18),
-                                                  Text(
-                                                    message,
-                                                    style: const TextStyle(
-                                                      color: Colors.white70,
-                                                      fontSize: 15,
-                                                      height: 1.4,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 18),
-                                                  Row(
+                                                ),
+                                                child: SingleChildScrollView(
+                                                  child: Column(
+                                                    mainAxisSize: MainAxisSize.min,
                                                     crossAxisAlignment:
                                                         CrossAxisAlignment.start,
                                                     children: [
-                                                      const Text(
-                                                        "Reason: ",
-                                                        style: TextStyle(
+                                                      Text(
+                                                        title,
+                                                        style: const TextStyle(
                                                           color: Colors.white,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                          fontSize: 15,
+                                                          fontSize: 22,
+                                                          fontWeight: FontWeight.bold,
                                                         ),
                                                       ),
-                                                      Expanded(
-                                                        child: Text(
-                                                          reason,
-                                                          style:
-                                                              const TextStyle(
-                                                            color: Colors.white70,
-                                                            fontSize: 14,
-                                                            height: 1.4,
+                                                      const SizedBox(height: 18),
+                                                      Text(
+                                                        message,
+                                                        style: const TextStyle(
+                                                          color: Colors.white70,
+                                                          fontSize: 15,
+                                                          height: 1.4,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 18),
+                                                      Row(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment.start,
+                                                        children: [
+                                                          const Text(
+                                                            "Reason: ",
+                                                            style: TextStyle(
+                                                              color: Colors.white,
+                                                              fontWeight:
+                                                                  FontWeight.bold,
+                                                              fontSize: 15,
+                                                            ),
                                                           ),
+                                                          Expanded(
+                                                            child: Text(
+                                                              reason,
+                                                              style:
+                                                                  const TextStyle(
+                                                                color: Colors.white70,
+                                                                fontSize: 14,
+                                                                height: 1.4,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      const SizedBox(height: 20),
+                                                      Align(
+                                                        alignment:
+                                                            Alignment.centerRight,
+                                                        child: TextButton(
+                                                          onPressed: () =>
+                                                              Navigator.pop(
+                                                                dialogContext,
+                                                              ),
+                                                          child: const Text("Close"),
                                                         ),
                                                       ),
                                                     ],
                                                   ),
-                                                  const SizedBox(height: 20),
-                                                  Align(
-                                                    alignment:
-                                                        Alignment.centerRight,
-                                                    child: TextButton(
-                                                      onPressed: () =>
-                                                          Navigator.pop(
-                                                              dialogContext),
-                                                      child:
-                                                          const Text("Close"),
-                                                    ),
-                                                  ),
-                                                ],
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        ),
-                                      );
+                                          );
 
-                                      if (status != 'read') {
-                                        await doc.reference.update({
-                                          'status': 'read',
-                                          'readAt':
-                                              FieldValue.serverTimestamp(),
-                                        });
-                                      }
-                                    },
-                                  ),
-                                );
-                              }),
-                            ],
-                            const SizedBox(height: 24),
-                          ],
+                                          if (status != 'read') {
+                                            await doc.reference.update({
+                                              'status': 'read',
+                                              'readAt':
+                                                  FieldValue.serverTimestamp(),
+                                            });
+                                          }
+                                        },
+                                      ),
+                                    );
+                                  }),
+                                ],
+
+                                const SizedBox(height: 24),
+                              ],
+                            );
+                          },
                         );
                       },
                     );
@@ -1551,7 +1712,7 @@ final collectorName =
                 );
               },
             ),
-          ),
+          )
         ],
       ),
     );
@@ -1807,20 +1968,29 @@ onPressed: () async {
 
     final userDocStream = _userRef(uid).snapshots();
 
-final unassignedQuery = _requestsRef
-    .where('type', isEqualTo: 'pickup')
-    .where('active', isEqualTo: true)
-    .where('status', whereIn: openPickupStatuses)
-    .orderBy('updatedAt', descending: true)
-    .limit(1);
-
-final mineQuery = _requestsRef
-    .where('type', isEqualTo: 'pickup')
-    .where('collectorId', isEqualTo: uid)
-    .where('active', isEqualTo: true)
-    .where('status', whereIn: openPickupStatuses)
-    .orderBy('updatedAt', descending: true)
-    .limit(1);
+    final mineQuery = _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: uid)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: openPickupStatuses)
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+    final scheduledMineQuery = _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: uid)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: true)
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+    final scheduledInboxQuery = _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: uid)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: false)
+        .where('active', isEqualTo: false)
+        .where('pickupType', isEqualTo: 'window')
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
 
     Widget bell({required bool hasUnread}) {
       return InkWell(
@@ -1885,31 +2055,39 @@ final mineQuery = _requestsRef
         final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
 
         return StreamBuilder<QuerySnapshot>(
-          stream: unassignedQuery.snapshots(),
-          builder: (context, unassignedSnap) {
+          stream: mineQuery.snapshots(),
+          builder: (context, mineSnap) {
             return StreamBuilder<QuerySnapshot>(
-              stream: mineQuery.snapshots(),
-              builder: (context, mineSnap) {
-                final a = pickTs(unassignedSnap.data);
-                final b = pickTs(mineSnap.data);
+              stream: scheduledMineQuery.snapshots(),
+              builder: (context, scheduledSnap) {
+                return StreamBuilder<QuerySnapshot>(
+                  stream: scheduledInboxQuery.snapshots(),
+                  builder: (context, inboxSnap) {
+                    final a = pickTs(mineSnap.data);
+                    final b = pickTs(scheduledSnap.data);
+                    final c = pickTs(inboxSnap.data);
 
-                Timestamp? newestTs;
-                if (a != null && b != null) {
-                  newestTs = a.toDate().isAfter(b.toDate()) ? a : b;
-                } else {
-                  newestTs = a ?? b;
-                }
+                    Timestamp? newestTs;
+                    for (final ts in [a, b, c]) {
+                      if (ts == null) continue;
+                      if (newestTs == null ||
+                          ts.toDate().isAfter(newestTs!.toDate())) {
+                        newestTs = ts;
+                      }
+                    }
 
-                bool hasUnread = false;
-                if (newestTs != null) {
-                  if (lastSeen == null) {
-                    hasUnread = true;
-                  } else {
-                    hasUnread = newestTs.toDate().isAfter(lastSeen.toDate());
-                  }
-                }
+                    bool hasUnread = false;
+                    if (newestTs != null) {
+                      if (lastSeen == null) {
+                        hasUnread = true;
+                      } else {
+                        hasUnread = newestTs.toDate().isAfter(lastSeen.toDate());
+                      }
+                    }
 
-                return bell(hasUnread: hasUnread);
+                    return bell(hasUnread: hasUnread);
+                  },
+                );
               },
             );
           },
@@ -2130,7 +2308,6 @@ class _CollectorHomeTab extends StatelessWidget {
 static const List<String> activePickupStatuses = [
   'accepted',
   'arrived',
-  'scheduled',
   'ongoing',
 ];
 

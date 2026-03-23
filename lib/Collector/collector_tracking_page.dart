@@ -12,9 +12,8 @@ import '../household/household_dashboard.dart';
 import '../collector/collectors_dashboard.dart';
 extension TrackingOpacityFix on Color {
   Color o(double opacity) =>
-      withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
+      withValues(alpha: opacity.clamp(0.0, 1.0));
 }
-
 class CollectorTrackingPage extends StatefulWidget {
   final String? requestId;
   final LatLng? fixedDestination;
@@ -213,6 +212,7 @@ static const String _darkMapStyle = r'''
   bool _markingArrived = false;
   bool _collectorArrivedToMores = false;
   bool _sellTransactionAudited = false;
+  bool _isCollectorLive = false;
 
   double _collectorHeading = 0;
   BitmapDescriptor? _collectorIcon;
@@ -249,9 +249,13 @@ static const String _darkMapStyle = r'''
 
   String get _liveStatusText {
     if (_collectorLatLng != null) {
-      return _isFixedDestinationMode
-          ? "Live route to ${widget.destinationTitle}"
-          : "$_displayCollectorName is sharing live location";
+      if (_isFixedDestinationMode) {
+        return "Live route to ${widget.destinationTitle}";
+      }
+
+      return _isCollectorLive
+          ? "$_displayCollectorName is sharing live location"
+          : "$_displayCollectorName last known location";
     }
 
     return _isFixedDestinationMode
@@ -679,6 +683,8 @@ static const String _darkMapStyle = r'''
       final collectorGp =
           data['collectorLiveLocation'] ?? data['collectorLocation'];
 
+      final isLive = data['sharingLiveLocation'] == true;
+
       final headingRaw = data['collectorHeading'];
       double heading = 0;
       if (headingRaw is num) {
@@ -694,13 +700,15 @@ static const String _darkMapStyle = r'''
       if (collectorGp is GeoPoint) {
         collector = LatLng(collectorGp.latitude, collectorGp.longitude);
       }
-
+      final previousCollector = _collectorLatLng;
+      final previousPickup = _pickupLatLng;
       final previousCollectorWasNull = _collectorLatLng == null;
 
       if (!mounted) return;
       setState(() {
         _pickupLatLng = pickup;
         _collectorLatLng = collector;
+        _isCollectorLive = isLive;
         _collectorName = (data['collectorName'] ?? 'Collector').toString();
         _status = (data['status'] ?? '').toString().trim().toLowerCase();
         _pickupSource = (data['pickupSource'] ?? '').toString();
@@ -712,11 +720,21 @@ static const String _darkMapStyle = r'''
         _loading = false;
       });
 
+      final collectorChanged =
+          previousCollector?.latitude != _collectorLatLng?.latitude ||
+          previousCollector?.longitude != _collectorLatLng?.longitude;
+
+      final pickupChanged =
+          previousPickup?.latitude != _pickupLatLng?.latitude ||
+          previousPickup?.longitude != _pickupLatLng?.longitude;
+
       if (_collectorLatLng != null && _pickupLatLng != null) {
-        await _buildCollectorRouteToPickup(
-          collectorLatLng: _collectorLatLng!,
-          pickupLatLng: _pickupLatLng!,
-        );
+        if (collectorChanged || pickupChanged || _collectorRoutePoints.isEmpty) {
+          await _buildCollectorRouteToPickup(
+            collectorLatLng: _collectorLatLng!,
+            pickupLatLng: _pickupLatLng!,
+          );
+        }
       } else {
         if (!mounted) return;
         setState(() {

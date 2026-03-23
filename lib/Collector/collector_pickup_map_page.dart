@@ -14,7 +14,7 @@ import '../chat/services/chat_services.dart';
 
 extension OpacityFix on Color {
   Color o(double opacity) =>
-      withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
+      withValues(alpha: opacity.clamp(0.0, 1.0));
 }
 
 class PickupStop {
@@ -376,6 +376,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   Future<void> _startLiveLocationSharing() async {
     if (_stops.isEmpty) return;
+    if (_isSendingLiveLocation) return;
+    debugPrint('🚀 MAP TRACKING STARTED');
 
     final activeStops = _stops.where((stop) {
       final status = stop.status.toLowerCase().trim();
@@ -384,9 +386,11 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
           status == 'ongoing';
     }).toList();
 
+    debugPrint('📦 ACTIVE STOPS: ${activeStops.length}');
     if (activeStops.isEmpty) return;
 
     final hasPermission = await _ensureLocationPermission();
+    debugPrint('📍 MAP HAS PERMISSION: $hasPermission');
     if (!hasPermission) return;
 
     _isSendingLiveLocation = true;
@@ -394,6 +398,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     final position = await Geolocator.getCurrentPosition(
       desiredAccuracy: LocationAccuracy.best,
     );
+    debugPrint('📍 INITIAL POSITION: ${position.latitude}, ${position.longitude}');
 
     if (mounted) {
       setState(() {
@@ -405,6 +410,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     final batch = FirebaseFirestore.instance.batch();
     for (final stop in activeStops) {
+      debugPrint('🟢 WRITING INITIAL LOCATION FOR REQUEST: ${stop.requestId}');
       batch.set(
         FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
         {
@@ -425,6 +431,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       ),
     ).listen((position) async {
       try {
+        debugPrint('📡 MAP POSITION UPDATE: ${position.latitude}, ${position.longitude}');
+
         if (mounted) {
           setState(() {
             _pos = position;
@@ -440,10 +448,12 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
               status == 'ongoing';
         }).toList();
 
+        debugPrint('📦 CURRENT ACTIVE STOPS IN STREAM: ${currentActiveStops.length}');
         if (currentActiveStops.isEmpty) return;
 
         final batch = FirebaseFirestore.instance.batch();
         for (final stop in currentActiveStops) {
+          debugPrint('🔁 MAP UPDATING REQUEST: ${stop.requestId}');
           batch.set(
             FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
             {
@@ -456,7 +466,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         }
         await batch.commit();
       } catch (e) {
-        debugPrint('LIVE LOCATION UPDATE ERROR: $e');//pede naman tanggalin katamad lang hahaha
+        debugPrint('LIVE LOCATION UPDATE ERROR: $e');
       }
     });
   }
@@ -470,6 +480,37 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       await _clearCollectorUserLiveLocation();
     } catch (e) {
       debugPrint('❌ clear collector user live location failed: $e');
+    }
+
+    if (!clearFirestore) return;
+
+    try {
+      final activeStops = _stops.where((stop) {
+        final status = stop.status.toLowerCase().trim();
+        return status == 'accepted' ||
+            status == 'arrived' ||
+            status == 'ongoing';
+      }).toList();
+
+      debugPrint('🛑 STOPPING LIVE LOCATION FOR ${activeStops.length} REQUESTS');
+
+      if (activeStops.isEmpty) return;
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (final stop in activeStops) {
+        debugPrint('🛑 MARKING REQUEST NOT LIVE: ${stop.requestId}');
+        batch.set(
+          FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
+          {
+            'sharingLiveLocation': false,
+            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+      await batch.commit();
+    } catch (e) {
+      debugPrint('❌ failed to stop live location in requests: $e');
     }
   }
 
