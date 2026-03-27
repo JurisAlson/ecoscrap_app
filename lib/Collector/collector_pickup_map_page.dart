@@ -267,6 +267,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   BitmapDescriptor? _collectorMarkerIcon;
   BitmapDescriptor? _householdMarkerIcon;
 
+  BitmapDescriptor? _moresMarkerIcon;
+
   bool _topExpanded = false;
   bool _loadingStops = true;
   bool _loadingRoute = false;
@@ -337,29 +339,38 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
   }
 
-  Future<void> _loadMarkerIcons() async {
-    try {
-      _collectorMarkerIcon = await _iconToMarker(
-        icon: Icons.shopping_cart_rounded,
-        iconColor: Colors.white,
-        backgroundColor: _accent,
-        borderColor: Colors.white.withOpacity(0.18),
-      );
+Future<void> _loadMarkerIcons() async {
+  try {
+    _collectorMarkerIcon = await _iconToMarker(
+      icon: Icons.shopping_cart_rounded,
+      iconColor: Colors.white,
+      backgroundColor: _accent,
+      borderColor: Colors.white.withOpacity(0.18),
+    );
 
-      _householdMarkerIcon = await _iconToMarker(
-        icon: Icons.house_rounded,
-        iconColor: Colors.white,
-        backgroundColor: const Color(0xFF334155),
-        borderColor: Colors.white.withOpacity(0.18),
-      );
+    _householdMarkerIcon = await _iconToMarker(
+      icon: Icons.house_rounded,
+      iconColor: Colors.white,
+      backgroundColor: const Color(0xFF334155),
+      borderColor: Colors.white.withOpacity(0.18),
+    );
 
-      if (mounted) {
-        setState(() {});
-      }
-    } catch (e) {
-      debugPrint("❌ Failed to build marker icons: $e");
+    _moresMarkerIcon = await _iconToMarker(
+      icon: Icons.storefront_rounded,
+      iconColor: Colors.white,
+      backgroundColor: const Color(0xFF16A34A),
+      borderColor: Colors.transparent,
+      size: 220,
+      iconSize: 48,
+    );
+
+    if (mounted) {
+      setState(() {});
     }
+  } catch (e) {
+    debugPrint("❌ Failed to build marker icons: $e");
   }
+}
 
   Future<void> _markChatRead(String chatId) async {
     final me = FirebaseAuth.instance.currentUser?.uid ?? "";
@@ -1337,36 +1348,56 @@ Future<void> _goToStop(int index) async {
   await _startLiveLocationSharing();
 }
 
-  Set<Marker> _buildMarkers() {
-    return <Marker>{
-      if (_pos != null)
-        Marker(
-          markerId: const MarkerId("me"),
-          position: LatLng(_pos!.latitude, _pos!.longitude),
-          infoWindow: const InfoWindow(title: "You / Collector"),
-          icon: _collectorMarkerIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-          zIndex: 3,
-        ),
-      ..._stops.asMap().entries.map((entry) {
-        final index = entry.key;
-        final stop = entry.value;
-        final isCurrent = index == _currentStopIndex;
 
-        return Marker(
-          markerId: MarkerId(stop.requestId),
-          position: stop.latLng,
-          infoWindow: InfoWindow(
-            title: "Stop ${index + 1}: ${stop.householdName}",
-            snippet: stop.pickupAddress,
-          ),
-          icon: _householdMarkerIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
-          zIndex: isCurrent ? 2 : 1,
-        );
-      }),
-    };
-  }
+
+Set<Marker> _buildMarkers() {
+  return <Marker>{    if (_stops.isNotEmpty)
+  Marker(
+    markerId: MarkerId("mores_scrap_${_moresMarkerIcon.hashCode}"),
+    position: const LatLng(14.5995, 120.9842),
+    anchor: const Offset(0.20, 0.52),
+    infoWindow: const InfoWindow(title: "Mores Scrap"),
+    icon: _moresMarkerIcon ??
+        BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+    zIndex: 10,
+  ),
+
+
+    if (_pos != null)
+      Marker(
+        markerId: const MarkerId("me"),
+        position: LatLng(_pos!.latitude, _pos!.longitude),
+        anchor: const Offset(0.5, 0.52),
+        infoWindow: const InfoWindow(title: "You / Collector"),
+        icon: _collectorMarkerIcon ??
+            BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueAzure,
+            ),
+        zIndex: 3,
+      ),
+
+    ..._stops.asMap().entries.map((entry) {
+      final index = entry.key;
+      final stop = entry.value;
+      final isCurrent = index == _currentStopIndex;
+
+      return Marker(
+        markerId: MarkerId(stop.requestId),
+        position: stop.latLng,
+        anchor: const Offset(0.5, 0.52),
+        infoWindow: InfoWindow(
+          title: "Stop ${index + 1}: ${stop.householdName}",
+          snippet: stop.pickupAddress,
+        ),
+        icon: _householdMarkerIcon ??
+            BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueRose,
+            ),
+        zIndex: isCurrent ? 2 : 1,
+      );
+    }),
+  };
+}
 
   Set<Polyline> _buildPolylines() {
     if (_route.isEmpty) return <Polyline>{};
@@ -1532,7 +1563,7 @@ Future<void> _goToStop(int index) async {
                   _map = c;
                   await _map?.setMapStyle(_darkMapStyle);
                 },
-                myLocationEnabled: _pos != null,
+                myLocationEnabled: false,
                 markers: markers,
                 zoomControlsEnabled: false,
                 mapToolbarEnabled: false,
@@ -1559,7 +1590,7 @@ Future<void> _goToStop(int index) async {
                 _map = c;
                 await _map?.setMapStyle(_darkMapStyle);
               },
-              myLocationEnabled: _pos != null,
+              myLocationEnabled: false,
               markers: markers,
               polylines: polylines,
               zoomControlsEnabled: false,
@@ -1712,11 +1743,7 @@ Future<void> _goToStop(int index) async {
                       color: Colors.black.withOpacity(0.55),
                       borderRadius:
                           const BorderRadius.vertical(top: Radius.circular(22)),
-                      border: Border(
-                        top: BorderSide(
-                          color: Colors.white.withOpacity(0.10),
-                        ),
-                      ),
+border: Border.all(color: Colors.transparent),
                     ),
                     child: ListView(
                       controller: scrollController,
@@ -1806,49 +1833,49 @@ Future<void> _goToStop(int index) async {
                           ),
                           const SizedBox(height: 12),
                           Row(
-                            children: [
-                              Expanded(
-                                child: _actionWide(
-                                  icon: Icons.chat_bubble_outline,
-                                  title: "CHAT",
-                                  subtitle: "Message junkshop",
-                                  bg: Colors.white.withOpacity(0.10),
-                                  fg: Colors.white,
-                                  border: Colors.white.withOpacity(0.14),
-                                  onTap: _openJunkshopChat,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _actionWide(
-                                icon: currentStop?.status.toLowerCase() == 'arrived'
-                                    ? Icons.receipt_long
-                                    : Icons.location_on_outlined,
-                                title: currentStop?.status.toLowerCase() == 'arrived'
-                                    ? "Save & Complete"
-                                    : "ARRIVED",
-                                subtitle: currentStop?.status.toLowerCase() == 'arrived'
-                                    ? "COMPLETE & SAVE"
-                                    : "Mark current stop",
-                                bg: _accent,
-                                fg: _bg,
-                                onTap: _markArrivedOrComplete,
-                              ),
-                               ),
-                            ],
-                          ),
+  children: [
+    Expanded(
+      child: _actionWide(
+        icon: Icons.chat_bubble_outline,
+        title: "CHAT",
+        subtitle: "Message junkshop",
+        bg: Colors.white.withOpacity(0.10),
+        fg: Colors.white,
+        border: Colors.white.withOpacity(0.14),
+        onTap: _openJunkshopChat,
+      ),
+    ),
+    const SizedBox(width: 10),
+    Expanded(
+      child: _actionWide(
+        icon: currentStop?.status.toLowerCase() == 'arrived'
+            ? Icons.receipt_long
+            : Icons.location_on_outlined,
+        title: currentStop?.status.toLowerCase() == 'arrived'
+            ? "Save & Complete"
+            : "ARRIVED",
+        subtitle: currentStop?.status.toLowerCase() == 'arrived'
+            ? "COMPLETE & SAVE"
+            : "Mark current stop",
+        bg: _accent,
+        fg: _bg,
+        onTap: _markArrivedOrComplete,
+      ),
+    ),
+  ],
+),
                         
                           const SizedBox(height: 10),
                           if (currentStop?.phoneNumber.trim().isNotEmpty == true)
-                            _actionWide(
-                              icon: Icons.call_outlined,
-                              title: "CALL",
-                              subtitle: "Contact household",
-                              bg: Colors.white.withOpacity(0.10),
-                              fg: Colors.white,
-                              border: Colors.white.withOpacity(0.14),
-                              onTap: _callCurrentStop,
-                            ),
+_actionWide(
+  icon: Icons.call_outlined,
+  title: "CALL",
+  subtitle: "Contact",
+  bg: _card,
+  fg: Colors.white,
+  border: Colors.white.withOpacity(0.08),
+  onTap: _callCurrentStop,
+),
                           const SizedBox(height: 10),
                         ],
                       ],
@@ -2046,7 +2073,7 @@ Future<void> _goToStop(int index) async {
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.07),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: Colors.transparent),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2185,13 +2212,12 @@ Future<void> _goToStop(int index) async {
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: (border ?? Colors.white.withOpacity(0.10))
-                  .withOpacity(disabled ? 0.55 : 1.0),
-            ),
+border: Border.all(
+  color: Colors.transparent,
+),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(disabled ? 0.10 : 0.18),
+                color: Colors.black.withOpacity(0.12),
                 blurRadius: 14,
                 offset: const Offset(0, 10),
               ),
@@ -2269,6 +2295,73 @@ class _MarkerPainter {
   });
 
   void paint(Canvas canvas, Size s) {
+    final isMoresStyle = size >= 200;
+
+    if (isMoresStyle) {
+      final shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.22)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+
+      final bodyRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(18, 52, s.width - 36, 78),
+        const Radius.circular(30),
+      );
+
+      canvas.drawRRect(bodyRect.shift(const Offset(0, 6)), shadowPaint);
+
+      final fillPaint = Paint()..color = backgroundColor;
+      canvas.drawRRect(bodyRect, fillPaint);
+
+      final circleCenter = Offset(56, s.height / 2);
+      final circleRadius = 28.0;
+
+      canvas.drawCircle(circleCenter, circleRadius, fillPaint);
+
+      final textPainter = TextPainter(textDirection: TextDirection.ltr);
+      textPainter.text = TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontSize: iconSize,
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          color: iconColor,
+        ),
+      );
+      textPainter.layout();
+
+      textPainter.paint(
+        canvas,
+        Offset(
+          circleCenter.dx - textPainter.width / 2,
+          circleCenter.dy - textPainter.height / 2,
+        ),
+      );
+
+      final labelPainter = TextPainter(
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      );
+      labelPainter.text = const TextSpan(
+        text: 'Mores Scrap',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 26,
+          fontWeight: FontWeight.w900,
+        ),
+      );
+      labelPainter.layout(maxWidth: s.width - 110);
+      labelPainter.paint(canvas, const Offset(98, 64));
+
+      final pointer = Path()
+        ..moveTo(44, 130)
+        ..lineTo(68, 130)
+        ..lineTo(56, 150)
+        ..close();
+      canvas.drawPath(pointer, fillPaint);
+      return;
+    }
+
     final center = Offset(s.width / 2, s.height / 2);
     final radius = s.width / 2.6;
 

@@ -1315,8 +1315,8 @@ Future<void> _startDirectionsToMores() async {
             title:
                 _pinnedPickupLatLng != null ? "Pinned Residence" : "Your Location",
             snippet: _pinnedPickupLatLng != null
-                ? "Using pinned residence"
-                : "Using realtime location",
+                ? "Pinned Location"
+                : "realtime location",
           ),
           icon: _residenceMarkerIcon ??
               BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
