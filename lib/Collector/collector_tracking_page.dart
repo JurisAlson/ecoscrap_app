@@ -217,6 +217,7 @@ static const String _darkMapStyle = r'''
   double _collectorHeading = 0;
   BitmapDescriptor? _collectorIcon;
   BitmapDescriptor? _householdMarkerIcon;
+  BitmapDescriptor? _moresMarkerIcon;
 
   bool get _isFixedDestinationMode => widget.fixedDestination != null;
 
@@ -409,7 +410,6 @@ static const String _darkMapStyle = r'''
     setState(() {
       _pickupLatLng = destination;
       _collectorLatLng = _myLatLng;
-      _collectorName = "You";
       _status = "ongoing";
       _pickupSource = "fixed_destination";
       _street = widget.destinationAddress;
@@ -593,25 +593,27 @@ static const String _darkMapStyle = r'''
     }
   }
 
-  Future<BitmapDescriptor> _iconToMarker({
-    required IconData icon,
-    required Color iconColor,
-    required Color backgroundColor,
-    required Color borderColor,
-    double size = 112,
-    double iconSize = 54,
-  }) async {
+Future<BitmapDescriptor> _iconToMarker({
+  required IconData icon,
+  required Color iconColor,
+  required Color backgroundColor,
+  required Color borderColor,
+  double size = 112,
+  double iconSize = 54,
+  String? label,
+}) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
-    final painter = _TrackingMarkerPainter(
-      icon: icon,
-      iconColor: iconColor,
-      backgroundColor: backgroundColor,
-      borderColor: borderColor,
-      size: size,
-      iconSize: iconSize,
-    );
+final painter = _TrackingMarkerPainter(
+  icon: icon,
+  iconColor: iconColor,
+  backgroundColor: backgroundColor,
+  borderColor: borderColor,
+  size: size,
+  iconSize: iconSize,
+  label: label,
+);
 
     painter.paint(canvas, Size(size, size));
 
@@ -646,6 +648,16 @@ static const String _darkMapStyle = r'''
         backgroundColor: const Color(0xFF334155),
         borderColor: Colors.white.withOpacity(0.18),
       );
+
+_moresMarkerIcon = await _iconToMarker(
+  icon: Icons.storefront_rounded,
+  iconColor: Colors.white,
+  backgroundColor: const Color(0xFF16A34A),
+  borderColor: Colors.white.withOpacity(0.20),
+  size: 260,
+  iconSize: 52,
+  label: "Mores Scrap",
+);
 
       if (mounted) {
         setState(() {});
@@ -930,10 +942,18 @@ static const String _darkMapStyle = r'''
     if (_pickupLatLng != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId("pickup"),
+          markerId: MarkerId(
+  widget.trackingType == "sell"
+      ? "mores_${_moresMarkerIcon?.hashCode ?? 0}"
+      : "pickup",
+),
           position: _pickupLatLng!,
-          anchor: const Offset(0.5, 0.55),
-          icon: _householdMarkerIcon ?? BitmapDescriptor.defaultMarker,
+          anchor: widget.trackingType == "sell"
+    ? const Offset(0.20, 0.52)
+    : const Offset(0.5, 0.55),
+          icon: widget.trackingType == "sell"
+    ? (_moresMarkerIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen))
+    : (_householdMarkerIcon ?? BitmapDescriptor.defaultMarker),
         ),
       );
     }
@@ -943,7 +963,9 @@ static const String _darkMapStyle = r'''
         Marker(
           markerId: const MarkerId("collector"),
           position: _collectorLatLng!,
-          anchor: const Offset(0.5, 0.55),
+          anchor: widget.trackingType == "sell"
+    ? const Offset(0.20, 0.52)
+    : const Offset(0.5, 0.55),
           icon: _collectorIcon ?? BitmapDescriptor.defaultMarker,
         ),
       );
@@ -1198,29 +1220,9 @@ static const String _darkMapStyle = r'''
                   ),
                   const SizedBox(height: 18),
                   _infoTile(
-                    icon: Icons.person_outline,
-                    label: "COLLECTOR",
-                    value: _displayCollectorName,
-                    valueColor: _textPrimary,
-                  ),
-                  const SizedBox(height: 12),
-                  _infoTile(
                     icon: Icons.place_outlined,
                     label: _locationSectionLabel,
                     value: _locationSectionValue,
-                    valueColor: _textPrimary,
-                  ),
-                  const SizedBox(height: 12),
-                  _infoTile(
-                    icon: Icons.flag_outlined,
-                    label: _sourceLabel,
-                    value: widget.trackingType == "sell"
-                        ? "Collector to junkshop"
-                        : (_pickupSource == "pin"
-                            ? "Pinned location"
-                            : (_pickupSource == "gps"
-                                ? "Current location"
-                                : "Not specified")),
                     valueColor: _textPrimary,
                   ),
                   if (_landmark.trim().isNotEmpty) ...[
@@ -1534,6 +1536,7 @@ class _TrackingMarkerPainter {
   final Color borderColor;
   final double size;
   final double iconSize;
+  final String? label;
 
   _TrackingMarkerPainter({
     required this.icon,
@@ -1542,30 +1545,69 @@ class _TrackingMarkerPainter {
     required this.borderColor,
     required this.size,
     required this.iconSize,
+    this.label,
   });
 
   void paint(Canvas canvas, Size s) {
-    final center = Offset(s.width / 2, s.height / 2);
-    final radius = s.width / 2.6;
+    final hasLabel = label != null && label!.trim().isNotEmpty;
 
-    final shadowPaint = Paint()
+    if (!hasLabel) {
+      final center = Offset(s.width / 2, s.height / 2);
+      final radius = s.width / 2.9;
+
+      final shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.24)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+      canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
+
+      final fillPaint = Paint()..color = backgroundColor;
+      canvas.drawCircle(center, radius, fillPaint);
+
+      final borderPaint = Paint()
+        ..color = borderColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4;
+      canvas.drawCircle(center, radius, borderPaint);
+
+      final iconPainter = TextPainter(textDirection: TextDirection.ltr);
+      iconPainter.text = TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontSize: iconSize,
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          color: iconColor,
+        ),
+      );
+      iconPainter.layout();
+
+      final iconOffset = Offset(
+        center.dx - iconPainter.width / 2,
+        center.dy - iconPainter.height / 2,
+      );
+      iconPainter.paint(canvas, iconOffset);
+      return;
+    }
+
+    final markerCenter = Offset(s.width * 0.20, s.height * 0.52);
+    final markerRadius = s.width * 0.15;
+
+    final markerShadow = Paint()
       ..color = Colors.black.withOpacity(0.28)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+    canvas.drawCircle(markerCenter.translate(0, 4), markerRadius, markerShadow);
 
-    canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
+    final markerFill = Paint()..color = backgroundColor;
+    canvas.drawCircle(markerCenter, markerRadius, markerFill);
 
-    final fillPaint = Paint()..color = backgroundColor;
-    canvas.drawCircle(center, radius, fillPaint);
-
-    final borderPaint = Paint()
+    final markerBorder = Paint()
       ..color = borderColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4;
+    canvas.drawCircle(markerCenter, markerRadius, markerBorder);
 
-    canvas.drawCircle(center, radius, borderPaint);
-
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    textPainter.text = TextSpan(
+    final iconPainter = TextPainter(textDirection: TextDirection.ltr);
+    iconPainter.text = TextSpan(
       text: String.fromCharCode(icon.codePoint),
       style: TextStyle(
         fontSize: iconSize,
@@ -1574,13 +1616,51 @@ class _TrackingMarkerPainter {
         color: iconColor,
       ),
     );
-    textPainter.layout();
+    iconPainter.layout();
 
     final iconOffset = Offset(
-      center.dx - textPainter.width / 2,
-      center.dy - textPainter.height / 2,
+      markerCenter.dx - iconPainter.width / 2,
+      markerCenter.dy - iconPainter.height / 2,
+    );
+    iconPainter.paint(canvas, iconOffset);
+
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+      ellipsis: '…',
     );
 
-    textPainter.paint(canvas, iconOffset);
+    textPainter.text = TextSpan(
+      text: label!,
+      style: TextStyle(
+        color: const Color(0xFFE2E8F0),
+        fontSize: s.width * 0.085,
+        fontWeight: FontWeight.w700,
+        letterSpacing: -0.3,
+      ),
+    );
+
+    textPainter.layout();
+
+    final shadowPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+    );
+    shadowPainter.text = TextSpan(
+      text: label!,
+      style: TextStyle(
+        color: Colors.black.withOpacity(0.6),
+        fontSize: s.width * 0.085,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+    shadowPainter.layout();
+
+    final textOffset = Offset(
+      markerCenter.dx + markerRadius + 10,
+      markerCenter.dy - textPainter.height / 2,
+    );
+
+    shadowPainter.paint(canvas, textOffset.translate(1.5, 1.5));
+    textPainter.paint(canvas, textOffset);
   }
 }
