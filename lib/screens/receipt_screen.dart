@@ -36,7 +36,6 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   final TextEditingController _walkInNameCtrl = TextEditingController();
   final TextEditingController _sourceNameCtrl = TextEditingController();
-  final TextEditingController _customerCtrl = TextEditingController();
 
   final ScrollController _scrollCtrl = ScrollController();
 
@@ -347,7 +346,6 @@ void initState() {
 
   @override
   void dispose() {
-    _customerCtrl.dispose();
     _sourceNameCtrl.dispose();
     _walkInNameCtrl.dispose();
     _scrollCtrl.dispose();
@@ -898,12 +896,6 @@ if (fromHouseholdDropoff &&
           SetOptions(merge: true),
         );
       }
-      if (fromCollectorSellRequest &&
-          collectorIdFromSellRequest != null &&
-          collectorIdFromSellRequest.isNotEmpty) {
-        final collectorRef = db.collection('Users').doc(collectorIdFromSellRequest);
-
-}
       if (fromCollectorSellRequest &&
           collectorIdFromSellRequest != null &&
           collectorIdFromSellRequest.isNotEmpty &&

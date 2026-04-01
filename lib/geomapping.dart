@@ -46,9 +46,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   static const Color _textSecondary = Color(0xFF94A3B8);
   static const Color _textMuted = Color(0xFF64748B);
 
-  late String _timeString;
-  late Timer _timer;
-
   GoogleMapController? _mapController;
 
   final LatLng _defaultCenter = const LatLng(14.18695, 121.11299);
@@ -178,12 +175,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   void initState() {
     super.initState();
 
-    _timeString = _formatTime(DateTime.now());
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() => _timeString = _formatTime(DateTime.now()));
-    });
-
     _loadMapMarkerIcons();
     _initLocation();
     _listenAvailableCollectors();
@@ -191,7 +182,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   @override
   void dispose() {
-    _timer.cancel();
     _posSub?.cancel();
     _pickupReqSub?.cancel();
     _dropoffReqSub?.cancel();
@@ -262,10 +252,6 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         _dropoffStatus = status;
       });
     });
-  }
-
-  String _formatTime(DateTime dt) {
-    return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
   }
 
   Future<void> _onMapCreated(GoogleMapController controller) async {
