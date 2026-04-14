@@ -105,6 +105,12 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   GoogleMapController? _mapController;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _requestSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sellRequestSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _collectorUserSub;
+
+  LatLng? _requestCollectorLatLng;
+  LatLng? _userCollectorLatLng;
+
+  String? _trackedCollectorId;
   Timer? _markerAnimationTimer;
 
   LatLng? _pickupLatLng;
@@ -144,6 +150,9 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
       widget.requestId != null && widget.requestId!.trim().isNotEmpty;
 
   bool get _isSellTracking => widget.trackingType == "sell";
+
+  LatLng? get _effectiveCollectorLatLng =>
+      _requestCollectorLatLng ?? _userCollectorLatLng;
 
   DocumentReference<Map<String, dynamic>> get _requestDoc =>
       _db.collection('requests').doc(widget.requestId);
@@ -208,6 +217,7 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
     _markerAnimationTimer?.cancel();
     _requestSub?.cancel();
     _sellRequestSub?.cancel();
+    _collectorUserSub?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -304,6 +314,65 @@ double _easeInOut(double t) {
         MaterialPageRoute(builder: (_) => const DashboardPage()),
         (route) => false,
       );
+    });
+  }
+
+  void _listenToCollectorUser(String collectorId) {
+    if (_trackedCollectorId == collectorId && _collectorUserSub != null) return;
+
+    _trackedCollectorId = collectorId;
+    _collectorUserSub?.cancel();
+
+    _collectorUserSub = _db
+        .collection('Users')
+        .doc(collectorId)
+        .snapshots()
+        .listen((doc) async {
+      if (!doc.exists || !mounted) return;
+
+      final data = doc.data() ?? {};
+      final gp = data['collectorLiveLocation'];
+      if (gp is! GeoPoint) return;
+
+      final userCollector = LatLng(gp.latitude, gp.longitude);
+      final previousCollector = _effectiveCollectorLatLng;
+      final oldHeading = _collectorHeading;
+
+      if (!mounted) return;
+      setState(() {
+        _userCollectorLatLng = userCollector;
+
+        // only use Users as visible source when request has no live location
+        if (_requestCollectorLatLng == null) {
+          _collectorLatLng = userCollector;
+          _isCollectorLive = true;
+        }
+      });
+
+      final activeCollector = _effectiveCollectorLatLng;
+      if (activeCollector == null || _pickupLatLng == null) return;
+
+      if (previousCollector == null) {
+        await _fitMap();
+        return;
+      }
+
+      final changed = previousCollector.latitude != activeCollector.latitude ||
+          previousCollector.longitude != activeCollector.longitude;
+
+      if (changed) {
+        _animateCollectorMarker(
+          from: previousCollector,
+          to: activeCollector,
+          fromHeading: oldHeading,
+          toHeading: oldHeading,
+        );
+
+        await _buildCollectorRouteToPickup(
+          collectorLatLng: activeCollector,
+          pickupLatLng: _pickupLatLng!,
+        );
+      }
     });
   }
 
@@ -642,29 +711,35 @@ double _easeInOut(double t) {
       final collectorGp =
           data['collectorLiveLocation'] ?? data['collectorLocation'];
       final isLive = data['sharingLiveLocation'] == true;
+      final collectorId = (data['collectorId'] ?? '').toString().trim();
 
       final headingRaw = data['collectorHeading'];
       final heading = headingRaw is num ? headingRaw.toDouble() : 0.0;
 
       LatLng? pickup;
-      LatLng? collector;
+      LatLng? requestCollector;
 
       if (pickupGp is GeoPoint) {
         pickup = LatLng(pickupGp.latitude, pickupGp.longitude);
       }
       if (collectorGp is GeoPoint) {
-        collector = LatLng(collectorGp.latitude, collectorGp.longitude);
+        requestCollector = LatLng(collectorGp.latitude, collectorGp.longitude);
       }
 
-      final previousCollector = _collectorLatLng;
+      if (collectorId.isNotEmpty) {
+        _listenToCollectorUser(collectorId);
+      }
+
+      final previousCollector = _effectiveCollectorLatLng;
       final previousPickup = _pickupLatLng;
-      final previousCollectorWasNull = _collectorLatLng == null;
       final oldHeading = _collectorHeading;
 
       if (!mounted) return;
       setState(() {
         _pickupLatLng = pickup;
-        _isCollectorLive = isLive;
+        _requestCollectorLatLng = requestCollector;
+        _isCollectorLive = requestCollector != null ? isLive : (_userCollectorLatLng != null);
+
         _collectorName = (data['collectorName'] ?? 'Collector').toString();
         _status = (data['status'] ?? '').toString().trim().toLowerCase();
         _street = (data['street'] ?? '').toString();
@@ -672,38 +747,43 @@ double _easeInOut(double t) {
         _landmark = (data['landmark'] ?? '').toString();
         _phoneNumber = (data['phoneNumber'] ?? '').toString();
         _loading = false;
+
+        _collectorLatLng = _effectiveCollectorLatLng;
       });
 
-      if (collector != null) {
+      final activeCollector = _effectiveCollectorLatLng;
+      final previousCollectorWasNull = previousCollector == null;
+
+      if (requestCollector != null) {
         if (previousCollector == null) {
           setState(() {
-            _collectorLatLng = collector;
+            _collectorLatLng = requestCollector;
             _collectorHeading = heading;
           });
-        } else if (previousCollector.latitude != collector.latitude ||
-            previousCollector.longitude != collector.longitude ||
+        } else if (previousCollector.latitude != requestCollector.latitude ||
+            previousCollector.longitude != requestCollector.longitude ||
             oldHeading != heading) {
           _animateCollectorMarker(
             from: previousCollector,
-            to: collector,
+            to: requestCollector,
             fromHeading: oldHeading,
             toHeading: heading,
           );
         }
       } else {
+        if (!mounted) return;
         setState(() {
-          _collectorLatLng = null;
+          _collectorLatLng = _effectiveCollectorLatLng;
         });
       }
-
-      final activeCollector = collector ?? _collectorLatLng;
 
       final collectorChanged =
           previousCollector?.latitude != activeCollector?.latitude ||
               previousCollector?.longitude != activeCollector?.longitude;
 
-      final pickupChanged = previousPickup?.latitude != _pickupLatLng?.latitude ||
-          previousPickup?.longitude != _pickupLatLng?.longitude;
+      final pickupChanged =
+          previousPickup?.latitude != _pickupLatLng?.latitude ||
+              previousPickup?.longitude != _pickupLatLng?.longitude;
 
       if (activeCollector != null && _pickupLatLng != null) {
         if (collectorChanged || pickupChanged || _collectorRoutePoints.isEmpty) {
