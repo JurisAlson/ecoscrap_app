@@ -1,13 +1,14 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'collector_pickup_map_page.dart';
+import 'collector_transaction_page.dart';
 
 class CollectorsDashboardPage extends StatefulWidget {
   const CollectorsDashboardPage({super.key});
@@ -24,16 +25,16 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   static const double maxCapacityKg = 20.0;
 
   static const List<String> declineReasons = [
-    'Too far from my location',
-    'Already handling another pickup',
-    'Cannot complete right now',
-    'Other',
+    "Too far from my location",
+    "Already handling another pickup",
+    "Cannot complete right now",
+    "Other",
   ];
 
   static const List<String> activePickupStatuses = [
     'accepted',
     'arrived',
-    'ongoing',
+    'ongoing'
   ];
 
   static const List<String> openPickupStatuses = [
@@ -43,11 +44,12 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
+  int _tabIndex = 0;
+
   StreamSubscription<Position>? _liveLocationSub;
   bool _isSendingLiveLocation = false;
 
   FirebaseFirestore get _db => FirebaseFirestore.instance;
-  User? get _currentUser => FirebaseAuth.instance.currentUser;
 
   CollectionReference<Map<String, dynamic>> get _requestsRef =>
       _db.collection('requests');
@@ -58,145 +60,51 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
   CollectionReference<Map<String, dynamic>> _userNotificationsRef(String uid) =>
       _db.collection('userNotifications').doc(uid).collection('items');
 
-  void _log(String message) {
-    if (kDebugMode) debugPrint(message);
-  }
-
-  Query<Map<String, dynamic>> _pickupRequestsQuery({
-    String? collectorId,
-    required bool active,
-    List<String>? statuses,
-    bool orderByUpdatedAt = false,
-    bool? acceptedForLater,
-    String? pickupType,
-  }) {
-    Query<Map<String, dynamic>> query = _requestsRef
-        .where('type', isEqualTo: 'pickup')
-        .where('active', isEqualTo: active);
-
-    if (collectorId != null) {
-      query = query.where('collectorId', isEqualTo: collectorId);
-    }
-
-    if (statuses != null && statuses.isNotEmpty) {
-      if (statuses.length == 1) {
-        query = query.where('status', isEqualTo: statuses.first);
-      } else {
-        query = query.where('status', whereIn: statuses);
-      }
-    }
-
-    if (acceptedForLater != null) {
-      query = query.where('acceptedForLater', isEqualTo: acceptedForLater);
-    }
-
-    if (pickupType != null) {
-      query = query.where('pickupType', isEqualTo: pickupType);
-    }
-
-    if (orderByUpdatedAt) {
-      query = query.orderBy('updatedAt', descending: true);
-    }
-
-    return query;
-  }
-
   Query<Map<String, dynamic>> _activeCollectorRequestsQuery(String collectorId) {
-    return _pickupRequestsQuery(
-      collectorId: collectorId,
-      active: true,
-      statuses: activePickupStatuses,
-    );
+    return _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: activePickupStatuses);
   }
 
   Query<Map<String, dynamic>> _openUnassignedRequestsQuery() {
-    return _pickupRequestsQuery(
-      collectorId: '',
-      active: true,
-      statuses: openPickupStatuses,
-      orderByUpdatedAt: true,
-    );
+    return _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('active', isEqualTo: true)
+        .where('collectorId', isEqualTo: "")
+        .where('status', whereIn: openPickupStatuses)
+        .orderBy('updatedAt', descending: true);
   }
 
-  Query<Map<String, dynamic>> _openMineRequestsQuery(String collectorId) {
-    return _pickupRequestsQuery(
-      collectorId: collectorId,
-      active: true,
-      statuses: openPickupStatuses,
-      orderByUpdatedAt: true,
-    );
-  }
-
-  Query<Map<String, dynamic>> _scheduledAcceptedMineQuery(String collectorId) {
-    return _pickupRequestsQuery(
-      collectorId: collectorId,
-      active: false,
-      statuses: ['scheduled'],
-      acceptedForLater: true,
-      orderByUpdatedAt: true,
-    );
-  }
-
-  Query<Map<String, dynamic>> _scheduledInboxQuery(String collectorId) {
-    return _pickupRequestsQuery(
-      collectorId: collectorId,
-      active: false,
-      statuses: ['scheduled'],
-      acceptedForLater: false,
-      pickupType: 'window',
-      orderByUpdatedAt: true,
-    );
-  }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _ongoingCollectorPickupStream() {
-    final user = _currentUser;
-    if (user == null) return const Stream.empty();
-
-    return _activeCollectorRequestsQuery(user.uid).limit(1).snapshots();
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) {
+    return const Stream.empty();
   }
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _bootstrap();
-  }
+  return _requestsRef
+      .where('type', isEqualTo: 'pickup')
+      .where('collectorId', isEqualTo: user.uid)
+      .where('active', isEqualTo: true)
+      .where('status', whereIn: activePickupStatuses)
+      .limit(1)
+      .snapshots();
+}
 
-  Future<void> _bootstrap() async {
-    await _setOnline(true);
-    await _saveFcmToken();
-    await _activateReadyScheduledPickups();
-    await _startDashboardLiveTracking();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _setOnline(false);
-    _stopDashboardLiveTracking(clearFirestore: true);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    switch (state) {
-      case AppLifecycleState.resumed:
-        _setOnline(true);
-        _activateReadyScheduledPickups();
-        _startDashboardLiveTracking();
-        break;
-      case AppLifecycleState.inactive:
-      case AppLifecycleState.paused:
-      case AppLifecycleState.detached:
-      case AppLifecycleState.hidden:
-        _setOnline(false);
-        _stopDashboardLiveTracking(clearFirestore: false);
-        break;
-    }
+  Query<Map<String, dynamic>> _openMineRequestsQuery(String collectorId) {
+    return _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: openPickupStatuses)
+        .orderBy('updatedAt', descending: true);
   }
 
   String _pickupAddress(Map<String, dynamic> data, {String fallback = ''}) {
-    return (data['fullAddress'] ?? data['pickupAddress'] ?? fallback).toString();
+    return (data['fullAddress'] ?? data['pickupAddress'] ?? fallback)
+        .toString();
   }
 
   String _phoneNumber(Map<String, dynamic> data) {
@@ -212,13 +120,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   Timestamp? _asTimestamp(dynamic value) => value is Timestamp ? value : null;
 
-  double _getRequestKg(Map<String, dynamic> data) {
-    final value = data['bagKg'];
-    if (value is num) return value.toDouble();
-    if (value is String) return double.tryParse(value) ?? 0.0;
-    return 0.0;
-  }
-
   bool _isCancelledPickupNotification(Map<String, dynamic> data) {
     final type = (data['type'] ?? '').toString().toLowerCase();
     final title = (data['title'] ?? '').toString().toLowerCase();
@@ -229,161 +130,152 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         message.contains('cancel');
   }
 
-  String _two(int value) => value.toString().padLeft(2, '0');
-
-  String _formatNotifTime(Timestamp ts) {
-    final dt = ts.toDate();
-    final diff = DateTime.now().difference(dt);
-
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    if (diff.inHours < 24) return '${diff.inHours}h';
-    if (diff.inDays < 7) return '${diff.inDays}d';
-
-    return '${dt.month}/${dt.day}';
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _setOnline(true);
+    _saveFcmToken();
+    _activateReadyScheduledPickups();
+    _startDashboardLiveTracking();
   }
 
-  String _formatPickupSchedule(Map<String, dynamic> data) {
-    final pickupType = (data['pickupType'] ?? '').toString();
-    if (pickupType == 'now') return 'Now';
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _setOnline(false);
+    _stopDashboardLiveTracking(clearFirestore: true);
+    super.dispose();
+  }
 
-    final startTs =
-        _asTimestamp(data['windowStart']) ?? _asTimestamp(data['scheduledAt']);
-    final endTs = _asTimestamp(data['windowEnd']);
-
-    if (startTs == null) return 'Scheduled';
-
-    String hm(DateTime d) {
-      int hour = d.hour % 12;
-      if (hour == 0) hour = 12;
-      final amPm = d.hour >= 12 ? 'PM' : 'AM';
-      return '$hour:${_two(d.minute)} $amPm';
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _setOnline(true);
+      _activateReadyScheduledPickups();
+      _startDashboardLiveTracking();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _setOnline(false);
+      _stopDashboardLiveTracking(clearFirestore: false);
     }
-
-    final start = startTs.toDate();
-    final date = '${start.year}-${_two(start.month)}-${_two(start.day)}';
-
-    if (endTs == null) return '$date • ${hm(start)}';
-
-    final end = endTs.toDate();
-    return '$date • ${hm(start)}–${hm(end)}';
-  }
-
-  bool _isFutureScheduledPickup(Map<String, dynamic> data) {
-    final pickupType = (data['pickupType'] ?? '').toString().toLowerCase();
-    if (pickupType == 'now') return false;
-
-    final startTs =
-        _asTimestamp(data['windowStart']) ?? _asTimestamp(data['scheduledAt']);
-    if (startTs == null) return false;
-
-    return startTs.toDate().isAfter(DateTime.now());
   }
 
   Future<bool> _ensureLocationPermission() async {
     final enabled = await Geolocator.isLocationServiceEnabled();
     if (!enabled) return false;
 
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
+    var perm = await Geolocator.checkPermission();
+
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
     }
 
-    return permission != LocationPermission.denied &&
-        permission != LocationPermission.deniedForever;
-  }
-
-  Future<void> _writeLiveLocationToRequests({
-    required String collectorId,
-    required Position position,
-    required bool sharing,
-  }) async {
-    final activeDocs = await _activeCollectorRequestsQuery(collectorId).get();
-    if (activeDocs.docs.isEmpty) return;
-
-    final batch = _db.batch();
-    for (final doc in activeDocs.docs) {
-      batch.set(
-        doc.reference,
-        {
-          'collectorLiveLocation':
-              sharing ? GeoPoint(position.latitude, position.longitude) : null,
-          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          'sharingLiveLocation': sharing,
-        },
-        SetOptions(merge: true),
-      );
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
+      return false;
     }
-    await batch.commit();
-  }
 
-  Future<void> _updateCollectorUserLiveLocation(Position position) async {
-    final user = _currentUser;
-    if (user == null) return;
-
-    await _userRef(user.uid).set(
-      {
-        'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
-        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-        'isOnline': true,
-        'isAvailableForHousehold': true,
-      },
-      SetOptions(merge: true),
-    );
+    return true;
   }
 
   Future<void> _startDashboardLiveTracking() async {
-    final user = _currentUser;
-    if (user == null || _isSendingLiveLocation) return;
+    debugPrint('DASHBOARD: _startDashboardLiveTracking called');
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    if (_isSendingLiveLocation) return;
 
     final hasPermission = await _ensureLocationPermission();
-    _log('Location permission: $hasPermission');
+    debugPrint('📍 HAS LOCATION PERMISSION: $hasPermission');
     if (!hasPermission) return;
 
     _isSendingLiveLocation = true;
 
-    final firstPosition = await Geolocator.getCurrentPosition(
+    final firstPos = await Geolocator.getCurrentPosition(
       desiredAccuracy: LocationAccuracy.best,
     );
 
-    await _updateCollectorUserLiveLocation(firstPosition);
-    await _writeLiveLocationToRequests(
-      collectorId: user.uid,
-      position: firstPosition,
-      sharing: true,
-    );
+    // ALWAYS update collector location in Users
+    await _updateCollectorUserLiveLocation(firstPos);
+
+    // ONLY mirror into request docs if there are active assigned pickups
+    final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
+    debugPrint('📦 ACTIVE REQUESTS FOUND: ${activeDocs.docs.length}');
+    if (activeDocs.docs.isNotEmpty) {
+      debugPrint('🟢 WRITING FIRST LIVE LOCATION TO REQUESTS');
+      final batch = _db.batch();
+      for (final doc in activeDocs.docs) {
+        batch.set(
+          doc.reference,
+          {
+            'collectorLiveLocation': GeoPoint(
+              firstPos.latitude,
+              firstPos.longitude,
+            ),
+            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+            'sharingLiveLocation': true,
+          },
+          SetOptions(merge: true),
+        );
+      }
+      await batch.commit();
+    }
 
     await _liveLocationSub?.cancel();
+
     _liveLocationSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.best,
         distanceFilter: 10,
+        
       ),
     ).listen((position) async {
-      final currentUser = _currentUser;
+      debugPrint('📡 POSITION UPDATE: ${position.latitude}, ${position.longitude}');
+      final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser == null) return;
 
+      // ALWAYS keep Users/{uid} updated
       await _updateCollectorUserLiveLocation(position);
-      await _writeLiveLocationToRequests(
-        collectorId: currentUser.uid,
-        position: position,
-        sharing: true,
-      );
+
+      // ONLY update assigned active requests if any exist
+      final activeNow = await _activeCollectorRequestsQuery(currentUser.uid).get();
+
+      if (activeNow.docs.isNotEmpty) {
+        final batch = _db.batch();
+        debugPrint('🔁 UPDATING REQUEST DOCS (STREAM)');
+        for (final doc in activeNow.docs) {
+          batch.set(
+            doc.reference,
+            {
+              'collectorLiveLocation': GeoPoint(
+                position.latitude,
+                position.longitude,
+              ),
+              'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+              'sharingLiveLocation': true,
+            },
+            SetOptions(merge: true),
+          );
+        }
+        await batch.commit();
+      }
     });
   }
 
   Future<void> _stopDashboardLiveTracking({bool clearFirestore = false}) async {
-    final user = _currentUser;
+    final user = FirebaseAuth.instance.currentUser;
 
     await _liveLocationSub?.cancel();
     _liveLocationSub = null;
     _isSendingLiveLocation = false;
 
     if (user != null) {
-      await _userRef(user.uid).set(
-        {'collectorLiveUpdatedAt': FieldValue.serverTimestamp()},
-        SetOptions(merge: true),
-      );
+      await _userRef(user.uid).set({
+        'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     }
 
     if (!clearFirestore || user == null) return;
@@ -405,8 +297,106 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     await batch.commit();
   }
 
+  Future<void> _updateCollectorUserLiveLocation(Position position) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    await FirebaseFirestore.instance
+        .collection('Users')
+        .doc(user.uid)
+        .set({
+      'collectorLiveLocation': GeoPoint(
+        position.latitude,
+        position.longitude,
+      ),
+      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      'isOnline': true,
+      'isAvailableForHousehold': true,
+    }, SetOptions(merge: true));
+  }
+
+  double _getRequestKg(Map<String, dynamic> data) {
+    final value = data['bagKg'];
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0.0;
+    return 0.0;
+  }
+
+  String _two(int n) => n.toString().padLeft(2, '0');
+
+  String _formatNotifTime(Timestamp ts) {
+    final dt = ts.toDate();
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+
+    if (diff.inMinutes < 1) return "now";
+    if (diff.inMinutes < 60) return "${diff.inMinutes}m";
+    if (diff.inHours < 24) return "${diff.inHours}h";
+    if (diff.inDays < 7) return "${diff.inDays}d";
+
+    return "${dt.month}/${dt.day}";
+  }
+
+  String _formatPickupSchedule(Map<String, dynamic> data) {
+    final type = (data['pickupType'] ?? '').toString();
+    if (type == 'now') return "Now";
+
+    final startTs =
+        _asTimestamp(data['windowStart']) ?? _asTimestamp(data['scheduledAt']);
+    final endTs = _asTimestamp(data['windowEnd']);
+
+    if (startTs == null) return "Scheduled";
+
+    String hm(DateTime d) {
+      int hour = d.hour % 12;
+      if (hour == 0) hour = 12;
+      final ampm = d.hour >= 12 ? "PM" : "AM";
+      return "$hour:${_two(d.minute)} $ampm";
+    }
+    
+
+    final s = startTs.toDate();
+    final date = "${s.year}-${_two(s.month)}-${_two(s.day)}";
+
+    if (endTs == null) return "$date • ${hm(s)}";
+
+    final e = endTs.toDate();
+    return "$date • ${hm(s)}–${hm(e)}";
+  }
+  bool _isFutureScheduledPickup(Map<String, dynamic> data) {
+    final pickupType = (data['pickupType'] ?? '').toString().toLowerCase();
+
+    if (pickupType == 'now') return false;
+
+    final startTs =
+        _asTimestamp(data['windowStart']) ?? _asTimestamp(data['scheduledAt']);
+
+    if (startTs == null) return false;
+
+    return startTs.toDate().isAfter(DateTime.now());
+  }
+
+  Query<Map<String, dynamic>> _scheduledAcceptedMineQuery(String collectorId) {
+    return _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: true)
+        .orderBy('updatedAt', descending: true);
+  }
+  Query<Map<String, dynamic>> _scheduledInboxQuery(String collectorId) {
+    return _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: false)
+        .where('active', isEqualTo: false)
+        .where('pickupType', isEqualTo: 'window')
+        .orderBy('updatedAt', descending: true);
+  }
+
   Future<void> _activateReadyScheduledPickups() async {
-    final user = _currentUser;
+    final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     final snap = await _requestsRef
@@ -438,123 +428,69 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     await batch.commit();
   }
+Future<void> _handleLogoutPressed(BuildContext context) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-  Future<void> _setOnline(bool online) async {
-    final user = _currentUser;
-    if (user == null) return;
+  final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
 
-    try {
-      await _userRef(user.uid).set(
-        {
-          'isOnline': online,
-          'lastSeen': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-    } catch (e) {
-      _log('setOnline failed: $e');
-    }
+  if (activeDocs.docs.isNotEmpty) {
+    if (!context.mounted) return;
+
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: bgColor,
+        title: const Text(
+          "Logout unavailable",
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          "You cannot log out while a pickup is ongoing. Please finish the current pickup first.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("OK"),
+          ),
+        ],
+      ),
+    );
+    return;
   }
 
-  Future<void> _saveFcmToken() async {
-    final user = _currentUser;
-    if (user == null) return;
-
-    try {
-      final fcm = FirebaseMessaging.instance;
-      await fcm.requestPermission(alert: true, badge: true, sound: true);
-
-      final token = await fcm.getToken();
-      if (token == null || token.trim().isEmpty) return;
-
-      await _userRef(user.uid).set(
-        {
-          'fcmToken': token,
-          'fcmUpdatedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-
-      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-        await _userRef(user.uid).set(
-          {
-            'fcmToken': newToken,
-            'fcmUpdatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      });
-    } catch (e) {
-      _log('saveFcmToken failed: $e');
-    }
-  }
-
+  Navigator.pop(context);
+  await _logout(context);
+}
   Future<void> _logout(BuildContext context) async {
     await _setOnline(false);
     await _stopDashboardLiveTracking(clearFirestore: true);
     await FirebaseAuth.instance.signOut();
-
     if (!context.mounted) return;
     Navigator.pushReplacementNamed(context, '/login');
   }
 
-  Future<void> _handleLogoutPressed(BuildContext context) async {
-    final user = _currentUser;
-    if (user == null) return;
-
-    final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
-    if (activeDocs.docs.isNotEmpty) {
-      if (!context.mounted) return;
-
-      await showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          backgroundColor: bgColor,
-          title: const Text(
-            'Logout unavailable',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: const Text(
-            'You cannot log out while a pickup is ongoing. Please finish the current pickup first.',
-            style: TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
-    await _logout(context);
-  }
-
   Future<void> _acceptPickup(String requestId) async {
-    final user = _currentUser;
+    final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     final requestRef = _requestsRef.doc(requestId);
 
     try {
       final activeDocs = await _activeCollectorRequestsQuery(user.uid).get();
-      final currentActiveKg = activeDocs.docs.fold<double>(
-        0,
-        (sum, doc) => sum + _getRequestKg(doc.data()),
-      );
+
+      double currentActiveKg = 0.0;
+      for (final doc in activeDocs.docs) {
+        currentActiveKg += _getRequestKg(doc.data());
+      }
 
       bool acceptedForLater = false;
 
       await _db.runTransaction((tx) async {
         final requestSnap = await tx.get(requestRef);
         if (!requestSnap.exists) {
-          throw Exception('Request not found.');
+          throw Exception("Request not found.");
         }
 
         final data = requestSnap.data() as Map<String, dynamic>;
@@ -563,11 +499,13 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         final requestKg = _getRequestKg(data);
 
         if (!openPickupStatuses.contains(status)) {
-          throw Exception('This pickup is no longer available.');
+          throw Exception("This pickup is no longer available.");
         }
 
         if (collectorId.isNotEmpty && collectorId != user.uid) {
-          throw Exception('This pickup was already accepted by another collector.');
+          throw Exception(
+            "This pickup was already accepted by another collector.",
+          );
         }
 
         if ((currentActiveKg + requestKg) > maxCapacityKg) {
@@ -583,10 +521,10 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           });
 
           throw Exception(
-            'Capacity exceeded. '
-            'Current load: ${currentActiveKg.toStringAsFixed(1)} kg, '
-            'request: ${requestKg.toStringAsFixed(1)} kg, '
-            'max: ${maxCapacityKg.toStringAsFixed(1)} kg.',
+            "Capacity exceeded. "
+            "Current load: ${currentActiveKg.toStringAsFixed(1)} kg, "
+            "request: ${requestKg.toStringAsFixed(1)} kg, "
+            "max: ${maxCapacityKg.toStringAsFixed(1)} kg.",
           );
         }
 
@@ -608,8 +546,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         SnackBar(
           content: Text(
             acceptedForLater
-                ? 'Scheduled pickup accepted. It will become active at the scheduled time.'
-                : 'Pickup accepted.',
+                ? "Scheduled pickup accepted. It will become active at the scheduled time."
+                : "Pickup accepted.",
           ),
         ),
       );
@@ -618,16 +556,13 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Accept failed: $e')),
+        SnackBar(content: Text("Accept failed: $e")),
       );
     }
   }
-
-  Future<void> _declinePickup(
-    String requestId, {
-    required String reason,
-  }) async {
-    final user = _currentUser;
+ 
+  Future<void> _declinePickup(String requestId, {required String reason}) async {
+    final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     final ref = _requestsRef.doc(requestId);
@@ -635,18 +570,22 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     try {
       await _db.runTransaction((tx) async {
         final snap = await tx.get(ref);
-        if (!snap.exists) throw Exception('Request not found');
+        if (!snap.exists) throw "Request not found";
 
         final data = snap.data() as Map<String, dynamic>;
         final householdId = (data['householdId'] ?? '').toString().trim();
+        final collectorDoc =
+    await FirebaseFirestore.instance.collection('Users').doc(user.uid).get();
 
-        final collectorDoc = await _userRef(user.uid).get();
-        final collectorData = collectorDoc.data() ?? {};
-        final collectorName = (collectorData['Name'] ??
-                collectorData['displayName'] ??
-                user.displayName ??
-                'Collector')
-            .toString();
+final collectorData = collectorDoc.data() ?? {};
+final collectorName =
+    (collectorData['Name'] ??
+            collectorData['displayName'] ??
+            user.displayName ??
+            'Collector')
+        .toString();
+        
+        final pickupAddress = _pickupAddress(data);
 
         tx.update(ref, {
           'status': 'declined',
@@ -658,13 +597,15 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
         });
 
         if (householdId.isNotEmpty) {
-          tx.set(_userNotificationsRef(householdId).doc(), {
+          final notifRef = _userNotificationsRef(householdId).doc();
+
+          tx.set(notifRef, {
             'type': 'collector_declined_pickup',
             'title': 'Pickup declined',
             'message': '$collectorName declined the pickup request.',
             'reason': reason.trim(),
             'requestId': requestId,
-            'pickupAddress': _pickupAddress(data),
+            'pickupAddress': pickupAddress,
             'status': 'unread',
             'createdAt': FieldValue.serverTimestamp(),
           });
@@ -673,28 +614,28 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pickup declined.')),
+        const SnackBar(content: Text("Pickup declined.")),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Decline failed: $e')),
+        SnackBar(content: Text("Decline failed: $e")),
       );
     }
   }
 
-  Future<String?> _pickDeclineReason() async {
+  Future<String?> _pickDeclineReason(BuildContext context, Color bgColor) async {
     String selectedReason = declineReasons.first;
 
     return showDialog<String>(
       context: context,
       builder: (_) {
         return StatefulBuilder(
-          builder: (dialogContext, setStateDialog) {
+          builder: (context, setD) {
             return AlertDialog(
               backgroundColor: bgColor,
               title: const Text(
-                'Select reason',
+                "Select reason",
                 style: TextStyle(color: Colors.white),
               ),
               content: DropdownButtonFormField<String>(
@@ -728,22 +669,22 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                     .toList(),
                 onChanged: (value) {
                   if (value != null) {
-                    setStateDialog(() => selectedReason = value);
+                    setD(() => selectedReason = value);
                   }
                 },
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
+                  onPressed: () => Navigator.pop(context, null),
                   child: const Text(
-                    'Cancel',
+                    "Cancel",
                     style: TextStyle(color: Colors.white70),
                   ),
                 ),
                 TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, selectedReason),
+                  onPressed: () => Navigator.pop(context, selectedReason),
                   child: const Text(
-                    'Submit',
+                    "Submit",
                     style: TextStyle(color: Colors.redAccent),
                   ),
                 ),
@@ -761,25 +702,25 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       builder: (_) => AlertDialog(
         backgroundColor: bgColor,
         title: const Text(
-          'Decline request?',
+          "Decline request?",
           style: TextStyle(color: Colors.white),
         ),
         content: const Text(
-          'Are you sure you want to decline this pickup request?',
+          "Are you sure you want to decline this pickup request?",
           style: TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text(
-              'No',
+              "No",
               style: TextStyle(color: Colors.white70),
             ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text(
-              'Yes',
+              "Yes",
               style: TextStyle(color: Colors.redAccent),
             ),
           ),
@@ -789,14 +730,14 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
     if (confirmed != true) return;
 
-    final reason = await _pickDeclineReason();
+    final reason = await _pickDeclineReason(context, bgColor);
     if (reason == null || reason.trim().isEmpty) return;
 
     await _declinePickup(requestId, reason: reason);
   }
 
   Future<void> _clearAllCancelledPickupNotifications() async {
-    final user = _currentUser;
+    final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     try {
@@ -804,7 +745,8 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       final batch = _db.batch();
 
       for (final doc in snap.docs) {
-        if (_isCancelledPickupNotification(doc.data())) {
+        final data = doc.data();
+        if (_isCancelledPickupNotification(data)) {
           batch.delete(doc.reference);
         }
       }
@@ -814,111 +756,137 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Cancelled pickup notifications cleared.'),
+          content: Text("Cancelled pickup notifications cleared."),
         ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to clear notifications: $e')),
+        SnackBar(content: Text("Failed to clear notifications: $e")),
       );
     }
   }
 
-  Future<void> markArrivedOnce(BuildContext context, String requestId) async {
-    final requestRef = _requestsRef.doc(requestId);
+  Widget _ongoingPickupBanner() {
+  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: _ongoingCollectorPickupStream(),
+    builder: (context, snap) {
+      if (!snap.hasData || snap.data!.docs.isEmpty) {
+        return const SizedBox.shrink();
+      }
 
-    try {
-      await _db.runTransaction((tx) async {
-        final snap = await tx.get(requestRef);
-        if (!snap.exists) {
-          throw Exception('Request not found.');
-        }
+      final doc = snap.data!.docs.first;
+      final data = doc.data();
 
-        final data = snap.data() as Map<String, dynamic>;
-        final currentStatus = (data['status'] ?? '').toString().toLowerCase();
+      final household = _householdName(data);
+      final address = _pickupAddress(data, fallback: 'Pickup location');
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+      final scheduleText = _formatPickupSchedule(data);
 
-        if (currentStatus == 'arrived') {
-          throw Exception('You have already arrived.');
-        }
+      String title;
+      if (status == 'ongoing') {
+        title = "You have an ongoing pickup";
+      } else if (status == 'arrived') {
+        title = "You're at a pickup location";
+      } else if (status == 'scheduled') {
+        title = "Upcoming scheduled pickup";
+      } else {
+        title = "Active pickup in progress";
+      }
 
-        if (currentStatus != 'accepted' && currentStatus != 'scheduled') {
-          throw Exception('This pickup cannot be marked as arrived.');
-        }
+      String subtitle;
+      if (status == 'scheduled') {
+        subtitle = "$household • $scheduleText";
+      } else {
+        subtitle = "$household • $address";
+      }
 
-        tx.update(requestRef, {
-          'status': 'arrived',
-          'arrived': true,
-          'arrivedAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      });
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              // ✅ Resume pickup → go to map
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CollectorPickupMapPage(
+                    requestIds: [doc.id],
+                  ),
+                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 11,
+              ),
+              decoration: BoxDecoration(
+                color: primaryColor.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: primaryColor.withOpacity(0.35),
+                ),
+              ),
+              child: Row(
+                children: [
+                  // subtle status indicator
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
 
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You have arrived.')),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e')),
-      );
-    }
-  }
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
-  Future<void> _promptPickupAction({
-    required String requestId,
-    required Map<String, dynamic> data,
-  }) async {
-    final address = _pickupAddress(data, fallback: 'Unknown address');
-    final household = _householdName(data);
-    final bagLabel = (data['bagLabel'] ?? '').toString();
-    final bagKgNum = _getRequestKg(data);
-    final showBagKg = bagKgNum > 0;
-    final distanceKm =
-        data['distanceKm'] is num ? (data['distanceKm'] as num).toDouble() : null;
-    final etaMinutes =
-        data['etaMinutes'] is num ? (data['etaMinutes'] as num).toInt() : null;
-    final scheduleText = _formatPickupSchedule(data);
-    final source = (data['pickupSource'] ?? '').toString();
-    final phoneNumber = _phoneNumber(data);
-
-    final choice = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Pickup Request'),
-        content: SingleChildScrollView(
-          child: Text(
-            'Household: $household\n'
-            '${phoneNumber.isNotEmpty ? "Mobile: $phoneNumber\n" : ""}'
-            'Address: $address\n'
-            '${bagLabel.isNotEmpty ? "Bag: $bagLabel${showBagKg ? " (${bagKgNum.toStringAsFixed(1)} kg)" : ""}\n" : ""}'
-            '${distanceKm != null ? "Distance: ${distanceKm.toStringAsFixed(2)} km\n" : ""}'
-            '${etaMinutes != null ? "ETA: $etaMinutes min\n" : ""}'
-            'Schedule: $scheduleText\n'
-            '${source.isNotEmpty ? "Pickup Source: $source\n" : ""}',
+                  // subtle arrow (optional but good UX hint)
+                  Icon(
+                    Icons.chevron_right,
+                    color: Colors.grey.shade500,
+                    size: 18,
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
-        actionsAlignment: MainAxisAlignment.spaceBetween,
-        actions: [
-          OutlinedButton(
-            onPressed: () => Navigator.pop(ctx, 'decline'),
-            child: const Text('DECLINE'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, 'accept'),
-            child: const Text('ACCEPT'),
-          ),
-        ],
-      ),
-    );
-
-    if (choice == 'accept') {
-      await _acceptPickup(requestId);
-    } else if (choice == 'decline') {
-      await _confirmAndDeclinePickup(requestId);
-    }
-  }
+      );
+    },
+  );
+}
 
   Widget _pill(String text) {
     return Container(
@@ -947,7 +915,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     Widget? trailing,
     VoidCallback? onTap,
   }) {
-    final isUnread = status != 'read';
+    final isUnread = status != "read";
 
     final tile = AnimatedContainer(
       duration: const Duration(milliseconds: 220),
@@ -967,16 +935,22 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          AnimatedOpacity(
-            duration: const Duration(milliseconds: 180),
-            opacity: isUnread ? 1 : 0,
-            child: Container(
-              width: 8,
-              height: 8,
-              margin: const EdgeInsets.only(right: 10, top: 6),
-              decoration: const BoxDecoration(
-                color: primaryColor,
-                shape: BoxShape.circle,
+          AnimatedSlide(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            offset: isUnread ? Offset.zero : const Offset(-0.25, 0),
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 180),
+              opacity: isUnread ? 1 : 0,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                width: isUnread ? 8 : 0,
+                height: 8,
+                margin: EdgeInsets.only(right: isUnread ? 10 : 0, top: 6),
+                decoration: const BoxDecoration(
+                  color: primaryColor,
+                  shape: BoxShape.circle,
+                ),
               ),
             ),
           ),
@@ -1016,7 +990,10 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                 ),
                 if (trailing != null) ...[
                   const SizedBox(height: 10),
-                  Align(alignment: Alignment.centerLeft, child: trailing),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: trailing,
+                  ),
                 ],
               ],
             ),
@@ -1034,111 +1011,764 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     );
   }
 
-  Widget _ongoingPickupBanner() {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _ongoingCollectorPickupStream(),
-      builder: (context, snap) {
-        if (!snap.hasData || snap.data!.docs.isEmpty) {
-          return const SizedBox.shrink();
+  Future<void> markArrivedOnce(BuildContext context, String requestId) async {
+    final requestRef =
+        FirebaseFirestore.instance.collection('requests').doc(requestId);
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final snap = await tx.get(requestRef);
+
+        if (!snap.exists) {
+          throw Exception("Request not found.");
         }
 
-        final doc = snap.data!.docs.first;
-        final data = doc.data();
-        final household = _householdName(data);
-        final address = _pickupAddress(data, fallback: 'Pickup location');
-        final status = (data['status'] ?? '').toString().trim().toLowerCase();
-        final scheduleText = _formatPickupSchedule(data);
+        final data = snap.data() as Map<String, dynamic>;
+        final currentStatus = (data['status'] ?? '').toString().toLowerCase();
 
-        String title = 'Active pickup in progress';
-        if (status == 'ongoing') {
-          title = 'You have an ongoing pickup';
-        } else if (status == 'arrived') {
-          title = "You're at a pickup location";
-        } else if (status == 'scheduled') {
-          title = 'Upcoming scheduled pickup';
+        if (currentStatus == 'arrived') {
+          throw Exception("You have already arrived.");
         }
 
-        final subtitle =
-            status == 'scheduled' ? '$household • $scheduleText' : '$household • $address';
+        if (currentStatus != 'accepted' && currentStatus != 'scheduled') {
+          throw Exception("This pickup cannot be marked as arrived.");
+        }
 
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => CollectorPickupMapPage(requestIds: [doc.id]),
+        tx.update(requestRef, {
+          'status': 'arrived',
+          'arrived': true,
+          'arrivedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("You have arrived.")),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("$e")),
+      );
+    }
+  }
+
+  Future<void> _promptPickupAction({
+    required BuildContext context,
+    required String requestId,
+    required Map<String, dynamic> data,
+  }) async {
+    final address = _pickupAddress(data, fallback: 'Unknown address');
+    final household = _householdName(data);
+    final bagLabel = (data['bagLabel'] ?? '').toString();
+    final bagKgNum = _getRequestKg(data);
+    final showBagKg = bagKgNum > 0;
+
+    final distanceKm = (data['distanceKm'] is num)
+        ? (data['distanceKm'] as num).toDouble()
+        : null;
+    final etaMinutes =
+        (data['etaMinutes'] is num) ? (data['etaMinutes'] as num).toInt() : null;
+
+    final scheduleText = _formatPickupSchedule(data);
+    final source = (data['pickupSource'] ?? '').toString();
+    final phoneNumber = _phoneNumber(data);
+
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Pickup Request"),
+        content: SingleChildScrollView(
+          child: Text(
+            "Household: $household\n"
+            "${phoneNumber.isNotEmpty ? "Mobile: $phoneNumber\n" : ""}"
+            "Address: $address\n"
+            "${bagLabel.isNotEmpty ? "Bag: $bagLabel${showBagKg ? " (${bagKgNum.toStringAsFixed(1)} kg)" : ""}\n" : ""}"
+            "${distanceKm != null ? "Distance: ${distanceKm.toStringAsFixed(2)} km\n" : ""}"
+            "${etaMinutes != null ? "ETA: $etaMinutes min\n" : ""}"
+            "Schedule: $scheduleText\n"
+            "${source.isNotEmpty ? "Pickup Source: $source\n" : ""}",
+          ),
+        ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
+        actions: [
+          OutlinedButton(
+            onPressed: () => Navigator.pop(ctx, "decline"),
+            child: const Text("DECLINE"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, "accept"),
+            child: const Text("ACCEPT"),
+          ),
+        ],
+      ),
+    );
+
+    if (choice == "accept") {
+      await _acceptPickup(requestId);
+    } else if (choice == "decline") {
+      await _confirmAndDeclinePickup(requestId);
+    }
+  }
+  
+
+  Widget _notificationsDrawer() {
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      return const Center(
+        child: Text(
+          "Not logged in",
+          style: TextStyle(color: Colors.white),
+        ),
+      );
+    }
+
+    final notifStream = _userNotificationsRef(user.uid)
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+
+    final mineQuery = _openMineRequestsQuery(user.uid);
+    final scheduledMineQuery = _scheduledAcceptedMineQuery(user.uid);
+    final scheduledInboxQuery = _scheduledInboxQuery(user.uid);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  "Notifications",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
                   ),
-                );
-              },
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                decoration: BoxDecoration(
-                  color: primaryColor.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: primaryColor.withOpacity(0.35)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: const BoxDecoration(
-                        color: primaryColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 13,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            subtitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.grey.shade400,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      Icons.chevron_right,
-                      color: Colors.grey.shade500,
-                      size: 18,
-                    ),
-                  ],
                 ),
               ),
-            ),
+            ],
           ),
-        );
-      },
+          const SizedBox(height: 10),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: mineQuery.snapshots(),
+              builder: (context, mineSnap) {
+                if (mineSnap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                if (mineSnap.hasError) {
+                  return Center(
+                    child: Text(
+                      "Failed to load pickups:\n${mineSnap.error}",
+                      style: const TextStyle(color: Colors.white70),
+                      textAlign: TextAlign.center,
+                    ),
+                  );
+                }
+
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: scheduledMineQuery.snapshots(),
+                  builder: (context, scheduledSnap) {
+                    if (scheduledSnap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    if (scheduledSnap.hasError) {
+                      return Center(
+                        child: Text(
+                          "Failed to load scheduled pickups:\n${scheduledSnap.error}",
+                          style: const TextStyle(color: Colors.white70),
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    }
+
+                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: scheduledInboxQuery.snapshots(),
+                      builder: (context, inboxSnap) {
+                        if (inboxSnap.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+
+                        if (inboxSnap.hasError) {
+                          return Center(
+                            child: Text(
+                              "Failed to load scheduled requests:\n${inboxSnap.error}",
+                              style: const TextStyle(color: Colors.white70),
+                              textAlign: TextAlign.center,
+                            ),
+                          );
+                        }
+
+                        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                          stream: notifStream,
+                          builder: (context, notifSnap) {
+                            final uid = user.uid;
+
+                            final pickupDocs = (mineSnap.data?.docs ?? []).where((d) {
+                              final data = d.data();
+                              final declinedBy = (data['declinedBy'] as List?) ?? [];
+                              return !declinedBy.contains(uid);
+                            }).toList();
+
+                            final scheduledDocs =
+                                (scheduledSnap.data?.docs ?? []).where((d) {
+                              final data = d.data();
+                              final declinedBy = (data['declinedBy'] as List?) ?? [];
+                              return !declinedBy.contains(uid);
+                            }).toList();
+
+                            final scheduledInboxDocs =
+                                (inboxSnap.data?.docs ?? []).where((d) {
+                              final data = d.data();
+                              final declinedBy = (data['declinedBy'] as List?) ?? [];
+                              return !declinedBy.contains(uid);
+                            }).toList();
+
+                            pickupDocs.sort((x, y) {
+                              final dx = x.data();
+                              final dy = y.data();
+
+                              final tx = _asTimestamp(dx['updatedAt']) ??
+                                  _asTimestamp(dx['createdAt']);
+                              final ty = _asTimestamp(dy['updatedAt']) ??
+                                  _asTimestamp(dy['createdAt']);
+
+                              final ax = tx?.toDate().millisecondsSinceEpoch ?? 0;
+                              final ay = ty?.toDate().millisecondsSinceEpoch ?? 0;
+
+                              return ay.compareTo(ax);
+                            });
+
+                            double currentLoadKg = 0.0;
+                            for (final d in pickupDocs) {
+                              currentLoadKg += _getRequestKg(d.data());
+                            }
+
+                            final isFullCapacity = currentLoadKg >= maxCapacityKg;
+                            final notifDocs = notifSnap.data?.docs ?? [];
+
+                            return ListView(
+                              padding: const EdgeInsets.only(bottom: 20),
+                              children: [
+                                if (isFullCapacity)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: _notifTile(
+                                      title: "Capacity Full",
+                                      subtitle:
+                                          "You are already at full capacity (${currentLoadKg.toStringAsFixed(1)} kg / ${maxCapacityKg.toStringAsFixed(1)} kg). Complete an active pickup first before accepting a new one.",
+                                      timeText: "",
+                                      status: "unread",
+                                    ),
+                                  ),
+
+                                if (pickupDocs.isEmpty &&
+                                    scheduledDocs.isEmpty &&
+                                    scheduledInboxDocs.isEmpty)
+                                  const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 16),
+                                    child: Center(
+                                      child: Text(
+                                        "No pending pickup requests.",
+                                        style: TextStyle(color: Colors.white70),
+                                      ),
+                                    ),
+                                  ),
+
+                                if (scheduledInboxDocs.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    "NEW SCHEDULED REQUESTS",
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 1.1,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ...scheduledInboxDocs.map((doc) {
+                                    final data = doc.data();
+                                    final household = _householdName(data);
+                                    final scheduleText = _formatPickupSchedule(data);
+
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.06),
+                                          borderRadius: BorderRadius.circular(18),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              household,
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              "Scheduled: $scheduleText",
+                                              style: const TextStyle(
+                                                color: Colors.white70,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: OutlinedButton(
+                                                    onPressed: () =>
+                                                        _confirmAndDeclinePickup(doc.id),
+                                                    child: const Text("DECLINE"),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: ElevatedButton(
+                                                    onPressed: () => _acceptPickup(doc.id),
+                                                    child: const Text("ACCEPT"),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ],
+
+                                if (scheduledDocs.isNotEmpty) ...[
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 10),
+                                    child: Text(
+                                      "SCHEDULED PICKUPS",
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 1.1,
+                                      ),
+                                    ),
+                                  ),
+                                  ...scheduledDocs.map((doc) {
+                                    final data = doc.data();
+                                    final household = _householdName(data);
+                                    final scheduleText = _formatPickupSchedule(data);
+
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: _notifTile(
+                                        title: "Scheduled pickup accepted",
+                                        subtitle:
+                                            "$household • $scheduleText\nThis pickup will become active at the scheduled time.",
+                                        timeText: "",
+                                        status: "unread",
+                                      ),
+                                    );
+                                  }),
+                                ],
+
+                                ...pickupDocs.map((doc) {
+                                  final data = doc.data();
+
+                                  final household = _householdName(data);
+                                  final address = _pickupAddress(data);
+                                  final phoneNumber = _phoneNumber(data);
+
+                                  final bagLabel = (data['bagLabel'] ?? '').toString();
+                                  final bagKgValue = _getRequestKg(data);
+                                  final bagKg =
+                                      bagKgValue > 0 ? bagKgValue.toInt() : null;
+
+                                  final distanceKm = (data['distanceKm'] is num)
+                                      ? (data['distanceKm'] as num).toDouble()
+                                      : null;
+
+                                  final etaMinutes = (data['etaMinutes'] is num)
+                                      ? (data['etaMinutes'] as num).toInt()
+                                      : null;
+
+                                  final scheduleText = _formatPickupSchedule(data);
+
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 12),
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.06),
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.08),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        InkWell(
+                                          onTap: () => _promptPickupAction(
+                                            context: context,
+                                            requestId: doc.id,
+                                            data: data,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Container(
+                                                width: 42,
+                                                height: 42,
+                                                decoration: BoxDecoration(
+                                                  color: primaryColor.withOpacity(0.18),
+                                                  borderRadius:
+                                                      BorderRadius.circular(14),
+                                                ),
+                                                child: const Icon(
+                                                  Icons.local_shipping_outlined,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      household,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight: FontWeight.w900,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 4),
+                                                    Text(
+                                                      address.isEmpty
+                                                          ? "No address"
+                                                          : address,
+                                                      maxLines: 2,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                        color: Colors.grey.shade400,
+                                                        fontSize: 12,
+                                                      ),
+                                                    ),
+                                                    if (phoneNumber.isNotEmpty) ...[
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        "Mobile: $phoneNumber",
+                                                        maxLines: 1,
+                                                        overflow:
+                                                            TextOverflow.ellipsis,
+                                                        style: TextStyle(
+                                                          color: Colors.grey.shade300,
+                                                          fontSize: 12,
+                                                          fontWeight: FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ),
+                                              Icon(
+                                                Icons.chevron_right,
+                                                color: Colors.grey.shade500,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Wrap(
+                                          spacing: 8,
+                                          runSpacing: 8,
+                                          children: [
+                                            _pill("Schedule: $scheduleText"),
+                                            if (bagLabel.isNotEmpty)
+                                              _pill(
+                                                "Bag: $bagLabel${bagKg != null ? " • ${bagKg}kg" : ""}",
+                                              ),
+                                            if (distanceKm != null)
+                                              _pill(
+                                                "Distance: ${distanceKm.toStringAsFixed(2)} km",
+                                              ),
+                                            if (etaMinutes != null)
+                                              _pill("ETA: $etaMinutes min"),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 12),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: OutlinedButton(
+                                                onPressed: () =>
+                                                    _confirmAndDeclinePickup(doc.id),
+                                                child: const Text("DECLINE"),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: ElevatedButton(
+                                                onPressed: () => _acceptPickup(doc.id),
+                                                child: const Text("ACCEPT"),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }),
+
+                                if (notifDocs.isNotEmpty) ...[
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Divider(
+                                            color: Colors.white.withOpacity(0.10),
+                                            thickness: 1,
+                                          ),
+                                        ),
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.symmetric(horizontal: 10),
+                                          child: Text(
+                                            "NOTIFICATIONS",
+                                            style: TextStyle(
+                                              color: Colors.white.withOpacity(0.55),
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: 1.1,
+                                            ),
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Divider(
+                                            color: Colors.white.withOpacity(0.10),
+                                            thickness: 1,
+                                          ),
+                                        ),
+                                        TextButton(
+                                          onPressed: () async {
+                                            await _clearAllCancelledPickupNotifications();
+                                          },
+                                          child: const Text(
+                                            "Clear",
+                                            style: TextStyle(
+                                              color: Colors.redAccent,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  ...notifDocs.map((doc) {
+                                    final n = doc.data();
+
+                                    final title =
+                                        (n['title'] ?? 'Notification').toString();
+                                    final message = (n['message'] ?? '').toString();
+                                    final reason = (n['reason'] ??
+                                            n['collectorDeclineReason'] ??
+                                            'No reason provided.')
+                                        .toString();
+                                    final status =
+                                        (n['status'] ?? 'unread').toString();
+                                    final createdAt = n['createdAt'] as Timestamp?;
+                                    final timeText = createdAt != null
+                                        ? _formatNotifTime(createdAt)
+                                        : "";
+
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: _notifTile(
+                                        title: title,
+                                        subtitle: message,
+                                        timeText: timeText,
+                                        status: status,
+                                        onTap: () async {
+                                          await showDialog(
+                                            context: context,
+                                            builder: (dialogContext) => Dialog(
+                                              backgroundColor: Colors.transparent,
+                                              child: Container(
+                                                padding: const EdgeInsets.all(20),
+                                                decoration: BoxDecoration(
+                                                  color: bgColor,
+                                                  borderRadius:
+                                                      BorderRadius.circular(22),
+                                                  border: Border.all(
+                                                    color: Colors.white
+                                                        .withOpacity(0.08),
+                                                  ),
+                                                ),
+                                                child: SingleChildScrollView(
+                                                  child: Column(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        title,
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontSize: 22,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 18),
+                                                      Text(
+                                                        message,
+                                                        style: const TextStyle(
+                                                          color: Colors.white70,
+                                                          fontSize: 15,
+                                                          height: 1.4,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 18),
+                                                      Row(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment.start,
+                                                        children: [
+                                                          const Text(
+                                                            "Reason: ",
+                                                            style: TextStyle(
+                                                              color: Colors.white,
+                                                              fontWeight:
+                                                                  FontWeight.bold,
+                                                              fontSize: 15,
+                                                            ),
+                                                          ),
+                                                          Expanded(
+                                                            child: Text(
+                                                              reason,
+                                                              style:
+                                                                  const TextStyle(
+                                                                color: Colors.white70,
+                                                                fontSize: 14,
+                                                                height: 1.4,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      const SizedBox(height: 20),
+                                                      Align(
+                                                        alignment:
+                                                            Alignment.centerRight,
+                                                        child: TextButton(
+                                                          onPressed: () =>
+                                                              Navigator.pop(
+                                                                dialogContext,
+                                                              ),
+                                                          child: const Text("Close"),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          );
+
+                                          if (status != 'read') {
+                                            await doc.reference.update({
+                                              'status': 'read',
+                                              'readAt':
+                                                  FieldValue.serverTimestamp(),
+                                            });
+                                          }
+                                        },
+                                      ),
+                                    );
+                                  }),
+                                ],
+
+                                const SizedBox(height: 24),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          )
+        ],
+      ),
     );
   }
 
+  Future<void> _saveFcmToken() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final fcm = FirebaseMessaging.instance;
+
+      await fcm.requestPermission(alert: true, badge: true, sound: true);
+
+      final token = await fcm.getToken();
+      if (token == null || token.trim().isEmpty) {
+        debugPrint("⚠️ FCM token is null/empty");
+        return;
+      }
+
+      await _userRef(user.uid).set({
+        "fcmToken": token,
+        "fcmUpdatedAt": FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      debugPrint("✅ FCM token saved for ${user.uid}: $token");
+
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+        await _userRef(user.uid).set({
+          "fcmToken": newToken,
+          "fcmUpdatedAt": FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        debugPrint("✅ FCM token refreshed + saved");
+      });
+    } catch (e) {
+      debugPrint("❌ saveFcmToken failed: $e");
+    }
+  }
+
+  Future<void> _setOnline(bool online) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      await _userRef(user.uid).set({
+        'isOnline': online,
+        'lastSeen': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("❌ setOnline failed: $e");
+    }
+  }
+
   Widget _collectorProfileDrawer(BuildContext context) {
-    final user = _currentUser;
+    final user = FirebaseAuth.instance.currentUser;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -1153,7 +1783,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
               ),
               const SizedBox(width: 8),
               const Text(
-                'Profile',
+                "Profile",
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -1166,7 +1796,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           const Icon(Icons.person, size: 80, color: Colors.white54),
           const SizedBox(height: 16),
           Text(
-            user?.displayName ?? 'Collector',
+            user?.displayName ?? "Collector",
             style: const TextStyle(
               color: Colors.white,
               fontSize: 18,
@@ -1176,7 +1806,7 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           ),
           const SizedBox(height: 6),
           Text(
-            user?.email ?? 'No email',
+            user?.email ?? "No email",
             style: const TextStyle(color: Colors.white70),
             textAlign: TextAlign.center,
           ),
@@ -1185,9 +1815,11 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
             width: double.infinity,
             height: 48,
             child: ElevatedButton.icon(
-              onPressed: () => _handleLogoutPressed(context),
+onPressed: () async {
+  await _handleLogoutPressed(context);
+},
               icon: const Icon(Icons.logout),
-              label: const Text('Logout'),
+              label: const Text("Logout"),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red,
                 foregroundColor: Colors.white,
@@ -1208,32 +1840,32 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     required bool legacyJunkshopOk,
     required bool legacyActive,
   }) {
-    final status = collectorStatus.toLowerCase();
+    final s = collectorStatus.toLowerCase();
 
-    String title = 'Collector account pending';
-    String body = 'Your account is not verified yet.\nPlease wait for approval.';
+    String title = "Collector account pending";
+    String body = "Your account is not verified yet.\nPlease wait for approval.";
 
-    if (status == 'pending') {
-      title = 'Collector request submitted';
-      body = 'Please wait for admin approval.';
-    } else if (status == 'adminapproved') {
-      title = 'Admin approved';
-      body = 'You may now access the Collector Dashboard.';
-    } else if (status == 'rejected') {
-      title = 'Request rejected';
-      body = 'Your collector request was rejected.\nYou may submit again.';
+    if (s == "pending") {
+      title = "Collector request submitted";
+      body = "Please wait for admin approval.";
+    } else if (s == "adminapproved") {
+      title = "Admin approved";
+      body = "You may now access the Collector Dashboard.";
+    } else if (s == "rejected") {
+      title = "Request rejected";
+      body = "Your collector request was rejected.\nYou may submit again.";
     }
 
     if (collectorStatus.isEmpty) {
       if (!legacyAdminOk) {
-        title = 'Collector account pending';
-        body = 'Please wait for admin approval.';
+        title = "Collector account pending";
+        body = "Please wait for admin approval.";
       } else if (!legacyJunkshopOk) {
-        title = 'Admin approved';
-        body = 'Now wait for junkshop verification.';
+        title = "Admin approved";
+        body = "Now wait for junkshop verification.";
       } else if (!legacyActive) {
-        title = 'Almost ready';
-        body = 'Your account is verified but not yet active.';
+        title = "Almost ready";
+        body = "Your account is verified but not yet active.";
       }
     }
 
@@ -1265,9 +1897,11 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton.icon(
-                  onPressed: () => _handleLogoutPressed(context),
+onPressed: () async {
+  await _handleLogoutPressed(context);
+},
                   icon: const Icon(Icons.logout),
-                  label: const Text('Logout'),
+                  label: const Text("Logout"),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: Colors.white,
@@ -1286,72 +1920,172 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
 
   bool _isCollectorRole(Map<String, dynamic>? data) {
     final rolesRaw =
-        (data?['Roles'] ?? data?['role'] ?? '').toString().trim().toLowerCase();
-    return rolesRaw == 'collector' || rolesRaw == 'collectors';
+        (data?['Roles'] ?? data?['role'] ?? "").toString().trim().toLowerCase();
+    return rolesRaw == "collector" || rolesRaw == "collectors";
   }
 
   bool _isCollectorAdminApproved(Map<String, dynamic>? data) {
-    final status = (data?['collectorStatus'] ?? '').toString().trim().toLowerCase();
-    return status == 'adminapproved';
+    final s = (data?['collectorStatus'] ?? "").toString().trim().toLowerCase();
+    return s == "adminapproved";
   }
 
   bool _isLegacyCollectorVerified(Map<String, dynamic>? data) {
     final legacyAdminOk = data?['adminVerified'] == true;
-    final legacyAdminStatus = (data?['adminStatus'] ?? '').toString().toLowerCase();
+    final legacyAdminStatus =
+        (data?['adminStatus'] ?? "").toString().toLowerCase();
     final legacyJunkshopOk = data?['junkshopVerified'] == true;
     final legacyActive = data?['collectorActive'] == true;
 
     return legacyAdminOk &&
-        legacyAdminStatus == 'approved' &&
+        legacyAdminStatus == "approved" &&
         legacyJunkshopOk &&
         legacyActive;
   }
 
   Widget _buildCollectorNotifBell() {
-    final uid = _currentUser?.uid;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
 
     if (uid == null) {
-      return _notificationBellButton(hasUnread: false);
+      return InkWell(
+        onTap: () {
+          _scaffoldKey.currentState?.openEndDrawer();
+        },
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
+          ),
+          child: Icon(
+            Icons.notifications_outlined,
+            color: Colors.grey.shade300,
+          ),
+        ),
+      );
     }
 
     final userDocStream = _userRef(uid).snapshots();
 
-    final mineQuery = _pickupRequestsQuery(
-      collectorId: uid,
-      active: true,
-      statuses: openPickupStatuses,
-      orderByUpdatedAt: true,
-    ).limit(1);
+    final mineQuery = _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: uid)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: openPickupStatuses)
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+    final scheduledMineQuery = _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: uid)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: true)
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+    final scheduledInboxQuery = _requestsRef
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: uid)
+        .where('status', isEqualTo: 'scheduled')
+        .where('acceptedForLater', isEqualTo: false)
+        .where('active', isEqualTo: false)
+        .where('pickupType', isEqualTo: 'window')
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
 
-    final scheduledMineQuery = _scheduledAcceptedMineQuery(uid).limit(1);
-    final scheduledInboxQuery = _scheduledInboxQuery(uid).limit(1);
+    Widget bell({required bool hasUnread}) {
+      return InkWell(
+        onTap: () async {
+          await _userRef(uid).set({
+            'lastNotifSeenAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          _scaffoldKey.currentState?.openEndDrawer();
+        },
+        borderRadius: BorderRadius.circular(999),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            AnimatedScale(
+              scale: hasUnread ? 1.08 : 1.0,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutBack,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.withOpacity(0.06)),
+                ),
+                child: Icon(
+                  Icons.notifications_outlined,
+                  color:
+                      hasUnread ? Colors.amberAccent : Colors.grey.shade300,
+                ),
+              ),
+            ),
+            if (hasUnread)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    Timestamp? pickTs(QuerySnapshot? qs) {
+      final docs = qs?.docs ?? [];
+      if (docs.isEmpty) return null;
+      final data = docs.first.data() as Map<String, dynamic>;
+      return data['updatedAt'] as Timestamp?;
+    }
+
+    return StreamBuilder<DocumentSnapshot>(
       stream: userDocStream,
       builder: (context, userSnap) {
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        final userData = userSnap.data?.data() as Map<String, dynamic>? ?? {};
+        final lastSeen = userData['lastNotifSeenAt'] as Timestamp?;
+
+        return StreamBuilder<QuerySnapshot>(
           stream: mineQuery.snapshots(),
           builder: (context, mineSnap) {
-            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            return StreamBuilder<QuerySnapshot>(
               stream: scheduledMineQuery.snapshots(),
               builder: (context, scheduledSnap) {
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                return StreamBuilder<QuerySnapshot>(
                   stream: scheduledInboxQuery.snapshots(),
                   builder: (context, inboxSnap) {
-                    final hasUnreadMine =
-                        (mineSnap.data?.docs.isNotEmpty ?? false);
-                    final hasUnreadScheduled =
-                        (scheduledSnap.data?.docs.isNotEmpty ?? false);
-                    final hasUnreadInbox =
-                        (inboxSnap.data?.docs.isNotEmpty ?? false);
+                    final a = pickTs(mineSnap.data);
+                    final b = pickTs(scheduledSnap.data);
+                    final c = pickTs(inboxSnap.data);
 
-                    final userData = userSnap.data?.data() ?? {};
-                    final lastSeen = _asTimestamp(userData['lastNotifSeenAt']);
+                    Timestamp? newestTs;
+                    for (final ts in [a, b, c]) {
+                      if (ts == null) continue;
+                      if (newestTs == null ||
+                          ts.toDate().isAfter(newestTs!.toDate())) {
+                        newestTs = ts;
+                      }
+                    }
 
-                    final hasUnread =
-                        hasUnreadMine || hasUnreadScheduled || hasUnreadInbox || lastSeen == null;
+                    bool hasUnread = false;
+                    if (newestTs != null) {
+                      if (lastSeen == null) {
+                        hasUnread = true;
+                      } else {
+                        hasUnread = newestTs.toDate().isAfter(lastSeen.toDate());
+                      }
+                    }
 
-                    return _notificationBellButton(hasUnread: hasUnread);
+                    return bell(hasUnread: hasUnread);
                   },
                 );
               },
@@ -1362,626 +2096,58 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
     );
   }
 
-  Widget _notificationBellButton({required bool hasUnread}) {
-    final uid = _currentUser?.uid;
-
-    return InkWell(
-      onTap: () async {
-        if (uid != null) {
-          await _userRef(uid).set(
-            {'lastNotifSeenAt': FieldValue.serverTimestamp()},
-            SetOptions(merge: true),
-          );
-        }
-        _scaffoldKey.currentState?.openEndDrawer();
-      },
-      borderRadius: BorderRadius.circular(999),
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          AnimatedScale(
-            scale: hasUnread ? 1.08 : 1.0,
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutBack,
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withOpacity(0.06)),
-              ),
-              child: Icon(
-                Icons.notifications_outlined,
-                color: hasUnread ? Colors.amberAccent : Colors.grey.shade300,
-              ),
-            ),
-          ),
-          if (hasUnread)
-            const Positioned(
-              right: 8,
-              top: 8,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.red,
-                  shape: BoxShape.circle,
-                ),
-                child: SizedBox(width: 8, height: 8),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _notificationsDrawer() {
-    final user = _currentUser;
-    if (user == null) {
-      return const Center(
-        child: Text(
-          'Not logged in',
-          style: TextStyle(color: Colors.white),
-        ),
-      );
-    }
-
-    final notifStream = _userNotificationsRef(user.uid)
-        .orderBy('createdAt', descending: true)
-        .snapshots();
-
-    final mineQuery = _openMineRequestsQuery(user.uid);
-    final scheduledMineQuery = _scheduledAcceptedMineQuery(user.uid);
-    final scheduledInboxQuery = _scheduledInboxQuery(user.uid);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Notifications',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: mineQuery.snapshots(),
-              builder: (context, mineSnap) {
-                if (mineSnap.hasError) {
-                  return _errorText('Failed to load pickups:\n${mineSnap.error}');
-                }
-                if (mineSnap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: scheduledMineQuery.snapshots(),
-                  builder: (context, scheduledSnap) {
-                    if (scheduledSnap.hasError) {
-                      return _errorText(
-                        'Failed to load scheduled pickups:\n${scheduledSnap.error}',
-                      );
-                    }
-                    if (scheduledSnap.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: scheduledInboxQuery.snapshots(),
-                      builder: (context, inboxSnap) {
-                        if (inboxSnap.hasError) {
-                          return _errorText(
-                            'Failed to load scheduled requests:\n${inboxSnap.error}',
-                          );
-                        }
-                        if (inboxSnap.connectionState == ConnectionState.waiting) {
-                          return const Center(child: CircularProgressIndicator());
-                        }
-
-                        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: notifStream,
-                          builder: (context, notifSnap) {
-                            final uid = user.uid;
-
-                            final pickupDocs =
-                                (mineSnap.data?.docs ?? []).where((doc) {
-                              final declinedBy =
-                                  (doc.data()['declinedBy'] as List?) ?? [];
-                              return !declinedBy.contains(uid);
-                            }).toList()
-                                  ..sort((a, b) {
-                                    final ta = _asTimestamp(a.data()['updatedAt']) ??
-                                        _asTimestamp(a.data()['createdAt']);
-                                    final tb = _asTimestamp(b.data()['updatedAt']) ??
-                                        _asTimestamp(b.data()['createdAt']);
-                                    return (tb?.millisecondsSinceEpoch ?? 0)
-                                        .compareTo(ta?.millisecondsSinceEpoch ?? 0);
-                                  });
-
-                            final scheduledDocs =
-                                (scheduledSnap.data?.docs ?? []).where((doc) {
-                              final declinedBy =
-                                  (doc.data()['declinedBy'] as List?) ?? [];
-                              return !declinedBy.contains(uid);
-                            }).toList();
-
-                            final scheduledInboxDocs =
-                                (inboxSnap.data?.docs ?? []).where((doc) {
-                              final declinedBy =
-                                  (doc.data()['declinedBy'] as List?) ?? [];
-                              return !declinedBy.contains(uid);
-                            }).toList();
-
-                            final currentLoadKg = pickupDocs.fold<double>(
-                              0,
-                              (sum, doc) => sum + _getRequestKg(doc.data()),
-                            );
-
-                            final notifDocs = notifSnap.data?.docs ?? [];
-
-                            return ListView(
-                              padding: const EdgeInsets.only(bottom: 20),
-                              children: [
-                                if (currentLoadKg >= maxCapacityKg)
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 12),
-                                    child: _notifTile(
-                                      title: 'Capacity Full',
-                                      subtitle:
-                                          'You are already at full capacity (${currentLoadKg.toStringAsFixed(1)} kg / ${maxCapacityKg.toStringAsFixed(1)} kg). Complete an active pickup first before accepting a new one.',
-                                      timeText: '',
-                                      status: 'unread',
-                                    ),
-                                  ),
-                                if (pickupDocs.isEmpty &&
-                                    scheduledDocs.isEmpty &&
-                                    scheduledInboxDocs.isEmpty)
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 16),
-                                    child: Center(
-                                      child: Text(
-                                        'No pending pickup requests.',
-                                        style: TextStyle(color: Colors.white70),
-                                      ),
-                                    ),
-                                  ),
-                                ...scheduledInboxDocs.map(_buildScheduledInboxCard),
-                                ...scheduledDocs.map(_buildAcceptedScheduledCard),
-                                ...pickupDocs.map(_buildPickupRequestCard),
-                                if (notifDocs.isNotEmpty) ...[
-                                  _buildNotificationsHeader(),
-                                  ...notifDocs.map(_buildNotificationCard),
-                                ],
-                                const SizedBox(height: 24),
-                              ],
-                            );
-                          },
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _errorText(String text) {
-    return Center(
-      child: Text(
-        text,
-        style: const TextStyle(color: Colors.white70),
-        textAlign: TextAlign.center,
-      ),
-    );
-  }
-
-  Widget _buildScheduledInboxCard(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data();
-    final household = _householdName(data);
-    final scheduleText = _formatPickupSchedule(data);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12, top: 12),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (doc == doc) ...[
-              const Text(
-                'NEW SCHEDULED REQUESTS',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.1,
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
-            Text(
-              household,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Scheduled: $scheduleText',
-              style: const TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _confirmAndDeclinePickup(doc.id),
-                    child: const Text('DECLINE'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _acceptPickup(doc.id),
-                    child: const Text('ACCEPT'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAcceptedScheduledCard(
-    QueryDocumentSnapshot<Map<String, dynamic>> doc,
-  ) {
-    final data = doc.data();
-    final household = _householdName(data);
-    final scheduleText = _formatPickupSchedule(data);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: _notifTile(
-        title: 'Scheduled pickup accepted',
-        subtitle:
-            '$household • $scheduleText\nThis pickup will become active at the scheduled time.',
-        timeText: '',
-        status: 'unread',
-      ),
-    );
-  }
-
-  Widget _buildPickupRequestCard(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data();
-    final household = _householdName(data);
-    final address = _pickupAddress(data);
-    final phone = _phoneNumber(data);
-    final bagLabel = (data['bagLabel'] ?? '').toString();
-    final bagKg = _getRequestKg(data);
-    final distanceKm =
-        data['distanceKm'] is num ? (data['distanceKm'] as num).toDouble() : null;
-    final etaMinutes =
-        data['etaMinutes'] is num ? (data['etaMinutes'] as num).toInt() : null;
-    final scheduleText = _formatPickupSchedule(data);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            onTap: () => _promptPickupAction(requestId: doc.id, data: data),
-            child: Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: primaryColor.withOpacity(0.18),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(
-                    Icons.local_shipping_outlined,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        household,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        address.isEmpty ? 'No address' : address,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.grey.shade400,
-                          fontSize: 12,
-                        ),
-                      ),
-                      if (phone.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'Mobile: $phone',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.grey.shade300,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                Icon(Icons.chevron_right, color: Colors.grey.shade500),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _pill('Schedule: $scheduleText'),
-              if (bagLabel.isNotEmpty)
-                _pill(
-                  'Bag: $bagLabel${bagKg > 0 ? " • ${bagKg.toStringAsFixed(0)}kg" : ""}',
-                ),
-              if (distanceKm != null)
-                _pill('Distance: ${distanceKm.toStringAsFixed(2)} km'),
-              if (etaMinutes != null) _pill('ETA: $etaMinutes min'),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _confirmAndDeclinePickup(doc.id),
-                  child: const Text('DECLINE'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () => _acceptPickup(doc.id),
-                  child: const Text('ACCEPT'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNotificationsHeader() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Divider(
-              color: Colors.white.withOpacity(0.10),
-              thickness: 1,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Text(
-              'NOTIFICATIONS',
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.55),
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.1,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Divider(
-              color: Colors.white.withOpacity(0.10),
-              thickness: 1,
-            ),
-          ),
-          TextButton(
-            onPressed: _clearAllCancelledPickupNotifications,
-            child: const Text(
-              'Clear',
-              style: TextStyle(
-                color: Colors.redAccent,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNotificationCard(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final n = doc.data();
-    final title = (n['title'] ?? 'Notification').toString();
-    final message = (n['message'] ?? '').toString();
-    final reason =
-        (n['reason'] ?? n['collectorDeclineReason'] ?? 'No reason provided.')
-            .toString();
-    final status = (n['status'] ?? 'unread').toString();
-    final createdAt = n['createdAt'] as Timestamp?;
-    final timeText = createdAt != null ? _formatNotifTime(createdAt) : '';
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: _notifTile(
-        title: title,
-        subtitle: message,
-        timeText: timeText,
-        status: status,
-        onTap: () async {
-          await showDialog<void>(
-            context: context,
-            builder: (dialogContext) => Dialog(
-              backgroundColor: Colors.transparent,
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: bgColor,
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Text(
-                        message,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 15,
-                          height: 1.4,
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Reason: ',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
-                          Expanded(
-                            child: Text(
-                              reason,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
-                                height: 1.4,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          child: const Text('Close'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          );
-
-          if (status != 'read') {
-            await doc.reference.update({
-              'status': 'read',
-              'readAt': FieldValue.serverTimestamp(),
-            });
-          }
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final user = _currentUser;
+    final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
       return const Scaffold(
         backgroundColor: bgColor,
         body: Center(
           child: Text(
-            'Not logged in',
+            "Not logged in.",
             style: TextStyle(color: Colors.white),
           ),
         ),
       );
     }
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<DocumentSnapshot>(
       stream: _userRef(user.uid).snapshots(),
       builder: (context, snap) {
-        if (!snap.hasData) {
+        if (snap.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             backgroundColor: bgColor,
             body: Center(child: CircularProgressIndicator()),
           );
         }
 
-        final userData = snap.data?.data();
-        final collectorStatus =
-            (userData?['collectorStatus'] ?? '').toString().trim();
-        final legacyAdminOk = userData?['adminVerified'] == true;
-        final legacyJunkshopOk = userData?['junkshopVerified'] == true;
-        final legacyActive = userData?['collectorActive'] == true;
+        if (snap.hasError) {
+          return Scaffold(
+            backgroundColor: bgColor,
+            body: Center(
+              child: Text(
+                "Error: ${snap.error}",
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          );
+        }
 
-        final canAccessDashboard = _isCollectorRole(userData) &&
-            (_isCollectorAdminApproved(userData) ||
-                _isLegacyCollectorVerified(userData));
+        final data = snap.data?.data() as Map<String, dynamic>?;
 
-        if (!canAccessDashboard) {
+        final isCollectorRole = _isCollectorRole(data);
+        final collectorStatus = (data?['collectorStatus'] ?? "").toString();
+
+        final legacyAdminOk = data?['adminVerified'] == true;
+        final legacyJunkshopOk = data?['junkshopVerified'] == true;
+        final legacyActive = data?['collectorActive'] == true;
+
+        final allowDashboard =
+            (isCollectorRole && _isCollectorAdminApproved(data)) ||
+                _isLegacyCollectorVerified(data);
+
+        if (!allowDashboard) {
           return Scaffold(
             backgroundColor: bgColor,
             body: _pendingVerificationScreenNew(
@@ -1993,71 +2159,719 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
           );
         }
 
+        final pages = <Widget>[
+_CollectorHomeTab(
+  collectorId: user.uid,
+  onOpenProfile: () => _scaffoldKey.currentState?.openDrawer(),
+  onOpenNotifications: () => _scaffoldKey.currentState?.openEndDrawer(),
+  notifBell: _buildCollectorNotifBell(),
+  onAcceptPickup: _acceptPickup,
+  onDeclinePickup: _confirmAndDeclinePickup,
+  formatPickupSchedule: _formatPickupSchedule,
+  getRequestKg: _getRequestKg,
+  pickupAddress: (data) => _pickupAddress(data),
+  phoneNumber: _phoneNumber,
+  householdName: (data) => _householdName(data),
+  pillBuilder: _pill,
+),
+          const CollectorTransactionPage(embedded: true),
+        ];
+
         return Scaffold(
           key: _scaffoldKey,
           backgroundColor: bgColor,
-          endDrawer: Drawer(
-            backgroundColor: bgColor,
-            child: SafeArea(child: _notificationsDrawer()),
-          ),
           drawer: Drawer(
             backgroundColor: bgColor,
             child: SafeArea(child: _collectorProfileDrawer(context)),
           ),
-          appBar: AppBar(
+          endDrawer: Drawer(
             backgroundColor: bgColor,
-            elevation: 0,
-            title: const Text(
-              'Collector Dashboard',
-              style: TextStyle(color: Colors.white),
-            ),
-            iconTheme: const IconThemeData(color: Colors.white),
-            actions: [
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: _buildCollectorNotifBell(),
+            child: SafeArea(child: _notificationsDrawer()),
+          ),
+          body: Stack(
+            children: [
+              Positioned(
+                top: -120,
+                right: -120,
+                child: _blurCircle(primaryColor.withOpacity(0.15), 320),
               ),
+              Positioned(
+                bottom: 80,
+                left: -120,
+                child: _blurCircle(Colors.green.withOpacity(0.10), 360),
+              ),
+              SafeArea(
+  child: Column(
+    children: [
+      if (_tabIndex == 0) _ongoingPickupBanner(),
+      Expanded(
+        child: pages[_tabIndex],
+      ),
+    ],
+  ),
+),
             ],
           ),
-          body: Column(
-            children: [
-              _ongoingPickupBanner(),
-              Expanded(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: _openUnassignedRequestsQuery().snapshots(),
-                  builder: (context, snap) {
-                    if (snap.hasError) {
-                      return _errorText('Failed to load requests:\n${snap.error}');
-                    }
-
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    final docs = snap.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Center(
-                        child: Text(
-                          'No available pickup requests.',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      );
-                    }
-
-                    return ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-                      itemCount: docs.length,
-                      itemBuilder: (context, index) {
-                        return _buildPickupRequestCard(docs[index]);
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
+          bottomNavigationBar: _collectorFooter(
+            currentIndex: _tabIndex,
+            onTap: (i) => setState(() => _tabIndex = i),
           ),
         );
       },
+    );
+  }
+
+  Widget _collectorFooter({
+    required int currentIndex,
+    required ValueChanged<int> onTap,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1220),
+        border: Border(
+          top: BorderSide(color: Colors.white.withOpacity(0.06)),
+        ),
+      ),
+      child: BottomNavigationBar(
+        currentIndex: currentIndex,
+        onTap: onTap,
+        type: BottomNavigationBarType.fixed,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        selectedItemColor: primaryColor,
+        unselectedItemColor: Colors.white54,
+        selectedFontSize: 11,
+        unselectedFontSize: 11,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home_rounded),
+            label: "HOME",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.receipt_long),
+            label: "TRANSACTION",
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Widget _blurCircle(Color color, double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+        child: Container(color: Colors.transparent),
+      ),
+    );
+  }
+}
+
+class _CollectorHomeTab extends StatelessWidget {
+  const _CollectorHomeTab({
+    required this.collectorId,
+    required this.onOpenProfile,
+    required this.onOpenNotifications,
+    required this.notifBell,
+    required this.onAcceptPickup,
+    required this.onDeclinePickup,
+    required this.formatPickupSchedule,
+    required this.getRequestKg,
+    required this.pickupAddress,
+    required this.phoneNumber,
+    required this.householdName,
+    required this.pillBuilder,
+  });
+
+  final Widget notifBell;
+  final String collectorId;
+  final VoidCallback onOpenProfile;
+  final VoidCallback onOpenNotifications;
+
+  final Future<void> Function(String requestId) onAcceptPickup;
+  final Future<void> Function(String requestId) onDeclinePickup;
+
+  final String Function(Map<String, dynamic>) formatPickupSchedule;
+  final double Function(Map<String, dynamic>) getRequestKg;
+  final String Function(Map<String, dynamic>) pickupAddress;
+  final String Function(Map<String, dynamic>) phoneNumber;
+  final String Function(Map<String, dynamic>) householdName;
+  final Widget Function(String text) pillBuilder;
+
+  static const Color primaryColor = Color(0xFF1FA9A7);
+  static const Color cardColor = Color(0xFF1A2332);
+  static const Color borderColor = Color(0xFF263244);
+  static const Color textMuted = Color(0xFF94A3B8);
+
+static const List<String> activePickupStatuses = [
+  'accepted',
+  'arrived',
+  'ongoing',
+];
+
+  static const List<String> openPickupStatuses = [
+    'pending',
+    'scheduled',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
+    final activeQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('active', isEqualTo: true)
+        .where('status', whereIn: activePickupStatuses);
+
+    final completedTodayQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('collectorId', isEqualTo: collectorId)
+        .where('status', isEqualTo: 'completed');
+
+    final availableQuery = FirebaseFirestore.instance
+        .collection('requests')
+        .where('type', isEqualTo: 'pickup')
+        .where('active', isEqualTo: true)
+        .where('collectorId', isEqualTo: "")
+        .where('status', whereIn: openPickupStatuses)
+        .orderBy('updatedAt', descending: true)
+        .limit(1);
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: activeQuery.snapshots(),
+      builder: (context, activeSnap) {
+        final activeDocs = activeSnap.data?.docs ?? [];
+        final activeCount = activeDocs.length;
+
+        double activeKg = 0.0;
+        for (final doc in activeDocs) {
+          final data = doc.data() as Map<String, dynamic>;
+          activeKg += getRequestKg(data);
+        }
+
+        final remainingKg = (20.0 - activeKg).clamp(0.0, 20.0);
+        final activeRequestIds = activeDocs.map((d) => d.id).toList();
+
+        void openActiveMap() {
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (_) => CollectorPickupMapPage(
+      requestIds: activeRequestIds,
+    ),
+  ),
+);
+        }
+
+        return StreamBuilder<QuerySnapshot>(
+          stream: completedTodayQuery.snapshots(),
+          builder: (context, completedSnap) {
+            final completedCount = completedSnap.data?.docs.length ?? 0;
+
+            return StreamBuilder<QuerySnapshot>(
+              stream: availableQuery.snapshots(),
+              builder: (context, availableSnap) {
+                final availableDocs = availableSnap.data?.docs ?? [];
+                final availableDoc =
+                    availableDocs.isNotEmpty ? availableDocs.first : null;
+                final availableData =
+                    availableDoc?.data() as Map<String, dynamic>?;
+
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 90),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          GestureDetector(
+                            onTap: onOpenProfile,
+                            child: Container(
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                color: primaryColor.withOpacity(0.14),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: primaryColor.withOpacity(0.25),
+                                ),
+                              ),
+                              child:
+                                  const Icon(Icons.person, color: Colors.white),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "Collector Dashboard",
+                                  style: TextStyle(
+                                    color: textMuted,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  user?.displayName ?? "Collector",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.15,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          notifBell,
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+
+                      _glassCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: primaryColor.withOpacity(0.14),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(
+                                    Icons.route_outlined,
+                                    color: primaryColor,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "Today’s Overview",
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      SizedBox(height: 3),
+                                      Text(
+                                        "Track your assigned pickups.",
+                                        style: TextStyle(
+                                          color: textMuted,
+                                          fontSize: 12,
+                                          height: 1.35,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+
+                            if (activeCount > 0)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.04),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.06),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.info_outline,
+                                      size: 18,
+                                      color: Colors.white70,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        "You currently have $activeCount active pickup${activeCount == 1 ? '' : 's'} with a total load of ${activeKg.toStringAsFixed(1)} kg.",
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.map_outlined,
+                                      color: Colors.white54,
+                                      size: 18,
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else if (availableData != null)
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.06),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.08),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          width: 42,
+                                          height: 42,
+                                          decoration: BoxDecoration(
+                                            color:
+                                                primaryColor.withOpacity(0.18),
+                                            borderRadius:
+                                                BorderRadius.circular(14),
+                                          ),
+                                          child: const Icon(
+                                            Icons.local_shipping_outlined,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                householdName(availableData),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w900,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                pickupAddress(availableData)
+                                                        .isEmpty
+                                                    ? "No address"
+                                                    : pickupAddress(
+                                                        availableData),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: Colors.grey.shade400,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                              if (phoneNumber(availableData)
+                                                  .isNotEmpty) ...[
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  "Mobile: ${phoneNumber(availableData)}",
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    color: Colors.grey.shade300,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                        InkWell(
+                                          onTap: onOpenNotifications,
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                          child: const Padding(
+                                            padding: EdgeInsets.all(4),
+                                            child: Icon(
+                                              Icons.notifications_outlined,
+                                              color: Colors.white70,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        pillBuilder(
+                                          "Schedule: ${formatPickupSchedule(availableData)}",
+                                        ),
+                                        if ((availableData['bagLabel'] ?? '')
+                                            .toString()
+                                            .isNotEmpty)
+                                          pillBuilder(
+                                            "Bag: ${(availableData['bagLabel'] ?? '').toString()}${getRequestKg(availableData) > 0 ? " • ${getRequestKg(availableData).toStringAsFixed(0)}kg" : ""}",
+                                          ),
+                                        if (availableData['distanceKm'] is num)
+                                          pillBuilder(
+                                            "Distance: ${((availableData['distanceKm'] as num).toDouble()).toStringAsFixed(2)} km",
+                                          ),
+                                        if (availableData['etaMinutes'] is num)
+                                          pillBuilder(
+                                            "ETA: ${(availableData['etaMinutes'] as num).toInt()} min",
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: OutlinedButton(
+                                            onPressed: () => onDeclinePickup(
+                                              availableDoc!.id,
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.white,
+                                              side: BorderSide(
+                                                color: Colors.white
+                                                    .withOpacity(0.18),
+                                              ),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(14),
+                                              ),
+                                            ),
+                                            child: const Text(
+                                              "DECLINE",
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: ElevatedButton(
+                                            onPressed: () => onAcceptPickup(
+                                              availableDoc!.id,
+                                            ),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: primaryColor,
+                                              foregroundColor: Colors.white,
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(14),
+                                              ),
+                                            ),
+                                            child: const Text(
+                                              "ACCEPT",
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else
+                              InkWell(
+                                onTap: onOpenNotifications,
+                                borderRadius: BorderRadius.circular(12),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.04),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.06),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.info_outline,
+                                        size: 18,
+                                        color: Colors.white70,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Expanded(
+                                        child: Text(
+                                          "You have no accepted active pickups at the moment. Tap here to view available requests.",
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ),
+                                      const Icon(
+                                        Icons.notifications_outlined,
+                                        color: Colors.white54,
+                                        size: 18,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _summaryCard(
+                              title: "Active",
+                              value: "$activeCount",
+                              icon: Icons.local_shipping_outlined,
+                              onTap: openActiveMap,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _summaryCard(
+                              title: "Completed",
+                              value: "$completedCount",
+                              icon: Icons.check_circle_outline,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _summaryCard(
+                              title: "Remaining",
+                              value: "${remainingKg.toStringAsFixed(1)} kg",
+                              icon: Icons.layers_outlined,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: openActiveMap,
+                          icon: const Icon(Icons.map_outlined),
+                          label: Text(
+                            activeRequestIds.isEmpty
+                                ? "Open Pickup Map"
+                                : "Open Active Pickups",
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryColor,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 15),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            textStyle: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  static Widget _glassCard({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  static Widget _summaryCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    VoidCallback? onTap,
+  }) {
+    final child = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: primaryColor),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            title,
+            style: const TextStyle(
+              color: textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (onTap == null) return child;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: child,
     );
   }
 }
