@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../admin_reports_tab.dart';
 
 class AdminUsersManagementTab extends StatefulWidget {
   const AdminUsersManagementTab({super.key});
@@ -9,7 +10,6 @@ class AdminUsersManagementTab extends StatefulWidget {
   @override
   State<AdminUsersManagementTab> createState() => _AdminUsersManagementTabState();
 }
-
 class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
   String _query = "";
   String _roleFilter = "all";
@@ -349,6 +349,36 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18),
               ),
             ],
+          ),
+
+          const SizedBox(height: 10),
+
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const AdminReportsTab(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.flag_outlined, color: Colors.red),
+              label: const Text(
+                "Open Reports",
+                style: TextStyle(color: Colors.white),
+              ),
+              style: TextButton.styleFrom(
+                foregroundColor: primaryColor,
+                backgroundColor: Colors.white.withOpacity(0.05),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.white.withOpacity(0.08)),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              ),
+            ),
           ),
           const SizedBox(height: 14),
 

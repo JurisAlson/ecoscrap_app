@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:ui';
-
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -257,6 +259,15 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 ]
 ''';
+ 
+  static const List<Map<String, String>> _reportReasons = [
+    {"code": "harassment", "label": "Harassment"},
+    {"code": "rude_behavior", "label": "Rude behavior"},
+    {"code": "wrong_details", "label": "Wrong pickup details"},
+    {"code": "resident_unavailable", "label": "Resident unavailable"},
+    {"code": "false_complaint", "label": "False complaint"},
+    {"code": "other", "label": "Other"},
+  ];
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final ChatService _chat = ChatService();
@@ -528,6 +539,221 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     } catch (e) {
       debugPrint('❌ failed to stop live location in requests: $e');
     }
+  }
+
+  Future<void> _reportCurrentResident() async {
+    final stop = _currentStop;
+    final user = _currentUser;
+
+    if (stop == null || user == null) return;
+
+    final result = await _showReportDialog();
+    if (result == null) return;
+
+    final String reasonCode = (result["reasonCode"] ?? "").toString().trim();
+    final String reasonText = (result["reasonText"] ?? "").toString().trim();
+    final XFile? pickedImage = result["image"] as XFile?;
+
+    if (reasonCode.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a reason.")),
+      );
+      return;
+    }
+
+    try {
+      final existing = await _db
+          .collection('reports')
+          .where('requestId', isEqualTo: stop.requestId)
+          .where('reporterId', isEqualTo: user.uid)
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("You already submitted a report for this pickup."),
+          ),
+        );
+        return;
+      }
+
+      final reportRef = _db.collection('reports').doc();
+
+      await reportRef.set({
+        "reporterId": user.uid,
+        "reporterRole": "collector",
+        "reportedUserId": stop.householdId,
+        "reportedRole": "resident",
+        "requestId": stop.requestId,
+        "reasonCode": reasonCode,
+        "reasonText": reasonText,
+        "evidenceImageUrls": <String>[],
+        "status": "pending",
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      if (pickedImage != null) {
+        final file = File(pickedImage.path);
+
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child(
+              'report_images/${reportRef.id}/${DateTime.now().millisecondsSinceEpoch}.jpg',
+            );
+
+        final metadata = SettableMetadata(
+          contentType: 'image/jpeg',
+        );
+
+        await storageRef.putFile(file, metadata);
+        final downloadUrl = await storageRef.getDownloadURL();
+
+        await reportRef.update({
+          "evidenceImageUrls": [downloadUrl],
+          "updatedAt": FieldValue.serverTimestamp(),
+        });
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Report submitted.")),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Failed to submit report: ${e.message ?? e.code}"),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to submit report: $e")),
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>?> _showReportDialog() async {
+    String selectedCode = "harassment";
+    final detailsController = TextEditingController();
+    XFile? selectedImage;
+
+    final reasons = [
+      {"code": "harassment", "label": "Harassment"},
+      {"code": "wrong_details", "label": "Wrong details"},
+      {"code": "no_show", "label": "No show"},
+      {"code": "rude_behavior", "label": "Rude behavior"},
+      {"code": "other", "label": "Other"},
+    ];
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0F172A),
+              title: const Text(
+                "Report Resident",
+                style: TextStyle(color: Colors.white),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: selectedCode,
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      items: reasons
+                          .map(
+                            (r) => DropdownMenuItem<String>(
+                              value: r["code"],
+                              child: Text(r["label"]!),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => selectedCode = val);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: detailsController,
+                      style: const TextStyle(color: Colors.white),
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        hintText: "Add details (optional)",
+                        hintStyle: TextStyle(color: Colors.grey),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final picker = ImagePicker();
+                        final image = await picker.pickImage(
+                          source: ImageSource.gallery,
+                          imageQuality: 75,
+                        );
+                        if (image != null) {
+                          setState(() => selectedImage = image);
+                        }
+                      },
+                      icon: const Icon(Icons.image_outlined),
+                      label: Text(
+                        selectedImage == null
+                            ? "Upload Image (Optional)"
+                            : "Image Selected",
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text("Cancel"),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context, {
+                      "reasonCode": selectedCode,
+                      "reasonText": detailsController.text.trim(),
+                      "image": selectedImage,
+                    });
+                  },
+                  child: const Text(
+                    "Submit",
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _initPage() async {
@@ -1733,6 +1959,15 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                               onTap: _callCurrentStop,
                             ),
                           const SizedBox(height: 10),
+                          _actionWide(
+                            icon: Icons.report_gmailerrorred_outlined,
+                            title: "REPORT",
+                            subtitle: "Report resident",
+                            bg: Colors.redAccent.withOpacity(0.12),
+                            fg: Colors.white,
+                            border: Colors.redAccent.withOpacity(0.35),
+                            onTap: _reportCurrentResident,
+                          ),
                         ],
                       ],
                     ),
