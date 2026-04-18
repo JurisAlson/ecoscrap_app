@@ -3,6 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../chat/screens/chat_page.dart';
 import '../Collector/collector_tracking_page.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class HouseholdOrderPage extends StatelessWidget {
   const HouseholdOrderPage({super.key});
@@ -92,6 +95,7 @@ class _OrderCard extends StatelessWidget {
   final Map<String, dynamic> data;
 
   const _OrderCard({
+    super.key,
     required this.requestId,
     required this.data,
   });
@@ -104,6 +108,10 @@ class _OrderCard extends StatelessWidget {
     "Changed my mind",
     "Other",
   ];
+
+  User? get _currentUser => FirebaseAuth.instance.currentUser;
+
+  DocumentSnapshot<Map<String, dynamic>>? get _currentOrderSnapshot => null;
 
   Widget _buildOrderTimeline(String status) {
     final steps = <Map<String, dynamic>>[
@@ -220,6 +228,256 @@ class _OrderCard extends StatelessWidget {
       debugPrint("❌ Failed to mark chat read: $e");
     }
   }
+
+  Future<Map<String, dynamic>?> _showReportDialog(BuildContext context) async {
+    String selectedCode = "harassment";
+    final detailsController = TextEditingController();
+    final picker = ImagePicker();
+    XFile? selectedImage;
+
+    final reasons = [
+      {"code": "harassment", "label": "Harassment"},
+      {"code": "wrong_details", "label": "Wrong Details"},
+      {"code": "no_show", "label": "No Show"},
+      {"code": "rude_behavior", "label": "Rude Behavior"},
+      {"code": "late_arrival", "label": "Late Arrival"},
+      {"code": "other", "label": "Other"},
+    ];
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0F172A),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text(
+                "Report Collector",
+                style: TextStyle(color: Colors.white),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    /// REASON DROPDOWN
+                    DropdownButtonFormField<String>(
+                      value: selectedCode,
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(
+                            color: Colors.white.withOpacity(0.1),
+                          ),
+                        ),
+                      ),
+                      items: reasons.map((r) {
+                        return DropdownMenuItem<String>(
+                          value: r["code"],
+                          child: Text(r["label"]!),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => selectedCode = val);
+                        }
+                      },
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    /// DETAILS FIELD
+                    TextField(
+                      controller: detailsController,
+                      style: const TextStyle(color: Colors.white),
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        hintText: "Add details (optional)",
+                        hintStyle: const TextStyle(color: Colors.white38),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(
+                            color: Colors.white.withOpacity(0.1),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    /// IMAGE PICKER
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final image = await picker.pickImage(
+                          source: ImageSource.gallery,
+                          imageQuality: 75,
+                        );
+                        if (image != null) {
+                          setState(() => selectedImage = image);
+                        }
+                      },
+                      icon: const Icon(Icons.image_outlined),
+                      label: Text(
+                        selectedImage == null
+                            ? "Upload Evidence (Optional)"
+                            : "Image Selected",
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: BorderSide(
+                          color: Colors.white.withOpacity(0.2),
+                        ),
+                      ),
+                    ),
+
+                    if (selectedImage != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          selectedImage!.name,
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text(
+                    "Cancel",
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context, {
+                      "reasonCode": selectedCode,
+                      "reasonText": detailsController.text.trim(),
+                      "image": selectedImage,
+                    });
+                  },
+                  child: const Text(
+                    "Submit",
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _reportCollector(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) return;
+
+    final collectorId = (data['collectorId'] ?? '').toString();
+    if (collectorId.isEmpty) return;
+    final requestId = this.requestId;
+
+    if (collectorId.isEmpty) return;
+
+    final result = await _showReportDialog(context);
+    if (result == null) return;
+
+    final reasonCode = (result["reasonCode"] ?? "").toString().trim();
+    final reasonText = (result["reasonText"] ?? "").toString().trim();
+    final XFile? pickedImage = result["image"] as XFile?;
+
+    if (reasonCode.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a reason.")),
+      );
+      return;
+    }
+
+    try {
+      final existing = await FirebaseFirestore.instance
+          .collection('reports')
+          .where('requestId', isEqualTo: requestId)
+          .where('reporterId', isEqualTo: user.uid)
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("You already reported this pickup.")),
+        );
+        return;
+      }
+
+      final reportRef =
+          FirebaseFirestore.instance.collection('reports').doc();
+
+      await reportRef.set({
+        "reporterId": user.uid,
+        "reporterRole": "resident",
+        "reportedUserId": collectorId,
+        "reportedRole": "collector",
+        "requestId": requestId,
+        "reasonCode": reasonCode,
+        "reasonText": reasonText,
+        "evidenceImageUrls": <String>[],
+        "status": "pending",
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      // upload image (optional)
+      if (pickedImage != null) {
+        final file = File(pickedImage.path);
+
+        final storageRef = FirebaseStorage.instance.ref().child(
+          'report_images/${reportRef.id}/${DateTime.now().millisecondsSinceEpoch}.jpg',
+        );
+
+        await storageRef.putFile(
+          file,
+          SettableMetadata(contentType: 'image/jpeg'),
+        );
+
+        final url = await storageRef.getDownloadURL();
+
+        await reportRef.update({
+          "evidenceImageUrls": [url],
+          "updatedAt": FieldValue.serverTimestamp(),
+        });
+      }
+
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Report submitted.")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed: $e")),
+      );
+    }
+  }
+
+  
 
   Future<void> _openCollectorChat({
     required BuildContext context,
@@ -525,6 +783,31 @@ class _OrderCard extends StatelessWidget {
                   },
                 ),
               ),
+              if (collectorId.isNotEmpty)
+                Positioned(
+                  top: 0,
+                  right: canChat ? 56 : 0,
+                  child: InkWell(
+                    onTap: () => _reportCollector(context),
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.18),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.redAccent.withOpacity(0.25),
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.flag_outlined,
+                        color: Colors.redAccent,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ),
           ],
         ),
       ),
