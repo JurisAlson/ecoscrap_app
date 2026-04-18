@@ -8,11 +8,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../household/household_dashboard.dart';
+
 import '../collector/collectors_dashboard.dart';
+import '../household/household_dashboard.dart';
+
 extension TrackingOpacityFix on Color {
-  Color o(double opacity) =>
-      withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
+  Color o(double opacity) => withValues(alpha: opacity.clamp(0.0, 1.0));
 }
 
 class CollectorTrackingPage extends StatefulWidget {
@@ -26,7 +27,6 @@ class CollectorTrackingPage extends StatefulWidget {
   final bool showArrivedButton;
   final String trackingType; // "pickup" or "sell"
   final String? sellRequestId;
-  
 
   const CollectorTrackingPage({
     super.key,
@@ -63,133 +63,55 @@ class _CollectorTrackingPageState extends State<CollectorTrackingPage> {
   static const Color _textPrimary = Color(0xFFE2E8F0);
   static const Color _textSecondary = Color(0xFF94A3B8);
   static const Color _textMuted = Color(0xFF64748B);
-  static const String _moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
-  bool _sentToDashboard = false;
 
-static const String _darkMapStyle = r'''
+  static const String _moresUid = "07Wi7N8fALh2yqNdt1CQgIYVGE43";
+
+  static const Duration _markerAnimDuration = Duration(milliseconds: 900);
+  static const int _markerAnimSteps = 45;
+
+  static const String _darkMapStyle = r'''
 [
-  {
-    "elementType": "geometry",
-    "stylers": [{"color": "#0b1220"}]
-  },
-  {
-    "elementType": "labels.text.fill",
-    "stylers": [{"color": "#8aa0b8"}]
-  },
-  {
-    "elementType": "labels.text.stroke",
-    "stylers": [{"color": "#0b1220"}]
-  },
-  {
-    "elementType": "labels.icon",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "administrative",
-    "elementType": "geometry",
-    "stylers": [{"color": "#2b3445"}]
-  },
-  {
-    "featureType": "administrative",
-    "elementType": "labels.icon",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "poi",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "poi",
-    "elementType": "labels",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "poi",
-    "elementType": "labels.icon",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "poi.business",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "poi.business",
-    "elementType": "labels",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "poi.park",
-    "elementType": "geometry",
-    "stylers": [{"color": "#0f1a2a"}]
-  },
-  {
-    "featureType": "poi.park",
-    "elementType": "labels",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "road",
-    "elementType": "geometry",
-    "stylers": [{"color": "#162235"}]
-  },
-  {
-    "featureType": "road",
-    "elementType": "geometry.stroke",
-    "stylers": [{"color": "#0b1220"}]
-  },
-  {
-    "featureType": "road",
-    "elementType": "labels.text.fill",
-    "stylers": [{"color": "#93a8bf"}]
-  },
-  {
-    "featureType": "road",
-    "elementType": "labels.icon",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "road.highway",
-    "elementType": "geometry",
-    "stylers": [{"color": "#1f2f48"}]
-  },
-  {
-    "featureType": "road.highway",
-    "elementType": "geometry.stroke",
-    "stylers": [{"color": "#0b1220"}]
-  },
-  {
-    "featureType": "road.highway",
-    "elementType": "labels.icon",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "transit",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "transit.station",
-    "stylers": [{"visibility": "off"}]
-  },
-  {
-    "featureType": "water",
-    "elementType": "geometry",
-    "stylers": [{"color": "#06101c"}]
-  },
-  {
-    "featureType": "water",
-    "elementType": "labels.text.fill",
-    "stylers": [{"color": "#6f879f"}]
-  }
+  {"elementType":"geometry","stylers":[{"color":"#0b1220"}]},
+  {"elementType":"labels.text.fill","stylers":[{"color":"#8aa0b8"}]},
+  {"elementType":"labels.text.stroke","stylers":[{"color":"#0b1220"}]},
+  {"elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+  {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#2b3445"}]},
+  {"featureType":"administrative","elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi","elementType":"labels","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi","elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.business","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.business","elementType":"labels","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#0f1a2a"}]},
+  {"featureType":"poi.park","elementType":"labels","stylers":[{"visibility":"off"}]},
+  {"featureType":"road","elementType":"geometry","stylers":[{"color":"#162235"}]},
+  {"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
+  {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#93a8bf"}]},
+  {"featureType":"road","elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+  {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#1f2f48"}]},
+  {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#0b1220"}]},
+  {"featureType":"road.highway","elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+  {"featureType":"transit","stylers":[{"visibility":"off"}]},
+  {"featureType":"transit.station","stylers":[{"visibility":"off"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#06101c"}]},
+  {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#6f879f"}]}
 ]
 ''';
-  
 
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseFunctions _functions =
       FirebaseFunctions.instanceFor(region: 'asia-southeast1');
 
   GoogleMapController? _mapController;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _requestSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sellRequestSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _collectorUserSub;
+
+  LatLng? _requestCollectorLatLng;
+  LatLng? _userCollectorLatLng;
+
+  String? _trackedCollectorId;
+  Timer? _markerAnimationTimer;
 
   LatLng? _pickupLatLng;
   LatLng? _collectorLatLng;
@@ -197,7 +119,6 @@ static const String _darkMapStyle = r'''
 
   String _collectorName = "Collector";
   String _status = "";
-  String _pickupSource = "";
   String _street = "";
   String _subdivision = "";
   String _landmark = "";
@@ -205,7 +126,6 @@ static const String _darkMapStyle = r'''
 
   String _routeDistanceText = "";
   String _routeDurationText = "";
-
   List<LatLng> _collectorRoutePoints = [];
 
   bool _initialFitDone = false;
@@ -213,18 +133,38 @@ static const String _darkMapStyle = r'''
   bool _markingArrived = false;
   bool _collectorArrivedToMores = false;
   bool _sellTransactionAudited = false;
+  bool _isCollectorLive = false;
+  bool _sentToDashboard = false;
 
   double _collectorHeading = 0;
+
   BitmapDescriptor? _collectorIcon;
   BitmapDescriptor? _householdMarkerIcon;
+  BitmapDescriptor? _moresMarkerIcon;
+
+  User? get _currentUser => FirebaseAuth.instance.currentUser;
 
   bool get _isFixedDestinationMode => widget.fixedDestination != null;
 
   bool get _hasValidRequestId =>
       widget.requestId != null && widget.requestId!.trim().isNotEmpty;
 
+  bool get _isSellTracking => widget.trackingType == "sell";
+
+  LatLng? get _effectiveCollectorLatLng =>
+      _requestCollectorLatLng ?? _userCollectorLatLng;
+
+  DocumentReference<Map<String, dynamic>> get _requestDoc =>
+      _db.collection('requests').doc(widget.requestId);
+
+  DocumentReference<Map<String, dynamic>> get _sellRequestDoc => _db
+      .collection('Users')
+      .doc(_moresUid)
+      .collection('sell_requests')
+      .doc(widget.sellRequestId);
+
   String get _displayCollectorName =>
-      _collectorName.isEmpty ? "Collector" : _collectorName;
+      _collectorName.trim().isEmpty ? "Collector" : _collectorName;
 
   String get _displayAddress {
     final parts = [
@@ -244,14 +184,14 @@ static const String _darkMapStyle = r'''
         : "Pinned / GPS pickup location";
   }
 
-  String get _sourceLabel =>
-      widget.trackingType == "sell" ? "TRIP TYPE" : "PICKUP SOURCE";
-
   String get _liveStatusText {
     if (_collectorLatLng != null) {
-      return _isFixedDestinationMode
-          ? "Live route to ${widget.destinationTitle}"
-          : "$_displayCollectorName is sharing live location";
+      if (_isFixedDestinationMode) {
+        return "Live route to ${widget.destinationTitle}";
+      }
+      return _isCollectorLive
+          ? "$_displayCollectorName is sharing live location"
+          : "$_displayCollectorName last known location";
     }
 
     return _isFixedDestinationMode
@@ -263,29 +203,27 @@ static const String _darkMapStyle = r'''
       ? "Route to ${widget.destinationTitle}"
       : "Track Collector";
 
-  String get _pickupMarkerTitle =>
-      _isFixedDestinationMode ? widget.destinationTitle : 'PICKUP';
-
   @override
   void initState() {
     super.initState();
     _initPage();
-
-    if (widget.trackingType == "sell") {
+    if (_isSellTracking) {
       _listenToSellRequest();
     }
   }
 
   @override
   void dispose() {
+    _markerAnimationTimer?.cancel();
     _requestSub?.cancel();
     _sellRequestSub?.cancel();
+    _collectorUserSub?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
 
   Future<void> _initPage() async {
-    await _loadCollectorIcon();
+    await _loadMarkerIcons();
     await _initMyLocation();
 
     if (_isFixedDestinationMode) {
@@ -295,14 +233,70 @@ static const String _darkMapStyle = r'''
     }
   }
 
+  LatLng _lerpLatLng(LatLng a, LatLng b, double t) {
+    return LatLng(
+      a.latitude + (b.latitude - a.latitude) * t,
+      a.longitude + (b.longitude - a.longitude) * t,
+    );
+  }
+
+double _easeInOut(double t) {
+  if (t < 0.5) return 2 * t * t;
+  return 1 - (math.pow(-2 * t + 2, 2) / 2);
+}
+
+  double _shortestAngleLerp(double from, double to, double t) {
+    final delta = ((to - from + 540) % 360) - 180;
+    return (from + delta * t + 360) % 360;
+  }
+
+  void _animateCollectorMarker({
+    required LatLng from,
+    required LatLng to,
+    required double fromHeading,
+    required double toHeading,
+  }) {
+    _markerAnimationTimer?.cancel();
+
+    int step = 0;
+    final stepMs =
+        (_markerAnimDuration.inMilliseconds / _markerAnimSteps).round();
+
+    _markerAnimationTimer =
+        Timer.periodic(Duration(milliseconds: stepMs), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      step++;
+      final rawT = step / _markerAnimSteps;
+      final t = _easeInOut(rawT.clamp(0.0, 1.0));
+
+      setState(() {
+        _collectorLatLng = _lerpLatLng(from, to, t);
+        _collectorHeading = _shortestAngleLerp(fromHeading, toHeading, t);
+      });
+
+      if (step >= _markerAnimSteps) {
+        timer.cancel();
+        if (mounted) {
+          setState(() {
+            _collectorLatLng = to;
+            _collectorHeading = toHeading;
+          });
+        }
+      }
+    });
+  }
+
   void _goToDashboardIfTransactionEnded(Map<String, dynamic> data) {
     if (_sentToDashboard || !mounted) return;
 
     final status = (data['status'] ?? '').toString().trim().toLowerCase();
     final active = data['active'] == true;
 
-    final isFinished =
-        !active ||
+    final isFinished = !active ||
         status == 'completed' ||
         status == 'done' ||
         status == 'cancelled' ||
@@ -317,11 +311,68 @@ static const String _darkMapStyle = r'''
       if (!mounted) return;
 
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => const DashboardPage(),
-        ),
+        MaterialPageRoute(builder: (_) => const DashboardPage()),
         (route) => false,
       );
+    });
+  }
+
+  void _listenToCollectorUser(String collectorId) {
+    if (_trackedCollectorId == collectorId && _collectorUserSub != null) return;
+
+    _trackedCollectorId = collectorId;
+    _collectorUserSub?.cancel();
+
+    _collectorUserSub = _db
+        .collection('Users')
+        .doc(collectorId)
+        .snapshots()
+        .listen((doc) async {
+      if (!doc.exists || !mounted) return;
+
+      final data = doc.data() ?? {};
+      final gp = data['collectorLiveLocation'];
+      if (gp is! GeoPoint) return;
+
+      final userCollector = LatLng(gp.latitude, gp.longitude);
+      final previousCollector = _effectiveCollectorLatLng;
+      final oldHeading = _collectorHeading;
+
+      if (!mounted) return;
+      setState(() {
+        _userCollectorLatLng = userCollector;
+
+        // only use Users as visible source when request has no live location
+        if (_requestCollectorLatLng == null) {
+          _collectorLatLng = userCollector;
+          _isCollectorLive = true;
+        }
+      });
+
+      final activeCollector = _effectiveCollectorLatLng;
+      if (activeCollector == null || _pickupLatLng == null) return;
+
+      if (previousCollector == null) {
+        await _fitMap();
+        return;
+      }
+
+      final changed = previousCollector.latitude != activeCollector.latitude ||
+          previousCollector.longitude != activeCollector.longitude;
+
+      if (changed) {
+        _animateCollectorMarker(
+          from: previousCollector,
+          to: activeCollector,
+          fromHeading: oldHeading,
+          toHeading: oldHeading,
+        );
+
+        await _buildCollectorRouteToPickup(
+          collectorLatLng: activeCollector,
+          pickupLatLng: _pickupLatLng!,
+        );
+      }
     });
   }
 
@@ -331,14 +382,7 @@ static const String _darkMapStyle = r'''
     }
 
     _sellRequestSub?.cancel();
-
-    _sellRequestSub = FirebaseFirestore.instance
-        .collection('Users')
-        .doc(_moresUid)
-        .collection('sell_requests')
-        .doc(widget.sellRequestId!)
-        .snapshots()
-        .listen((doc) async {
+    _sellRequestSub = _sellRequestDoc.snapshots().listen((doc) async {
       if (!doc.exists || !mounted) return;
 
       final data = doc.data() ?? {};
@@ -355,40 +399,37 @@ static const String _darkMapStyle = r'''
         _sellTransactionAudited = audited;
       });
 
-      if (audited) {
-        await _restoreCollectorAvailability();
+      if (!audited) return;
 
-        if (_sentToDashboard || !mounted) return;
-        _sentToDashboard = true;
+      await _restoreCollectorAvailability();
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Transaction completed"),
-            duration: Duration(seconds: 1),
-          ),
+      if (_sentToDashboard || !mounted) return;
+      _sentToDashboard = true;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Transaction completed"),
+          duration: Duration(seconds: 1),
+        ),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 800));
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const CollectorsDashboardPage()),
+          (route) => false,
         );
-
-        await Future.delayed(const Duration(milliseconds: 800));
-
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => const CollectorsDashboardPage(),
-            ),
-            (route) => false,
-          );
-        });
-      }
+      });
     });
   }
 
   Future<void> _restoreCollectorAvailability() async {
-    final collectorId = FirebaseAuth.instance.currentUser?.uid;
+    final collectorId = _currentUser?.uid;
     if (collectorId == null) return;
 
-    await FirebaseFirestore.instance.collection('Users').doc(collectorId).set({
+    await _db.collection('Users').doc(collectorId).set({
       "isOnline": true,
       "availabilityStatus": "available",
       "isAvailableForHousehold": true,
@@ -405,9 +446,7 @@ static const String _darkMapStyle = r'''
     setState(() {
       _pickupLatLng = destination;
       _collectorLatLng = _myLatLng;
-      _collectorName = "You";
       _status = "ongoing";
-      _pickupSource = "fixed_destination";
       _street = widget.destinationAddress;
       _subdivision = "";
       _landmark = "";
@@ -415,7 +454,7 @@ static const String _darkMapStyle = r'''
       _loading = false;
     });
 
-    if (_collectorLatLng != null) {
+    if (_collectorLatLng != null && _pickupLatLng != null) {
       await _buildCollectorRouteToPickup(
         collectorLatLng: _collectorLatLng!,
         pickupLatLng: _pickupLatLng!,
@@ -484,12 +523,7 @@ static const String _darkMapStyle = r'''
     setState(() => _markingArrived = true);
 
     try {
-      await FirebaseFirestore.instance
-          .collection('Users')
-          .doc(_moresUid)
-          .collection('sell_requests')
-          .doc(widget.sellRequestId!)
-          .update({
+      await _sellRequestDoc.update({
         "status": "arrived",
         "collectorArrived": true,
         "updatedAt": FieldValue.serverTimestamp(),
@@ -563,12 +597,7 @@ static const String _darkMapStyle = r'''
     }
 
     try {
-      await FirebaseFirestore.instance
-          .collection('Users')
-          .doc(_moresUid)
-          .collection('sell_requests')
-          .doc(widget.sellRequestId!)
-          .update({
+      await _sellRequestDoc.update({
         "status": "cancelled",
         "updatedAt": FieldValue.serverTimestamp(),
       });
@@ -596,6 +625,7 @@ static const String _darkMapStyle = r'''
     required Color borderColor,
     double size = 112,
     double iconSize = 54,
+    String? label,
   }) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
@@ -607,6 +637,7 @@ static const String _darkMapStyle = r'''
       borderColor: borderColor,
       size: size,
       iconSize: iconSize,
+      label: label,
     );
 
     painter.paint(canvas, Size(size, size));
@@ -618,16 +649,7 @@ static const String _darkMapStyle = r'''
     return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
   }
 
-  Future<void> _onMapCreated(GoogleMapController controller) async {
-    _mapController = controller;
-    await controller.setMapStyle(_darkMapStyle);
-
-    if (_pickupLatLng != null && !_initialFitDone) {
-      await _fitMap();
-    }
-  }
-
-  Future<void> _loadCollectorIcon() async {
+  Future<void> _loadMarkerIcons() async {
     try {
       _collectorIcon = await _iconToMarker(
         icon: Icons.shopping_cart_rounded,
@@ -643,11 +665,28 @@ static const String _darkMapStyle = r'''
         borderColor: Colors.white.withOpacity(0.18),
       );
 
-      if (mounted) {
-        setState(() {});
-      }
+      _moresMarkerIcon = await _iconToMarker(
+        icon: Icons.storefront_rounded,
+        iconColor: Colors.white,
+        backgroundColor: const Color(0xFF16A34A),
+        borderColor: Colors.white.withOpacity(0.20),
+        size: 260,
+        iconSize: 52,
+        label: "Mores Scrap",
+      );
+
+      if (mounted) setState(() {});
     } catch (e) {
       debugPrint("Failed to build marker icons: $e");
+    }
+  }
+
+  Future<void> _onMapCreated(GoogleMapController controller) async {
+    _mapController = controller;
+    await controller.setMapStyle(_darkMapStyle);
+
+    if (_pickupLatLng != null && !_initialFitDone) {
+      await _fitMap();
     }
   }
 
@@ -655,68 +694,104 @@ static const String _darkMapStyle = r'''
     _requestSub?.cancel();
 
     if (!_hasValidRequestId) {
-      if (!mounted) return;
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
       return;
     }
 
-    _requestSub = FirebaseFirestore.instance
-        .collection('requests')
-        .doc(widget.requestId!)
-        .snapshots()
-        .listen((doc) async {
+    _requestSub = _requestDoc.snapshots().listen((doc) async {
       if (!doc.exists) {
-        if (!mounted) return;
-        setState(() => _loading = false);
+        if (mounted) setState(() => _loading = false);
         return;
       }
 
       final data = doc.data() ?? {};
-
       _goToDashboardIfTransactionEnded(data);
 
       final pickupGp = data['pickupLocation'];
       final collectorGp =
           data['collectorLiveLocation'] ?? data['collectorLocation'];
+      final isLive = data['sharingLiveLocation'] == true;
+      final collectorId = (data['collectorId'] ?? '').toString().trim();
 
       final headingRaw = data['collectorHeading'];
-      double heading = 0;
-      if (headingRaw is num) {
-        heading = headingRaw.toDouble();
-      }
+      final heading = headingRaw is num ? headingRaw.toDouble() : 0.0;
 
       LatLng? pickup;
-      LatLng? collector;
+      LatLng? requestCollector;
 
       if (pickupGp is GeoPoint) {
         pickup = LatLng(pickupGp.latitude, pickupGp.longitude);
       }
       if (collectorGp is GeoPoint) {
-        collector = LatLng(collectorGp.latitude, collectorGp.longitude);
+        requestCollector = LatLng(collectorGp.latitude, collectorGp.longitude);
       }
 
-      final previousCollectorWasNull = _collectorLatLng == null;
+      if (collectorId.isNotEmpty) {
+        _listenToCollectorUser(collectorId);
+      }
+
+      final previousCollector = _effectiveCollectorLatLng;
+      final previousPickup = _pickupLatLng;
+      final oldHeading = _collectorHeading;
 
       if (!mounted) return;
       setState(() {
         _pickupLatLng = pickup;
-        _collectorLatLng = collector;
+        _requestCollectorLatLng = requestCollector;
+        _isCollectorLive = requestCollector != null ? isLive : (_userCollectorLatLng != null);
+
         _collectorName = (data['collectorName'] ?? 'Collector').toString();
         _status = (data['status'] ?? '').toString().trim().toLowerCase();
-        _pickupSource = (data['pickupSource'] ?? '').toString();
         _street = (data['street'] ?? '').toString();
         _subdivision = (data['subdivision'] ?? '').toString();
         _landmark = (data['landmark'] ?? '').toString();
         _phoneNumber = (data['phoneNumber'] ?? '').toString();
-        _collectorHeading = heading;
         _loading = false;
+
+        _collectorLatLng = _effectiveCollectorLatLng;
       });
 
-      if (_collectorLatLng != null && _pickupLatLng != null) {
-        await _buildCollectorRouteToPickup(
-          collectorLatLng: _collectorLatLng!,
-          pickupLatLng: _pickupLatLng!,
-        );
+      final activeCollector = _effectiveCollectorLatLng;
+      final previousCollectorWasNull = previousCollector == null;
+
+      if (requestCollector != null) {
+        if (previousCollector == null) {
+          setState(() {
+            _collectorLatLng = requestCollector;
+            _collectorHeading = heading;
+          });
+        } else if (previousCollector.latitude != requestCollector.latitude ||
+            previousCollector.longitude != requestCollector.longitude ||
+            oldHeading != heading) {
+          _animateCollectorMarker(
+            from: previousCollector,
+            to: requestCollector,
+            fromHeading: oldHeading,
+            toHeading: heading,
+          );
+        }
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _collectorLatLng = _effectiveCollectorLatLng;
+        });
+      }
+
+      final collectorChanged =
+          previousCollector?.latitude != activeCollector?.latitude ||
+              previousCollector?.longitude != activeCollector?.longitude;
+
+      final pickupChanged =
+          previousPickup?.latitude != _pickupLatLng?.latitude ||
+              previousPickup?.longitude != _pickupLatLng?.longitude;
+
+      if (activeCollector != null && _pickupLatLng != null) {
+        if (collectorChanged || pickupChanged || _collectorRoutePoints.isEmpty) {
+          await _buildCollectorRouteToPickup(
+            collectorLatLng: activeCollector,
+            pickupLatLng: _pickupLatLng!,
+          );
+        }
       } else {
         if (!mounted) return;
         setState(() {
@@ -727,11 +802,11 @@ static const String _darkMapStyle = r'''
       }
 
       if (!_initialFitDone && _pickupLatLng != null) {
-        if (_collectorLatLng != null || _mapController != null) {
+        if (activeCollector != null || _mapController != null) {
           await _fitMap();
           _initialFitDone = true;
         }
-      } else if (previousCollectorWasNull && _collectorLatLng != null) {
+      } else if (previousCollectorWasNull && activeCollector != null) {
         await _fitMap();
       }
     });
@@ -794,12 +869,8 @@ static const String _darkMapStyle = r'''
       permission = await Geolocator.requestPermission();
     }
 
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      return false;
-    }
-
-    return true;
+    return permission != LocationPermission.denied &&
+        permission != LocationPermission.deniedForever;
   }
 
   Future<void> _initMyLocation() async {
@@ -816,7 +887,7 @@ static const String _darkMapStyle = r'''
         _myLatLng = LatLng(pos.latitude, pos.longitude);
       });
     } catch (e) {
-      debugPrint("household current location error: $e");
+      debugPrint("current location error: $e");
     }
   }
 
@@ -833,18 +904,10 @@ static const String _darkMapStyle = r'''
     final pickup = _pickupLatLng!;
     final collector = _collectorLatLng!;
 
-    final south = pickup.latitude < collector.latitude
-        ? pickup.latitude
-        : collector.latitude;
-    final north = pickup.latitude > collector.latitude
-        ? pickup.latitude
-        : collector.latitude;
-    final west = pickup.longitude < collector.longitude
-        ? pickup.longitude
-        : collector.longitude;
-    final east = pickup.longitude > collector.longitude
-        ? pickup.longitude
-        : collector.longitude;
+    final south = math.min(pickup.latitude, collector.latitude);
+    final north = math.max(pickup.latitude, collector.latitude);
+    final west = math.min(pickup.longitude, collector.longitude);
+    final east = math.max(pickup.longitude, collector.longitude);
 
     final bounds = LatLngBounds(
       southwest: LatLng(south, west),
@@ -886,36 +949,27 @@ static const String _darkMapStyle = r'''
     return points;
   }
 
-  double _bearingBetween(LatLng from, LatLng to) {
-    final lat1 = from.latitude * math.pi / 180.0;
-    final lon1 = from.longitude * math.pi / 180.0;
-    final lat2 = to.latitude * math.pi / 180.0;
-    final lon2 = to.longitude * math.pi / 180.0;
-
-    final dLon = lon2 - lon1;
-    final y = math.sin(dLon) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
-        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
-
-    final bearing = math.atan2(y, x) * 180.0 / math.pi;
-    return (bearing + 360.0) % 360.0;
-  }
-
-  double _normalizeRotation(double angle) {
-    final normalized = angle % 360;
-    return normalized < 0 ? normalized + 360 : normalized;
-  }
-
   Set<Marker> _buildMarkers() {
     final markers = <Marker>{};
 
     if (_pickupLatLng != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId("pickup"),
+          markerId: MarkerId(
+            _isSellTracking
+                ? "mores_${_moresMarkerIcon?.hashCode ?? 0}"
+                : "pickup",
+          ),
           position: _pickupLatLng!,
-          anchor: const Offset(0.5, 0.55),
-          icon: _householdMarkerIcon ?? BitmapDescriptor.defaultMarker,
+          anchor: _isSellTracking
+              ? const Offset(0.20, 0.52)
+              : const Offset(0.5, 0.55),
+          icon: _isSellTracking
+              ? (_moresMarkerIcon ??
+                  BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueGreen,
+                  ))
+              : (_householdMarkerIcon ?? BitmapDescriptor.defaultMarker),
         ),
       );
     }
@@ -925,7 +979,9 @@ static const String _darkMapStyle = r'''
         Marker(
           markerId: const MarkerId("collector"),
           position: _collectorLatLng!,
-          anchor: const Offset(0.5, 0.55),
+          rotation: _collectorHeading,
+          flat: true,
+          anchor: const Offset(0.5, 0.5),
           icon: _collectorIcon ?? BitmapDescriptor.defaultMarker,
         ),
       );
@@ -959,7 +1015,6 @@ static const String _darkMapStyle = r'''
         return 'Pickup scheduled';
       case 'accepted':
         return 'Collector accepted your request';
-
       case 'ongoing':
         return 'Collector is on the way';
       case 'arrived':
@@ -1106,6 +1161,64 @@ static const String _darkMapStyle = r'''
     );
   }
 
+  Widget _infoTile({
+    required IconData icon,
+    required String label,
+    required String value,
+    Color? valueColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: _surfaceAlt,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _border),
+            ),
+            child: Icon(icon, color: _textSecondary, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: _textMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  value,
+                  style: TextStyle(
+                    color: valueColor ?? _textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _statusPanel() {
     return DraggableScrollableSheet(
       initialChildSize: 0.33,
@@ -1121,9 +1234,7 @@ static const String _darkMapStyle = r'''
                 color: _sheet.o(0.97),
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(34)),
-                border: const Border(
-                  top: BorderSide(color: _border),
-                ),
+                border: const Border(top: BorderSide(color: _border)),
               ),
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 18),
               child: ListView(
@@ -1180,29 +1291,9 @@ static const String _darkMapStyle = r'''
                   ),
                   const SizedBox(height: 18),
                   _infoTile(
-                    icon: Icons.person_outline,
-                    label: "COLLECTOR",
-                    value: _displayCollectorName,
-                    valueColor: _textPrimary,
-                  ),
-                  const SizedBox(height: 12),
-                  _infoTile(
                     icon: Icons.place_outlined,
                     label: _locationSectionLabel,
                     value: _locationSectionValue,
-                    valueColor: _textPrimary,
-                  ),
-                  const SizedBox(height: 12),
-                  _infoTile(
-                    icon: Icons.flag_outlined,
-                    label: _sourceLabel,
-                    value: widget.trackingType == "sell"
-                        ? "Collector to junkshop"
-                        : (_pickupSource == "pin"
-                            ? "Pinned location"
-                            : (_pickupSource == "gps"
-                                ? "Current location"
-                                : "Not specified")),
                     valueColor: _textPrimary,
                   ),
                   if (_landmark.trim().isNotEmpty) ...[
@@ -1211,7 +1302,6 @@ static const String _darkMapStyle = r'''
                       icon: Icons.landscape_outlined,
                       label: "LANDMARK",
                       value: _landmark,
-                      valueColor: _textPrimary,
                     ),
                   ],
                   if (_phoneNumber.trim().isNotEmpty) ...[
@@ -1220,7 +1310,6 @@ static const String _darkMapStyle = r'''
                       icon: Icons.phone_outlined,
                       label: "PHONE",
                       value: _phoneNumber,
-                      valueColor: _textPrimary,
                     ),
                   ],
                   const SizedBox(height: 18),
@@ -1233,7 +1322,6 @@ static const String _darkMapStyle = r'''
                           value: _routeDistanceText.isEmpty
                               ? "Calculating..."
                               : _routeDistanceText,
-                          valueColor: _textPrimary,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -1244,7 +1332,6 @@ static const String _darkMapStyle = r'''
                           value: _routeDurationText.isEmpty
                               ? "Calculating..."
                               : _routeDurationText,
-                          valueColor: _textPrimary,
                         ),
                       ),
                     ],
@@ -1267,7 +1354,7 @@ static const String _darkMapStyle = r'''
                       ),
                     ),
                   ),
-                  if (widget.trackingType == "sell") ...[
+                  if (_isSellTracking) ...[
                     const SizedBox(height: 12),
                     Row(
                       children: [
@@ -1384,64 +1471,6 @@ static const String _darkMapStyle = r'''
     );
   }
 
-  Widget _infoTile({
-    required IconData icon,
-    required String label,
-    required String value,
-    Color? valueColor,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _border),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: _surfaceAlt,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _border),
-            ),
-            child: Icon(icon, color: _textSecondary, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: _textMuted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  value,
-                  style: TextStyle(
-                    color: valueColor ?? _textPrimary,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
-                    height: 1.25,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _loadingOverlay() {
     if (!_loading) return const SizedBox.shrink();
 
@@ -1516,6 +1545,7 @@ class _TrackingMarkerPainter {
   final Color borderColor;
   final double size;
   final double iconSize;
+  final String? label;
 
   _TrackingMarkerPainter({
     required this.icon,
@@ -1524,30 +1554,69 @@ class _TrackingMarkerPainter {
     required this.borderColor,
     required this.size,
     required this.iconSize,
+    this.label,
   });
 
   void paint(Canvas canvas, Size s) {
-    final center = Offset(s.width / 2, s.height / 2);
-    final radius = s.width / 2.6;
+    final hasLabel = label != null && label!.trim().isNotEmpty;
 
-    final shadowPaint = Paint()
+    if (!hasLabel) {
+      final center = Offset(s.width / 2, s.height / 2);
+      final radius = s.width / 2.9;
+
+      final shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.24)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+      canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
+
+      final fillPaint = Paint()..color = backgroundColor;
+      canvas.drawCircle(center, radius, fillPaint);
+
+      final borderPaint = Paint()
+        ..color = borderColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4;
+      canvas.drawCircle(center, radius, borderPaint);
+
+      final iconPainter = TextPainter(textDirection: TextDirection.ltr);
+      iconPainter.text = TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontSize: iconSize,
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          color: iconColor,
+        ),
+      );
+      iconPainter.layout();
+
+      final iconOffset = Offset(
+        center.dx - iconPainter.width / 2,
+        center.dy - iconPainter.height / 2,
+      );
+      iconPainter.paint(canvas, iconOffset);
+      return;
+    }
+
+    final markerCenter = Offset(s.width * 0.20, s.height * 0.52);
+    final markerRadius = s.width * 0.15;
+
+    final markerShadow = Paint()
       ..color = Colors.black.withOpacity(0.28)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+    canvas.drawCircle(markerCenter.translate(0, 4), markerRadius, markerShadow);
 
-    canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
+    final markerFill = Paint()..color = backgroundColor;
+    canvas.drawCircle(markerCenter, markerRadius, markerFill);
 
-    final fillPaint = Paint()..color = backgroundColor;
-    canvas.drawCircle(center, radius, fillPaint);
-
-    final borderPaint = Paint()
+    final markerBorder = Paint()
       ..color = borderColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4;
+    canvas.drawCircle(markerCenter, markerRadius, markerBorder);
 
-    canvas.drawCircle(center, radius, borderPaint);
-
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    textPainter.text = TextSpan(
+    final iconPainter = TextPainter(textDirection: TextDirection.ltr);
+    iconPainter.text = TextSpan(
       text: String.fromCharCode(icon.codePoint),
       style: TextStyle(
         fontSize: iconSize,
@@ -1556,13 +1625,48 @@ class _TrackingMarkerPainter {
         color: iconColor,
       ),
     );
-    textPainter.layout();
+    iconPainter.layout();
 
     final iconOffset = Offset(
-      center.dx - textPainter.width / 2,
-      center.dy - textPainter.height / 2,
+      markerCenter.dx - iconPainter.width / 2,
+      markerCenter.dy - iconPainter.height / 2,
+    );
+    iconPainter.paint(canvas, iconOffset);
+
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+      ellipsis: '…',
     );
 
-    textPainter.paint(canvas, iconOffset);
+    textPainter.text = TextSpan(
+      text: label!,
+      style: TextStyle(
+        color: const Color(0xFFE2E8F0),
+        fontSize: s.width * 0.085,
+        fontWeight: FontWeight.w700,
+        letterSpacing: -0.3,
+      ),
+    );
+    textPainter.layout();
+
+    final shadowPainter = TextPainter(textDirection: TextDirection.ltr);
+    shadowPainter.text = TextSpan(
+      text: label!,
+      style: TextStyle(
+        color: Colors.black.withOpacity(0.6),
+        fontSize: s.width * 0.085,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+    shadowPainter.layout();
+
+    final textOffset = Offset(
+      markerCenter.dx + markerRadius + 10,
+      markerCenter.dy - textPainter.height / 2,
+    );
+
+    shadowPainter.paint(canvas, textOffset.translate(1.5, 1.5));
+    textPainter.paint(canvas, textOffset);
   }
 }

@@ -426,7 +426,8 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     try {
       final docRef = await FirebaseFirestore.instance.collection('requests').add({
         'type': 'pickup',
-        'active': true,
+        'active': _pickupType == "now",
+        'acceptedForLater': false,
         'householdId': user.uid,
         'householdName': householdName,
         'collectorId': _selectedCollectorId,

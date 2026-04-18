@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:ui';
-
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,13 +10,13 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+
 import 'collector_transaction_page.dart';
 import '../chat/screens/chat_page.dart';
 import '../chat/services/chat_services.dart';
 
 extension OpacityFix on Color {
-  Color o(double opacity) =>
-      withValues(alpha: ((opacity * 255).clamp(0, 255)).toDouble());
+  Color o(double opacity) => withValues(alpha: opacity.clamp(0.0, 1.0));
 }
 
 class PickupStop {
@@ -108,8 +110,9 @@ class PickupStop {
       bagKg: parsedBagKg,
       phoneNumber: (data['phoneNumber'] ?? '').toString(),
       hasCollectorReceipt: data['hasCollectorReceipt'] == true,
-      acceptedAt:
-          data['acceptedAt'] is Timestamp ? data['acceptedAt'] as Timestamp : null,
+      acceptedAt: data['acceptedAt'] is Timestamp
+          ? data['acceptedAt'] as Timestamp
+          : null,
     );
   }
 }
@@ -256,7 +259,17 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 ]
 ''';
+ 
+  static const List<Map<String, String>> _reportReasons = [
+    {"code": "harassment", "label": "Harassment"},
+    {"code": "rude_behavior", "label": "Rude behavior"},
+    {"code": "wrong_details", "label": "Wrong pickup details"},
+    {"code": "resident_unavailable", "label": "Resident unavailable"},
+    {"code": "false_complaint", "label": "False complaint"},
+    {"code": "other", "label": "Other"},
+  ];
 
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
   final ChatService _chat = ChatService();
   final FirebaseFunctions _functions =
       FirebaseFunctions.instanceFor(region: 'asia-southeast1');
@@ -266,6 +279,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   BitmapDescriptor? _collectorMarkerIcon;
   BitmapDescriptor? _householdMarkerIcon;
+  BitmapDescriptor? _moresMarkerIcon;
 
   bool _topExpanded = false;
   bool _loadingStops = true;
@@ -279,10 +293,20 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   List<LatLng> _route = [];
   String _distanceText = "";
   String _durationText = "";
-  int? _durationValueSec;
 
   StreamSubscription<Position>? _liveLocationSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _requestsSub;
+
+  User? get _currentUser => FirebaseAuth.instance.currentUser;
+
+  CollectionReference<Map<String, dynamic>> get _requestsRef =>
+      _db.collection('requests');
+
+  DocumentReference<Map<String, dynamic>> _requestRef(String requestId) =>
+      _requestsRef.doc(requestId);
+
+  DocumentReference<Map<String, dynamic>> _userRef(String uid) =>
+      _db.collection('Users').doc(uid);
 
   @override
   void initState() {
@@ -353,6 +377,15 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         borderColor: Colors.white.withOpacity(0.18),
       );
 
+      _moresMarkerIcon = await _iconToMarker(
+        icon: Icons.storefront_rounded,
+        iconColor: Colors.white,
+        backgroundColor: const Color(0xFF16A34A),
+        borderColor: Colors.transparent,
+        size: 220,
+        iconSize: 48,
+      );
+
       if (mounted) {
         setState(() {});
       }
@@ -362,11 +395,11 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<void> _markChatRead(String chatId) async {
-    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final me = _currentUser?.uid ?? "";
     if (me.isEmpty) return;
 
     try {
-      await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
+      await _db.collection('chats').doc(chatId).set({
         'lastReadBy': {me: FieldValue.serverTimestamp()},
       }, SetOptions(merge: true));
     } catch (e) {
@@ -376,6 +409,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
   Future<void> _startLiveLocationSharing() async {
     if (_stops.isEmpty) return;
+    if (_isSendingLiveLocation) return;
 
     final activeStops = _stops.where((stop) {
       final status = stop.status.toLowerCase().trim();
@@ -403,12 +437,15 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
     await _updateCollectorUserLiveLocation(position);
 
-    final batch = FirebaseFirestore.instance.batch();
+    final batch = _db.batch();
     for (final stop in activeStops) {
       batch.set(
-        FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
+        _requestRef(stop.requestId),
         {
-          'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
+          'collectorLiveLocation': GeoPoint(
+            position.latitude,
+            position.longitude,
+          ),
           'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
           'sharingLiveLocation': true,
         },
@@ -442,12 +479,15 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
         if (currentActiveStops.isEmpty) return;
 
-        final batch = FirebaseFirestore.instance.batch();
+        final batch = _db.batch();
         for (final stop in currentActiveStops) {
           batch.set(
-            FirebaseFirestore.instance.collection('requests').doc(stop.requestId),
+            _requestRef(stop.requestId),
             {
-              'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
+              'collectorLiveLocation': GeoPoint(
+                position.latitude,
+                position.longitude,
+              ),
               'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
               'sharingLiveLocation': true,
             },
@@ -456,7 +496,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         }
         await batch.commit();
       } catch (e) {
-        debugPrint('LIVE LOCATION UPDATE ERROR: $e');//pede naman tanggalin katamad lang hahaha
+        debugPrint('LIVE LOCATION UPDATE ERROR: $e');
       }
     });
   }
@@ -471,38 +511,272 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     } catch (e) {
       debugPrint('❌ clear collector user live location failed: $e');
     }
+
+    if (!clearFirestore) return;
+
+    try {
+      final activeStops = _stops.where((stop) {
+        final status = stop.status.toLowerCase().trim();
+        return status == 'accepted' ||
+            status == 'arrived' ||
+            status == 'ongoing';
+      }).toList();
+
+      if (activeStops.isEmpty) return;
+
+      final batch = _db.batch();
+      for (final stop in activeStops) {
+        batch.set(
+          _requestRef(stop.requestId),
+          {
+            'sharingLiveLocation': false,
+            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+      await batch.commit();
+    } catch (e) {
+      debugPrint('❌ failed to stop live location in requests: $e');
+    }
+  }
+
+  Future<void> _reportCurrentResident() async {
+    final stop = _currentStop;
+    final user = _currentUser;
+
+    if (stop == null || user == null) return;
+
+    final result = await _showReportDialog();
+    if (result == null) return;
+
+    final String reasonCode = (result["reasonCode"] ?? "").toString().trim();
+    final String reasonText = (result["reasonText"] ?? "").toString().trim();
+    final XFile? pickedImage = result["image"] as XFile?;
+
+    if (reasonCode.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a reason.")),
+      );
+      return;
+    }
+
+    try {
+      final existing = await _db
+          .collection('reports')
+          .where('requestId', isEqualTo: stop.requestId)
+          .where('reporterId', isEqualTo: user.uid)
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("You already submitted a report for this pickup."),
+          ),
+        );
+        return;
+      }
+
+      final reportRef = _db.collection('reports').doc();
+
+      await reportRef.set({
+        "reporterId": user.uid,
+        "reporterRole": "collector",
+        "reportedUserId": stop.householdId,
+        "reportedRole": "resident",
+        "requestId": stop.requestId,
+        "reasonCode": reasonCode,
+        "reasonText": reasonText,
+        "evidenceImageUrls": <String>[],
+        "status": "pending",
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      if (pickedImage != null) {
+        final file = File(pickedImage.path);
+
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child(
+              'report_images/${reportRef.id}/${DateTime.now().millisecondsSinceEpoch}.jpg',
+            );
+
+        final metadata = SettableMetadata(
+          contentType: 'image/jpeg',
+        );
+
+        await storageRef.putFile(file, metadata);
+        final downloadUrl = await storageRef.getDownloadURL();
+
+        await reportRef.update({
+          "evidenceImageUrls": [downloadUrl],
+          "updatedAt": FieldValue.serverTimestamp(),
+        });
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Report submitted.")),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Failed to submit report: ${e.message ?? e.code}"),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to submit report: $e")),
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>?> _showReportDialog() async {
+    String selectedCode = "harassment";
+    final detailsController = TextEditingController();
+    XFile? selectedImage;
+
+    final reasons = [
+      {"code": "harassment", "label": "Harassment"},
+      {"code": "wrong_details", "label": "Wrong details"},
+      {"code": "no_show", "label": "No show"},
+      {"code": "rude_behavior", "label": "Rude behavior"},
+      {"code": "other", "label": "Other"},
+    ];
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0F172A),
+              title: const Text(
+                "Report Resident",
+                style: TextStyle(color: Colors.white),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: selectedCode,
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      items: reasons
+                          .map(
+                            (r) => DropdownMenuItem<String>(
+                              value: r["code"],
+                              child: Text(r["label"]!),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => selectedCode = val);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: detailsController,
+                      style: const TextStyle(color: Colors.white),
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        hintText: "Add details (optional)",
+                        hintStyle: TextStyle(color: Colors.grey),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final picker = ImagePicker();
+                        final image = await picker.pickImage(
+                          source: ImageSource.gallery,
+                          imageQuality: 75,
+                        );
+                        if (image != null) {
+                          setState(() => selectedImage = image);
+                        }
+                      },
+                      icon: const Icon(Icons.image_outlined),
+                      label: Text(
+                        selectedImage == null
+                            ? "Upload Image (Optional)"
+                            : "Image Selected",
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text("Cancel"),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context, {
+                      "reasonCode": selectedCode,
+                      "reasonText": detailsController.text.trim(),
+                      "image": selectedImage,
+                    });
+                  },
+                  child: const Text(
+                    "Submit",
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _initPage() async {
     await _initLocation();
-    _listenToStops();
+    await _listenToStops();
   }
 
   Future<void> _updateCollectorUserLiveLocation(Position position) async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
     if (user == null) return;
 
-    await FirebaseFirestore.instance
-        .collection('Users')
-        .doc(user.uid)
-        .set({
-      'collectorLiveLocation': GeoPoint(
-        position.latitude,
-        position.longitude,
-      ),
+    await _userRef(user.uid).set({
+      'collectorLiveLocation': GeoPoint(position.latitude, position.longitude),
       'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
       'isOnline': true,
     }, SetOptions(merge: true));
   }
-  
+
   Future<void> _clearCollectorUserLiveLocation() async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
     if (user == null) return;
 
-    await FirebaseFirestore.instance
-        .collection('Users')
-        .doc(user.uid)
-        .set({
+    await _userRef(user.uid).set({
       'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
@@ -569,7 +843,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   Future<void> _listenToStops() async {
     await _requestsSub?.cancel();
 
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final uid = _currentUser?.uid;
     if (uid == null) {
       if (!mounted) return;
       setState(() {
@@ -579,8 +853,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       return;
     }
 
-    _requestsSub = FirebaseFirestore.instance
-        .collection('requests')
+    _requestsSub = _requestsRef
         .where('collectorId', isEqualTo: uid)
         .where('type', isEqualTo: 'pickup')
         .where('active', isEqualTo: true)
@@ -593,7 +866,8 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
           final stop = PickupStop.fromDoc(doc);
           if (stop == null) continue;
 
-          final status = (doc.data()['status'] ?? '').toString().toLowerCase().trim();
+          final status =
+              (doc.data()['status'] ?? '').toString().toLowerCase().trim();
 
           if (status == 'completed' ||
               status == 'rejected' ||
@@ -625,7 +899,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
             _stops = ordered;
             _currentStopIndex = _stops.isEmpty
                 ? 0
-                : (_currentStopIndex >= _stops.length ? _stops.length - 1 : _currentStopIndex);
+                : (_currentStopIndex >= _stops.length
+                    ? _stops.length - 1
+                    : _currentStopIndex);
             _loadingStops = false;
           });
         } else {
@@ -634,7 +910,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
             _stops = loadedStops;
             _currentStopIndex = _stops.isEmpty
                 ? 0
-                : (_currentStopIndex >= _stops.length ? _stops.length - 1 : _currentStopIndex);
+                : (_currentStopIndex >= _stops.length
+                    ? _stops.length - 1
+                    : _currentStopIndex);
             _loadingStops = false;
           });
         }
@@ -646,7 +924,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
             _route = [];
             _distanceText = "";
             _durationText = "";
-            _durationValueSec = null;
           });
           return;
         }
@@ -708,7 +985,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     final s = stop.status.toLowerCase();
     if (!(s == "accepted" || s == "arrived" || s == "scheduled")) return;
 
-    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final me = _currentUser?.uid ?? "";
     final collectorUid =
         stop.collectorId.trim().isNotEmpty ? stop.collectorId.trim() : me;
     if (collectorUid.isEmpty) return;
@@ -726,7 +1003,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<RouteSegment?> _getRouteSegment(
-      LatLng origin, LatLng destination) async {
+    LatLng origin,
+    LatLng destination,
+  ) async {
     try {
       final callable = _functions.httpsCallable('getDirections');
       final result = await callable.call({
@@ -813,7 +1092,9 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       }
 
       totalDurationSec += segment.durationSec;
-      if (segment.distanceText.isNotEmpty) distanceParts.add(segment.distanceText);
+      if (segment.distanceText.isNotEmpty) {
+        distanceParts.add(segment.distanceText);
+      }
 
       current = stop.latLng;
     }
@@ -821,9 +1102,10 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     if (!mounted) return;
     setState(() {
       _route = routePoints;
-      _durationValueSec = totalDurationSec;
-      _distanceText = distanceParts.isNotEmpty ? distanceParts.join(" + ") : "";
-      _durationText = totalDurationSec > 0 ? _formatDuration(totalDurationSec) : "";
+      _distanceText =
+          distanceParts.isNotEmpty ? distanceParts.join(" + ") : "";
+      _durationText =
+          totalDurationSec > 0 ? _formatDuration(totalDurationSec) : "";
       _loadingRoute = false;
     });
   }
@@ -877,165 +1159,48 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<void> _openJunkshopChat() async {
-  try {
-    final collectorUid = FirebaseAuth.instance.currentUser?.uid;
-    if (collectorUid == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You must be logged in to open chat.')),
-      );
-      return;
-    }
-
-    final stop = _currentStop;
-    if (stop == null || stop.requestId.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No active stop found for chat.')),
-      );
-      return;
-    }
-
-    if (_junkshopUid.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Junkshop account not available.')),
-      );
-      return;
-    }
-
-    final requestSnap = await FirebaseFirestore.instance
-        .collection('requests')
-        .doc(stop.requestId)
-        .get();
-
-    if (!requestSnap.exists) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request not found.')),
-      );
-      return;
-    }
-
-    final data = requestSnap.data() ?? {};
-    final status = (data['status'] ?? '').toString();
-    final active = data['active'] == true;
-
-    final canChat = active &&
-        (status == 'pending' ||
-            status == 'accepted' ||
-            status == 'arrived' ||
-            status == 'scheduled');
-
-    if (!canChat) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Chat is only available during an active transaction.'),
-        ),
-      );
-      return;
-    }
-
-    await _chat.ensureJunkshopChatForRequest(
-      requestId: stop.requestId,
-      junkshopUid: _junkshopUid,
-      collectorUid: collectorUid,
-    );
-
-    if (!mounted) return;
-
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ChatPage(
-          chatId: 'junkshop_pickup_${stop.requestId}',
-          title: _junkshopName.trim().isEmpty ? 'Junkshop' : _junkshopName,
-          otherUserId: _junkshopUid,
-        ),
-      ),
-    );
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Unable to open junkshop chat: $e')),
-    );
-  }
-}
-
-  Future<void> _openPickupChat() async {
-    final stop = _currentStop;
-    if (stop == null) return;
-
-    final s = stop.status.toLowerCase();
-    final canChat = s == "accepted" || s == "arrived" || s == "scheduled";
-
-    if (!canChat) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Chat is available once pickup is accepted.")),
-      );
-      return;
-    }
-
-    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
-    final householdUid = stop.householdId.trim();
-    var collectorUid = stop.collectorId.trim();
-
-    if (me.isEmpty || householdUid.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Chat IDs not loaded yet. Please try again.")),
-      );
-      return;
-    }
-
-    if (collectorUid.isEmpty) {
-      collectorUid = me;
-      try {
-        await FirebaseFirestore.instance
-            .collection('requests')
-            .doc(stop.requestId)
-            .update({
-          'collectorId': me,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-
-        final idx = _stops.indexWhere((s) => s.requestId == stop.requestId);
-        if (idx != -1 && mounted) {
-          setState(() {
-            _stops[idx] = _stops[idx].copyWith(collectorId: me);
-          });
-        }
-      } catch (e) {
-        debugPrint("❌ Failed to write collectorId: $e");
+    try {
+      final collectorUid = _currentUser?.uid;
+      if (collectorUid == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You must be logged in to open chat.')),
+        );
+        return;
       }
-    }
 
-    if (collectorUid.isEmpty) {
+      final stop = _currentStop;
+      if (stop == null || stop.requestId.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No active stop found for chat.')),
+        );
+        return;
+      }
+
+      await _chat.ensureJunkshopChatForRequest(
+        requestId: stop.requestId,
+        junkshopUid: _junkshopUid,
+        collectorUid: collectorUid,
+      );
+
+      if (!mounted) return;
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatPage(
+            chatId: 'junkshop_pickup_${stop.requestId}',
+            title: _junkshopName,
+            otherUserId: _junkshopUid,
+          ),
+        ),
+      );
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Collector not assigned yet.")),
+        SnackBar(content: Text('Unable to open junkshop chat: $e')),
       );
-      return;
     }
-
-    final chatId = await _chat.ensurePickupChat(
-      requestId: stop.requestId,
-      householdUid: householdUid,
-      collectorUid: collectorUid,
-    );
-
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatPage(
-          chatId: chatId,
-          title: stop.householdName.isEmpty ? "Household" : stop.householdName,
-          otherUserId: householdUid,
-        ),
-      ),
-    );
   }
 
   Future<void> _openStopChat(PickupStop stop) async {
@@ -1045,12 +1210,14 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     if (!canChat) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Chat is available once pickup is accepted.")),
+        const SnackBar(
+          content: Text("Chat is available once pickup is accepted."),
+        ),
       );
       return;
     }
 
-    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final me = _currentUser?.uid ?? "";
     final householdUid = stop.householdId.trim();
     var collectorUid = stop.collectorId.trim();
 
@@ -1082,31 +1249,33 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
   }
 
   Future<void> _openCollectorReceipt() async {
-  final stop = _currentStop;
+    final stop = _currentStop;
     if (stop == null) return;
 
     final s = stop.status.toLowerCase();
     if (s != "arrived") {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Create receipt is available once you are ARRIVED.")),
+        const SnackBar(
+          content: Text(
+            "Create receipt is available once you are ARRIVED.",
+          ),
+        ),
       );
       return;
     }
 
     try {
-      final reqDoc = await FirebaseFirestore.instance
-          .collection('requests')
-          .doc(stop.requestId)
-          .get();
-
+      final reqDoc = await _requestRef(stop.requestId).get();
       final data = reqDoc.data() ?? {};
       final hasReceipt = data['hasCollectorReceipt'] == true;
 
       if (hasReceipt) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Order already created for this pickup.")),
+          const SnackBar(
+            content: Text("Order already created for this pickup."),
+          ),
         );
         return;
       }
@@ -1124,7 +1293,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
       ),
     );
 
-      if (saved == true) {
+    if (saved == true) {
       await _stopLiveLocationSharing(clearFirestore: true);
       await _removeCompletedStopAndMoveNext(stop.requestId);
     }
@@ -1144,7 +1313,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         _route = [];
         _distanceText = "";
         _durationText = "";
-        _durationValueSec = null;
         return;
       }
 
@@ -1174,137 +1342,99 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     if (!mounted || nextStop == null) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Completed and removed. Next stop: ${nextStop.householdName}")),
+      SnackBar(
+        content: Text(
+          "Completed and removed. Next stop: ${nextStop.householdName}",
+        ),
+      ),
     );
   }
 
-  Future<void> _moveToNextStopAfterComplete() async {
-    _junkshopChatEnsured = false;
-    final nextIndex = _currentStopIndex + 1;
+  Future<void> _markArrivedOrComplete() async {
+    final stop = _currentStop;
+    if (stop == null) return;
 
-    if (!mounted) return;
+    final s = stop.status.toLowerCase();
 
-    if (nextIndex < _stops.length) {
-      setState(() {
-        _currentStopIndex = nextIndex;
+    if (s == 'arrived') {
+      await _openCollectorReceipt();
+      return;
+    }
+
+    try {
+      await _requestRef(stop.requestId).update({
+        'status': 'arrived',
+        'arrived': true,
+        'arrivedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      await _startLiveLocationSharing();
-      await _ensureJunkshopChatIfNeeded();
-      await _buildMultiStopRoute();
-      await _focusCameraOnCurrentStop();
-
-      final stop = _currentStop;
-      if (!mounted || stop == null) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Moved to next stop: ${stop.householdName}")),
-      );
-    } else {
-      await _stopLiveLocationSharing(clearFirestore: true);
+      final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
+      if (idx != -1 && mounted) {
+        setState(() {
+          _stops[idx] = _stops[idx].copyWith(status: 'arrived');
+        });
+      }
 
       if (!mounted) return;
-      setState(() {
-        _stops = [];
-        _currentStopIndex = 0;
-        _route = [];
-        _distanceText = "";
-        _durationText = "";
-        _durationValueSec = null;
-      });
-
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("All pickup stops completed.")),
+        const SnackBar(content: Text("Marked as arrived.")),
+      );
+
+      await _openCollectorReceipt();
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Arrived failed: ${e.code}")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e")),
       );
     }
   }
 
- Future<void> _markArrivedOrComplete() async {
-  final stop = _currentStop;
-  if (stop == null) return;
+  Future<void> _goToStop(int index) async {
+    if (index < 0 || index >= _stops.length) return;
 
-  final s = stop.status.toLowerCase();
+    await _stopLiveLocationSharing(clearFirestore: true);
+    _junkshopChatEnsured = false;
 
-  if (s == 'arrived') {
-    await _openCollectorReceipt();
-    return;
-  }
-
-  try {
-    await FirebaseFirestore.instance
-        .collection('requests')
-        .doc(stop.requestId)
-        .update({
-      'status': 'arrived',
-      'arrived': true,
-      'arrivedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+    setState(() {
+      _currentStopIndex = index;
     });
 
-    final idx = _stops.indexWhere((x) => x.requestId == stop.requestId);
-    if (idx != -1 && mounted) {
-      setState(() {
-        _stops[idx] = _stops[idx].copyWith(status: 'arrived');
-      });
-    }
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Marked as arrived.")),
-    );
-
-    // Go directly to receipt/audit screen after ARRIVED
-    await _openCollectorReceipt();
-  } on FirebaseException catch (e) {
-    debugPrint("❌ Arrived failed: ${e.code} | ${e.message}");
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Arrived failed: ${e.code}")),
-    );
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Error: $e")),
-    );
+    await _ensureJunkshopChatIfNeeded();
+    await _buildMultiStopRoute();
+    await _focusCameraOnCurrentStop();
+    await _startLiveLocationSharing();
   }
-}
-
-@override
-void dispose() {
-  _requestsSub?.cancel();
-  _liveLocationSub?.cancel();
-  _map?.dispose();
-  super.dispose();
-}
-
-Future<void> _goToStop(int index) async {
-  if (index < 0 || index >= _stops.length) return;
-
-  // 🔴 STOP previous request tracking FIRST
-  await _stopLiveLocationSharing(clearFirestore: true);
-
-  // reset junkshop guard for new request
-  _junkshopChatEnsured = false;
-
-  setState(() {
-    _currentStopIndex = index;
-  });
-
-  await _ensureJunkshopChatIfNeeded();
-  await _buildMultiStopRoute();
-  await _focusCameraOnCurrentStop();
-  await _startLiveLocationSharing();
-}
 
   Set<Marker> _buildMarkers() {
     return <Marker>{
+      if (_stops.isNotEmpty)
+        Marker(
+          markerId: MarkerId("mores_scrap_${_moresMarkerIcon?.hashCode ?? 0}"),
+          position: const LatLng(14.5995, 120.9842),
+          anchor: const Offset(0.20, 0.52),
+          infoWindow: const InfoWindow(title: "Mores Scrap"),
+          icon: _moresMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueGreen,
+              ),
+          zIndex: 10,
+        ),
       if (_pos != null)
         Marker(
           markerId: const MarkerId("me"),
           position: LatLng(_pos!.latitude, _pos!.longitude),
+          anchor: const Offset(0.5, 0.52),
           infoWindow: const InfoWindow(title: "You / Collector"),
           icon: _collectorMarkerIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+              BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueAzure,
+              ),
           zIndex: 3,
         ),
       ..._stops.asMap().entries.map((entry) {
@@ -1315,12 +1445,15 @@ Future<void> _goToStop(int index) async {
         return Marker(
           markerId: MarkerId(stop.requestId),
           position: stop.latLng,
+          anchor: const Offset(0.5, 0.52),
           infoWindow: InfoWindow(
             title: "Stop ${index + 1}: ${stop.householdName}",
             snippet: stop.pickupAddress,
           ),
           icon: _householdMarkerIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
+              BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueRose,
+              ),
           zIndex: isCurrent ? 2 : 1,
         );
       }),
@@ -1361,8 +1494,10 @@ Future<void> _goToStop(int index) async {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 320),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 18,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withOpacity(0.52),
                     borderRadius: BorderRadius.circular(20),
@@ -1416,12 +1551,15 @@ Future<void> _goToStop(int index) async {
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.06),
                           borderRadius: BorderRadius.circular(14),
-                          border:
-                              Border.all(color: Colors.white.withOpacity(0.08)),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.08),
+                          ),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -1455,6 +1593,7 @@ Future<void> _goToStop(int index) async {
       ),
     );
   }
+
   @override
   void didUpdateWidget(covariant CollectorPickupMapPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -1466,6 +1605,14 @@ Future<void> _goToStop(int index) async {
       _loadingStops = true;
       _listenToStops();
     }
+  }
+
+  @override
+  void dispose() {
+    _requestsSub?.cancel();
+    _liveLocationSub?.cancel();
+    _map?.dispose();
+    super.dispose();
   }
 
   @override
@@ -1491,7 +1638,7 @@ Future<void> _goToStop(int index) async {
                   _map = c;
                   await _map?.setMapStyle(_darkMapStyle);
                 },
-                myLocationEnabled: _pos != null,
+                myLocationEnabled: false,
                 markers: markers,
                 zoomControlsEnabled: false,
                 mapToolbarEnabled: false,
@@ -1518,7 +1665,7 @@ Future<void> _goToStop(int index) async {
                 _map = c;
                 await _map?.setMapStyle(_darkMapStyle);
               },
-              myLocationEnabled: _pos != null,
+              myLocationEnabled: false,
               markers: markers,
               polylines: polylines,
               zoomControlsEnabled: false,
@@ -1620,7 +1767,8 @@ Future<void> _goToStop(int index) async {
                                               ),
                                               _pillChip(
                                                 icon: Icons.info_outline,
-                                                text: currentStop.status.isEmpty
+                                                text: currentStop
+                                                        .status.isEmpty
                                                     ? "Status: —"
                                                     : "Status: ${currentStop.status.toUpperCase()}",
                                               ),
@@ -1671,11 +1819,7 @@ Future<void> _goToStop(int index) async {
                       color: Colors.black.withOpacity(0.55),
                       borderRadius:
                           const BorderRadius.vertical(top: Radius.circular(22)),
-                      border: Border(
-                        top: BorderSide(
-                          color: Colors.white.withOpacity(0.10),
-                        ),
-                      ),
+                      border: Border.all(color: Colors.transparent),
                     ),
                     child: ListView(
                       controller: scrollController,
@@ -1702,12 +1846,15 @@ Future<void> _goToStop(int index) async {
                         else ...[
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
                             decoration: BoxDecoration(
                               color: _card,
                               borderRadius: BorderRadius.circular(14),
-                              border:
-                                  Border.all(color: Colors.white.withOpacity(0.08)),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.08),
+                              ),
                             ),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1741,8 +1888,9 @@ Future<void> _goToStop(int index) async {
                             decoration: BoxDecoration(
                               color: _card,
                               borderRadius: BorderRadius.circular(16),
-                              border:
-                                  Border.all(color: Colors.white.withOpacity(0.08)),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.08),
+                              ),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1780,35 +1928,46 @@ Future<void> _goToStop(int index) async {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: _actionWide(
-                                icon: currentStop?.status.toLowerCase() == 'arrived'
-                                    ? Icons.receipt_long
-                                    : Icons.location_on_outlined,
-                                title: currentStop?.status.toLowerCase() == 'arrived'
-                                    ? "Save & Complete"
-                                    : "ARRIVED",
-                                subtitle: currentStop?.status.toLowerCase() == 'arrived'
-                                    ? "COMPLETE & SAVE"
-                                    : "Mark current stop",
-                                bg: _accent,
-                                fg: _bg,
-                                onTap: _markArrivedOrComplete,
+                                  icon: currentStop?.status.toLowerCase() ==
+                                          'arrived'
+                                      ? Icons.receipt_long
+                                      : Icons.location_on_outlined,
+                                  title: currentStop?.status.toLowerCase() ==
+                                          'arrived'
+                                      ? "Save & Complete"
+                                      : "ARRIVED",
+                                  subtitle: currentStop?.status.toLowerCase() ==
+                                          'arrived'
+                                      ? "COMPLETE & SAVE"
+                                      : "Mark current stop",
+                                  bg: _accent,
+                                  fg: _bg,
+                                  onTap: _markArrivedOrComplete,
+                                ),
                               ),
-                               ),
                             ],
                           ),
-                        
                           const SizedBox(height: 10),
                           if (currentStop?.phoneNumber.trim().isNotEmpty == true)
                             _actionWide(
                               icon: Icons.call_outlined,
                               title: "CALL",
-                              subtitle: "Contact household",
-                              bg: Colors.white.withOpacity(0.10),
+                              subtitle: "Contact",
+                              bg: _card,
                               fg: Colors.white,
-                              border: Colors.white.withOpacity(0.14),
+                              border: Colors.white.withOpacity(0.08),
                               onTap: _callCurrentStop,
                             ),
                           const SizedBox(height: 10),
+                          _actionWide(
+                            icon: Icons.report_gmailerrorred_outlined,
+                            title: "REPORT",
+                            subtitle: "Report resident",
+                            bg: Colors.redAccent.withOpacity(0.12),
+                            fg: Colors.white,
+                            border: Colors.redAccent.withOpacity(0.35),
+                            onTap: _reportCurrentResident,
+                          ),
                         ],
                       ],
                     ),
@@ -1920,14 +2079,11 @@ Future<void> _goToStop(int index) async {
   }
 
   Widget _buildStopChatButton(PickupStop stop) {
-    final me = FirebaseAuth.instance.currentUser?.uid ?? "";
+    final me = _currentUser?.uid ?? "";
     final chatId = "pickup_${stop.requestId}";
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('chats')
-          .doc(chatId)
-          .snapshots(),
+      stream: _db.collection('chats').doc(chatId).snapshots(),
       builder: (context, snap) {
         bool hasUnread = false;
 
@@ -1944,30 +2100,25 @@ Future<void> _goToStop(int index) async {
             myLastRead = lastReadBy[me] as Timestamp;
           }
 
-          if (lastMessageAt is Timestamp &&
-              lastMessageSenderId.isNotEmpty &&
-              lastMessageSenderId != me) {
-            if (myLastRead == null ||
-                myLastRead.millisecondsSinceEpoch <
-                    lastMessageAt.millisecondsSinceEpoch) {
-              hasUnread = true;
-            }
+          if (lastMessageAt is Timestamp && lastMessageSenderId != me) {
+            hasUnread = myLastRead == null ||
+                lastMessageAt.toDate().isAfter(myLastRead.toDate());
           }
         }
 
         return InkWell(
           onTap: () => _openStopChat(stop),
-          borderRadius: BorderRadius.circular(999),
+          borderRadius: BorderRadius.circular(14),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
               Container(
-                width: 40,
-                height: 40,
+                width: 42,
+                height: 42,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.08),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withOpacity(0.10)),
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
                 ),
                 child: const Icon(
                   Icons.chat_bubble_outline,
@@ -1977,18 +2128,14 @@ Future<void> _goToStop(int index) async {
               ),
               if (hasUnread)
                 Positioned(
-                  top: -1,
-                  right: -1,
+                  right: -2,
+                  top: -2,
                   child: Container(
                     width: 10,
                     height: 10,
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: Colors.redAccent,
                       shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFF111928),
-                        width: 1.5,
-                      ),
                     ),
                   ),
                 ),
@@ -1999,58 +2146,12 @@ Future<void> _goToStop(int index) async {
     );
   }
 
-  Widget _tinyBadge(IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: Colors.white.withOpacity(0.85)),
-          const SizedBox(width: 5),
-          Text(
-            text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _miniStat(IconData icon, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Colors.white.withOpacity(0.85)),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            value,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              fontSize: 12,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _glass({
     required Widget child,
+    EdgeInsetsGeometry padding = EdgeInsets.zero,
+    double radius = 18,
     double blur = 12,
-    double opacity = 0.55,
-    double radius = 16,
-    EdgeInsets padding = const EdgeInsets.all(14),
+    double opacity = 0.45,
   }) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
@@ -2061,7 +2162,7 @@ Future<void> _goToStop(int index) async {
           decoration: BoxDecoration(
             color: Colors.black.withOpacity(opacity),
             borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withOpacity(0.10)),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
           ),
           child: child,
         ),
@@ -2069,56 +2170,101 @@ Future<void> _goToStop(int index) async {
     );
   }
 
-  Widget _circularButton(IconData icon, {VoidCallback? onTap}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: _bg.o(0.92),
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white.o(0.14)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.o(0.35),
-              blurRadius: 16,
-              offset: const Offset(0, 10),
-            ),
-          ],
+  Widget _circularButton(
+    IconData icon, {
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.46),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
+          ),
+          child: Icon(icon, color: Colors.white, size: 20),
         ),
-        child: Icon(icon, size: 18, color: Colors.white),
       ),
     );
   }
 
-  Widget _pillChip({required IconData icon, required String text}) {
+  Widget _pillChip({
+    required IconData icon,
+    required String text,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
+        color: Colors.white.withOpacity(0.07),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withOpacity(0.10)),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: Colors.white.withOpacity(0.90)),
+          Icon(icon, size: 14, color: Colors.white.withOpacity(0.88)),
           const SizedBox(width: 6),
           Flexible(
             child: Text(
               text,
-              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: 12,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _tinyBadge(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: Colors.white.withOpacity(0.8)),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniStat(IconData icon, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: Colors.white.withOpacity(0.78)),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 
@@ -2129,81 +2275,47 @@ Future<void> _goToStop(int index) async {
     required Color bg,
     required Color fg,
     Color? border,
-    VoidCallback? onTap,
+    required VoidCallback onTap,
   }) {
-    final disabled = onTap == null;
-
-    return Opacity(
-      opacity: disabled ? 0.55 : 1.0,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          height: 56,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: (border ?? Colors.white.withOpacity(0.10))
-                  .withOpacity(disabled ? 0.55 : 1.0),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(disabled ? 0.10 : 0.18),
-                blurRadius: 14,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(
-                    disabled
-                        ? 0.10
-                        : (bg == Colors.white || bg == _accent ? 0.06 : 0.18),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: border ?? Colors.transparent),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: fg),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, size: 18, color: fg),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: fg,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                        letterSpacing: 0.4,
-                      ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: fg.withOpacity(0.82),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: fg.withOpacity(0.80),
-                        fontWeight: FontWeight.w700,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -2229,12 +2341,11 @@ class _MarkerPainter {
 
   void paint(Canvas canvas, Size s) {
     final center = Offset(s.width / 2, s.height / 2);
-    final radius = s.width / 2.6;
+    final radius = s.width / 2.9;
 
     final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.28)
+      ..color = Colors.black.withOpacity(0.24)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-
     canvas.drawCircle(center.translate(0, 4), radius, shadowPaint);
 
     final fillPaint = Paint()..color = backgroundColor;
@@ -2244,11 +2355,10 @@ class _MarkerPainter {
       ..color = borderColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4;
-
     canvas.drawCircle(center, radius, borderPaint);
 
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    textPainter.text = TextSpan(
+    final iconPainter = TextPainter(textDirection: TextDirection.ltr);
+    iconPainter.text = TextSpan(
       text: String.fromCharCode(icon.codePoint),
       style: TextStyle(
         fontSize: iconSize,
@@ -2257,13 +2367,12 @@ class _MarkerPainter {
         color: iconColor,
       ),
     );
-    textPainter.layout();
+    iconPainter.layout();
 
     final iconOffset = Offset(
-      center.dx - textPainter.width / 2,
-      center.dy - textPainter.height / 2,
+      center.dx - iconPainter.width / 2,
+      center.dy - iconPainter.height / 2,
     );
-
-    textPainter.paint(canvas, iconOffset);
+    iconPainter.paint(canvas, iconOffset);
   }
 }
