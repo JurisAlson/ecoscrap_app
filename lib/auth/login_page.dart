@@ -254,10 +254,33 @@ class _LoginPageState extends State<LoginPage> {
     unawaited(_trySaveFcmToken());
 
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const RoleGate()),
-      (_) => false,
-    );
+
+      final userRef =
+          FirebaseFirestore.instance.collection('Users').doc(user.uid);
+      final userSnap = await userRef.get();
+      final userData = userSnap.data() ?? {};
+
+      final hasAcceptedRules = userData['hasAcceptedRules'] == true;
+
+      if (!hasAcceptedRules) {
+        final acceptedRules = await _showRulesAndPolicyDialog();
+
+        if (!acceptedRules) {
+          return;
+        }
+
+        await userRef.set({
+          'hasAcceptedRules': true,
+          'hasAcceptedRulesAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const RoleGate()),
+        (_) => false,
+      );
     } on FirebaseAuthException catch (e) {
     debugPrint("AUTH ERROR: ${e.code} / ${e.message}");
 
@@ -339,6 +362,160 @@ class _LoginPageState extends State<LoginPage> {
       ),
     );
   }
+
+  Future<bool> _showRulesAndPolicyDialog() async {
+  bool agreed = false;
+
+  final result = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) {
+      return StatefulBuilder(
+        builder: (context, setLocalState) {
+          return Dialog(
+            backgroundColor: const Color(0xFF0F172A),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(30),
+              side: BorderSide(
+                color: Colors.white.withOpacity(0.08),
+                width: 1,
+              ),
+            ),
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Image.asset(
+                        'assets/icons/logo.png', // adjust path if needed
+                        height: 32,
+                        width: 32,
+                        fit: BoxFit.contain,
+                      ),
+                      const SizedBox(width: 10),
+                      const Text(
+                        "Welcome!",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const SizedBox(
+                    height: 260,
+                    child: SingleChildScrollView(
+                      child: Text(
+                        "Before you continue, please take a moment to review the guidelines below:\n\n"
+                        "• Provide accurate and truthful information.\n\n"
+                        "• Submit valid identification that belongs to you.\n\n"
+                        "• Maintain only one account.\n\n"
+                        "• Avoid spam, abuse, or any fraudulent activity.\n\n"
+                        "• Respect other users and follow community guidelines.\n\n"
+                        "• Your information may be reviewed for verification and security purposes.\n\n"
+                        "By tapping OK, you agree to use the app responsibly and follow these guidelines.",
+                        style: TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 14,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Checkbox(
+                        value: agreed,
+                        activeColor: const Color(0xFF1FA9A7),
+                        checkColor: const Color(0xFF0F172A),
+                        side: BorderSide(
+                          color: Colors.white.withOpacity(0.35),
+                        ),
+                        onChanged: (value) {
+                          setLocalState(() {
+                            agreed = value ?? false;
+                          });
+                        },
+                      ),
+                      const SizedBox(width: 4),
+                      const Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.only(top: 12),
+                          child: Text(
+                            "I have read and agree to the app rules and policy.",
+                            style: TextStyle(
+                              color: Color(0xFF94A3B8),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(false),
+                        child: const Text(
+                          "Cancel",
+                          style: TextStyle(
+                            color: Color(0xFF94A3B8),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 42,
+                        child: ElevatedButton(
+                          onPressed: agreed
+                              ? () => Navigator.of(dialogContext).pop(true)
+                              : null,
+                          style: ElevatedButton.styleFrom(
+                            elevation: 0,
+                            backgroundColor: const Color(0xFF1FA9A7),
+                            foregroundColor: const Color(0xFF0F172A),
+                            disabledBackgroundColor: const Color(0xFF1E293B),
+                            disabledForegroundColor: const Color(0xFF64748B),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 24),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(22),
+                            ),
+                          ),
+                          child: const Text(
+                            "OK",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+
+  return result == true;
+}
+
 
   Widget _buildTextField({
     required TextEditingController controller,

@@ -107,6 +107,37 @@ class ChatService {
     });
   }
 
+Future<String?> ensureSellChat({
+  required String collectorId,
+  required String junkshopId,
+  required String sellRequestId,
+}) async {
+  final db = FirebaseFirestore.instance;
+
+  final query = await db
+      .collection('chats')
+      .where('sellRequestId', isEqualTo: sellRequestId)
+      .limit(1)
+      .get();
+
+  if (query.docs.isNotEmpty) {
+    return query.docs.first.id;
+  }
+
+  final doc = await db.collection('chats').add({
+    'type': 'collector_junkshop_sell',
+    'participants': [collectorId, junkshopId],
+    'collectorId': collectorId,
+    'junkshopId': junkshopId,
+    'sellRequestId': sellRequestId,
+    'createdAt': FieldValue.serverTimestamp(),
+    'lastMessage': '',
+    'lastMessageAt': FieldValue.serverTimestamp(),
+  });
+
+  return doc.id;
+}
+
 Future<String> ensureDropoffChat({
   required String requestId,
   required String householdUid,

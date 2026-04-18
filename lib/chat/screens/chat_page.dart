@@ -86,11 +86,10 @@ class _FullScreenImagePage extends StatelessWidget {
 }
 class _CameraPreviewPage extends StatelessWidget {
   final File imageFile;
-  final Function(File) onSend;
 
   const _CameraPreviewPage({
+    super.key,
     required this.imageFile,
-    required this.onSend,
   });
 
   @override
@@ -99,7 +98,6 @@ class _CameraPreviewPage extends StatelessWidget {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // IMAGE PREVIEW
           Positioned.fill(
             child: Image.file(
               imageFile,
@@ -107,13 +105,12 @@ class _CameraPreviewPage extends StatelessWidget {
             ),
           ),
 
-          // TOP BAR (X button)
           Positioned(
             top: 40,
             left: 16,
             child: InkWell(
               onTap: () {
-                Navigator.pop(context); // retake
+                Navigator.pop(context); // cancel / retake
               },
               child: Container(
                 padding: const EdgeInsets.all(10),
@@ -129,7 +126,6 @@ class _CameraPreviewPage extends StatelessWidget {
             ),
           ),
 
-          // BOTTOM BUTTONS
           Positioned(
             bottom: 40,
             left: 0,
@@ -137,10 +133,9 @@ class _CameraPreviewPage extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // RETAKE (optional big button)
                 InkWell(
                   onTap: () {
-                    Navigator.pop(context);
+                    Navigator.pop(context); // retake / cancel
                   },
                   child: Container(
                     padding: const EdgeInsets.all(14),
@@ -155,18 +150,14 @@ class _CameraPreviewPage extends StatelessWidget {
                     ),
                   ),
                 ),
-
                 const SizedBox(width: 40),
-
-                // SEND
                 InkWell(
-                  onTap: () async {
-                    await onSend(imageFile);
-                    Navigator.pop(context);
+                  onTap: () {
+                    Navigator.pop(context, imageFile); // return file to chat page
                   },
                   child: Container(
                     padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: Colors.green,
                       shape: BoxShape.circle,
                     ),
@@ -268,24 +259,22 @@ class _ChatPageState extends State<ChatPage> {
     );
 
     if (picked == null) return;
-
     if (!mounted) return;
 
-    await Navigator.push(
+    final File? fileToSend = await Navigator.push<File>(
       context,
       MaterialPageRoute(
         builder: (_) => _CameraPreviewPage(
           imageFile: File(picked.path),
-          onSend: (file) async {
-            await _chat.sendImageMessage(
-              chatId: widget.chatId,
-              file: file,
-              senderId: _me!,
-            );
-          },
         ),
       ),
     );
+
+    if (fileToSend == null) return;
+    if (!mounted) return;
+
+    await _startSingleImageUpload(fileToSend);
+    _jumpToBottomSoon();
   } catch (e) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
