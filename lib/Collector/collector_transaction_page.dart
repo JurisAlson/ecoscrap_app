@@ -1141,16 +1141,16 @@ class _SellFormState extends State<_SellForm> {
   Future<void> _submitSell(double currentKg) async {
   if (_saving) return;
 
-  // if (!_isWithinMoresWorkingHours()) {
-  //   ScaffoldMessenger.of(context).showSnackBar(
-  //     const SnackBar(
-  //       content: Text(
-  //         "Mores Scrap only accepts sell transactions from 7:00 AM to 5:00 PM.",
-  //       ),
-  //     ),
-  //   );
-  //   return;
-  // }
+  if (!_isWithinMoresWorkingHours()) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          "Mores Scrap only accepts sell transactions from 7:00 AM to 5:00 PM.",
+        ),
+      ),
+    );
+    return;
+  }
 
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return;
