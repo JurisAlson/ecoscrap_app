@@ -121,6 +121,8 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
   LatLng get _routeBaseLatLng => _effectivePickupLatLng;
 
+  LatLng? _lastCollectorLatLng;
+
   double get _distanceKm {
     final meters = Geolocator.distanceBetween(
       _routeBaseLatLng.latitude,
@@ -598,6 +600,13 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
         .where('isAvailableForHousehold', isEqualTo: true)
         .snapshots()
         .listen((snap) {
+
+      debugPrint("collector snapshot count: ${snap.docs.length}");
+      debugPrint("collector snapshot size: ${snap.docs.length}");
+
+      for (final d in snap.docs) {
+        print("collector: ${d.id} => ${d.data()}");
+      }
       final list = <Map<String, String>>[];
       final markers = <String, Marker>{};
 
@@ -611,9 +620,13 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
             (data['Name'] ?? data['displayName'] ?? "Collector").toString();
 
         final gp = data['collectorLiveLocation'];
-        if (gp is! GeoPoint) continue;
+        LatLng? latLng;
 
-        final latLng = LatLng(gp.latitude, gp.longitude);
+        if (gp is GeoPoint) {
+          latLng = LatLng(gp.latitude, gp.longitude);
+        } else {
+          continue;
+        }
 
         final distanceMeters = Geolocator.distanceBetween(
           base.latitude,
@@ -666,9 +679,21 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
 
       setState(() {
         _availableCollectors = list;
-        _onlineCollectorMarkers
-          ..clear()
-          ..addAll(markers);
+
+        // only replace when snapshot is valid
+        if (snap.docs.isNotEmpty) {
+          setState(() {
+          _availableCollectors = list;
+
+          // merge instead of wipe
+          _onlineCollectorMarkers.addAll(markers);
+
+          // REMOVE only collectors that are no longer in snapshot
+          _onlineCollectorMarkers.removeWhere((key, _) {
+            return !markers.containsKey(key);
+          });
+        });
+        }
 
         final stillThere = _selectedCollectorId != null &&
             _availableCollectors.any((c) => c['uid'] == _selectedCollectorId);
@@ -702,7 +727,15 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
       setState(() {
         _activeCollectorId = collectorId;
         _collectorName = collectorName;
-        _collectorLatLng = liveCollector;
+
+        if (liveCollector != null) {
+          _lastCollectorLatLng = liveCollector;
+          _collectorLatLng = liveCollector;
+        } else {
+          // ❗ DO NOT overwrite with null fallback blindly
+          // keep last known position only if it exists
+          _collectorLatLng = _lastCollectorLatLng ?? _collectorLatLng;
+        }
       });
 
       if (liveCollector != null) {
@@ -1316,14 +1349,8 @@ Future<void> _startDirectionsToMores() async {
         Marker(
           markerId: const MarkerId("collector_live"),
           position: _collectorLatLng!,
-          anchor: const Offset(0.5, 0.55),
-          infoWindow: InfoWindow(
-            title: _collectorName ?? "Collector",
-            snippet: "Approaching pickup location",
-          ),
           icon: _collectorMarkerIcon ??
               BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
-          zIndex: 4,
         ),
       );
     }

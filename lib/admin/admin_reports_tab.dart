@@ -14,11 +14,10 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
   static const Color _cardSoft = Color(0xFF162033);
   static const Color _accent = Color(0xFF1FA9A7);
 
-  String _statusFilter = 'all';
+  String _statusFilter = 'pending';
   bool _busy = false;
 
   static const List<String> _filters = [
-    'all',
     'pending',
     'reviewed',
     'resolved',
@@ -27,10 +26,6 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
 
   Query<Map<String, dynamic>> _buildQuery() {
     final ref = FirebaseFirestore.instance.collection('reports');
-
-    if (_statusFilter == 'all') {
-      return ref.orderBy('createdAt', descending: true);
-    }
 
     return ref
         .where('status', isEqualTo: _statusFilter)
@@ -278,6 +273,67 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
     );
   }
 
+  Widget _buildSegmentedControl() {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: _cardSoft,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: _filters.map((status) {
+          final selected = _statusFilter == status;
+          final color = _statusColor(status);
+
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() => _statusFilter = status),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? color.withOpacity(0.18)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: selected
+                        ? color.withOpacity(0.5)
+                        : Colors.transparent,
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _statusIcon(status),
+                      size: 16,
+                      color: selected
+                          ? color
+                          : Colors.white.withOpacity(0.6),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      status.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: selected
+                            ? color
+                            : Colors.white.withOpacity(0.6),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _filterChip(String status) {
     final selected = _statusFilter == status;
     final color = status == 'all' ? _accent : _statusColor(status);
@@ -321,8 +377,8 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
       style: ElevatedButton.styleFrom(
         elevation: 0,
         backgroundColor: onTap == null ? color.withOpacity(0.35) : color,
-        foregroundColor: Colors.black,
-        disabledForegroundColor: Colors.black54,
+        foregroundColor: Colors.white,
+        disabledForegroundColor: Colors.white70,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
@@ -710,45 +766,45 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
 
               const SizedBox(height: 16),
 
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  _actionButton(
-                    label: 'Reviewed',
-                    color: Colors.lightBlueAccent,
-                    icon: Icons.visibility_outlined,
-                    onTap: status == 'reviewed'
-                        ? null
-                        : () => _updateReportStatus(
-                              reportId: doc.id,
-                              status: 'reviewed',
-                            ),
-                  ),
-                  _actionButton(
-                    label: 'Resolved',
-                    color: Colors.greenAccent,
-                    icon: Icons.check_circle_outline,
-                    onTap: status == 'resolved'
-                        ? null
-                        : () => _updateReportStatus(
-                              reportId: doc.id,
-                              status: 'resolved',
-                            ),
-                  ),
-                  _actionButton(
-                    label: 'Dismiss',
-                    color: Colors.redAccent,
-                    icon: Icons.close_rounded,
-                    onTap: status == 'dismissed'
-                        ? null
-                        : () => _updateReportStatus(
-                              reportId: doc.id,
-                              status: 'dismissed',
-                            ),
-                  ),
-                ],
-              ),
+              if (status != 'resolved' && status != 'dismissed') ...[
+                const SizedBox(height: 16),
+
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    _actionButton(
+                      label: 'Reviewed',
+                      color: Colors.lightBlueAccent,
+                      icon: Icons.visibility_outlined,
+                      onTap: status == 'reviewed'
+                          ? null
+                          : () => _updateReportStatus(
+                                reportId: doc.id,
+                                status: 'reviewed',
+                              ),
+                    ),
+                    _actionButton(
+                      label: 'Resolved',
+                      color: Colors.greenAccent,
+                      icon: Icons.check_circle_outline,
+                      onTap: () => _updateReportStatus(
+                        reportId: doc.id,
+                        status: 'resolved',
+                      ),
+                    ),
+                    _actionButton(
+                      label: 'Dismiss',
+                      color: Colors.redAccent,
+                      icon: Icons.close_rounded,
+                      onTap: () => _updateReportStatus(
+                        reportId: doc.id,
+                        status: 'dismissed',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         );
@@ -775,11 +831,7 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
               _sectionLabel('Filter Reports'),
               const SizedBox(height: 8),
 
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _filters.map(_filterChip).toList(),
-              ),
+              _buildSegmentedControl(),
 
               const SizedBox(height: 12),
 

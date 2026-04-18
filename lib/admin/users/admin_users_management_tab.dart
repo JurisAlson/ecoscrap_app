@@ -367,7 +367,7 @@ class _AdminUsersManagementTabState extends State<AdminUsersManagementTab> {
               icon: const Icon(Icons.flag_outlined, color: Colors.red),
               label: const Text(
                 "Open Reports",
-                style: TextStyle(color: Colors.white),
+                style: TextStyle(color: Colors.red),
               ),
               style: TextButton.styleFrom(
                 foregroundColor: primaryColor,
