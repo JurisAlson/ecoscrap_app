@@ -178,10 +178,11 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
     String uid,
   ) async {
     final db = FirebaseFirestore.instance;
-    final photoSnap = await db.collection("collectorKYC").doc(uid).get();
+    final photoSnap = await db.collection("collectorEquipment").doc(uid).get();
     if (!photoSnap.exists) return null;
 
-    final photo = photoSnap.data() ?? {};
+    final data = photoSnap.data() ?? {};
+    final photo = (data["photo"] as Map<String, dynamic>?) ?? {};
 
     final storagePath = (photo["storagePath"] ?? "").toString().trim();
     if (storagePath.isEmpty) return null;

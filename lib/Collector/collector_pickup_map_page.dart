@@ -1505,7 +1505,7 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withOpacity(0.18),
-                        blurRadius: 18,
+                        blurRadius: 18, 
                         offset: const Offset(0, 10),
                       ),
                     ],
