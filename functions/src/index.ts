@@ -327,6 +327,54 @@ export const verifyJunkshop = onCall(
 );
 
 /* ====================================================
+  REJECT COLLECTOR
+==================================================== */
+
+export const rejectCollector = onCall(
+  { region: "asia-southeast1" },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required.");
+    }
+
+    if (request.auth.token?.admin !== true) {
+      throw new HttpsError("permission-denied", "Admin only.");
+    }
+
+    const uid = String(request.data?.uid || "").trim();
+    const reason = String(request.data?.reason || "").trim();
+
+    if (!uid) {
+      throw new HttpsError("invalid-argument", "uid required");
+    }
+
+    const db = admin.firestore();
+
+    await db.collection("collectorRequests").doc(uid).set(
+      {
+        status: "rejected",
+        adminRejectReason: reason,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    await db.collection("Users").doc(uid).set(
+      {
+        collectorStatus: "rejected",
+        collectorVerified: false,
+        collectorActive: false,
+        collectorRejectReason: reason,
+        collectorRejectedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return { ok: true };
+  }
+);
+/* ====================================================
   ADMIN-ONLY: Delete user (Auth + Firestore cleanup)
 ==================================================== */
 export const adminDeleteUser = onCall(
@@ -1347,6 +1395,12 @@ export const notifyCollectorAdminDecision = onDocumentUpdated(
         err: String(e),
       });
     }
+    const name = String(
+      after.publicName ||
+      after.residentName ||
+      after.name ||
+      "Collector"
+    ).trim();
 
     if (a === "adminapproved" || a === "approved") {
       await sendPushToUser(
