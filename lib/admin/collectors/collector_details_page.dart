@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../admin_helpers.dart';
 import '../admin_theme_page.dart';
 
+
 // 🔐 Crypto (ADMIN APP)
 import 'package:ecoscrap_app/security/admin_keys.dart';
 import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
@@ -163,7 +164,7 @@ class _CollectorDetailsPageState extends State<CollectorDetailsPage> {
   }) async {
     final callable = FirebaseFunctions.instanceFor(
       region: "asia-southeast1",
-    ).httpsCallable("rejectCollectorAndDeleteAccount");
+    ).httpsCallable("rejectCollector");
 
     await callable.call({
       "uid": uid,
