@@ -909,11 +909,27 @@ Future<void> _adminApproveResident(String uid) async {
                                       );
                                       Navigator.pop(context);
                                     }
-                                  } catch (_) {
+                                  } on FirebaseFunctionsException catch (e) {
+                                    debugPrint("========== REJECT ERROR ==========");
+                                    debugPrint("CODE: ${e.code}");
+                                    debugPrint("MESSAGE: ${e.message}");
+                                    debugPrint("DETAILS: ${e.details}");
+                                    debugPrint("=================================");
+
                                     if (mounted) {
                                       AdminHelpers.toast(
                                         context,
-                                        "Reject failed. Please try again.",
+                                        "Reject failed: ${e.message ?? e.code}",
+                                      );
+                                    }
+                                  } catch (e, st) {
+                                    debugPrint("REJECT ERROR: $e");
+                                    debugPrint("STACK: $st");
+
+                                    if (mounted) {
+                                      AdminHelpers.toast(
+                                        context,
+                                        "Reject failed: $e",
                                       );
                                     }
                                   } finally {

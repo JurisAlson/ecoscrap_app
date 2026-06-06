@@ -580,13 +580,32 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         return;
       }
 
+      final collectorDoc = await _db.collection('Users').doc(user.uid).get();
+      final collectorData = collectorDoc.data();
+
+      final collectorName = (
+        collectorData?['fullName'] ??
+        collectorData?['name'] ??
+        collectorData?['username'] ??
+        user.displayName ??
+        'Collector'
+      ).toString();
+
+      final residentName = stop.householdName.trim().isNotEmpty
+          ? stop.householdName.trim()
+          : 'Resident';
+
       final reportRef = _db.collection('reports').doc();
 
       await reportRef.set({
         "reporterId": user.uid,
+        "reporterName": collectorName,
         "reporterRole": "collector",
+
         "reportedUserId": stop.householdId,
+        "reportedUserName": residentName,
         "reportedRole": "resident",
+
         "requestId": stop.requestId,
         "reasonCode": reasonCode,
         "reasonText": reasonText,
@@ -1959,15 +1978,40 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
                               onTap: _callCurrentStop,
                             ),
                           const SizedBox(height: 10),
-                          _actionWide(
-                            icon: Icons.report_gmailerrorred_outlined,
-                            title: "REPORT",
-                            subtitle: "Report resident",
-                            bg: Colors.redAccent.withOpacity(0.12),
-                            fg: Colors.white,
-                            border: Colors.redAccent.withOpacity(0.35),
-                            onTap: _reportCurrentResident,
-                          ),
+                          if (currentStop != null)
+                            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                              stream: _db
+                                  .collection('reports')
+                                  .where('requestId', isEqualTo: currentStop.requestId)
+                                  .where('reporterId', isEqualTo: _currentUser?.uid ?? '')
+                                  .limit(1)
+                                  .snapshots(),
+                              builder: (context, reportSnap) {
+                                final alreadyReported =
+                                    (reportSnap.data?.docs ?? []).isNotEmpty;
+
+                                return Opacity(
+                                  opacity: alreadyReported ? 0.35 : 1.0,
+                                  child: _actionWide(
+                                    icon: Icons.report_gmailerrorred_outlined,
+                                    title: "REPORT",
+                                    subtitle: alreadyReported
+                                        ? "Already reported"
+                                        : "Report resident",
+                                    bg: Colors.redAccent.withOpacity(
+                                      alreadyReported ? 0.06 : 0.12,
+                                    ),
+                                    fg: Colors.white,
+                                    border: Colors.redAccent.withOpacity(
+                                      alreadyReported ? 0.12 : 0.35,
+                                    ),
+                                    onTap: alreadyReported
+                                        ? () {}
+                                        : _reportCurrentResident,
+                                  ),
+                                );
+                              },
+                            ),
                         ],
                       ],
                     ),

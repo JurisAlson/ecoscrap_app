@@ -517,6 +517,8 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
     final reasonText = (data['reasonText'] ?? '').toString();
     final status = (data['status'] ?? 'pending').toString().toLowerCase();
     final reporterRole = (data['reporterRole'] ?? '').toString();
+    final savedReporterName = (data['reporterName'] ?? '').toString();
+    final savedReportedName = (data['reportedUserName'] ?? '').toString();
     final reportedRole = (data['reportedRole'] ?? '').toString();
     final reporterId = (data['reporterId'] ?? '').toString();
     final reportedUserId = (data['reportedUserId'] ?? '').toString();
@@ -538,8 +540,13 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
       ),
       builder: (context, extraSnap) {
         final extra = extraSnap.data ?? {};
-        final reporterName = extra['reporterName'] ?? reporterId;
-        final reportedName = extra['reportedName'] ?? reportedUserId;
+        final reporterName = savedReporterName.isNotEmpty
+            ? savedReporterName
+            : (extra['reporterName'] ?? reporterId);
+
+        final reportedName = savedReportedName.isNotEmpty
+            ? savedReportedName
+            : (extra['reportedName'] ?? reportedUserId);
         final address = extra['address'] ?? '—';
         final phone = extra['phone'] ?? '—';
 
@@ -606,6 +613,7 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
                 ],
               ),
 
+        
               const SizedBox(height: 16),
 
               _metaBlock(

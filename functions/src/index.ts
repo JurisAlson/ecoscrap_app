@@ -154,6 +154,13 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
     const authUser = await admin.auth().getUser(uid);
     const email = String(authUser.email || "").trim();
 
+    const userSnap = await db.collection("Users").doc(uid).get();
+    const name = String(
+      userSnap.data()?.name ||
+      userSnap.data()?.publicName ||
+      "Resident"
+    );
+
     await sendPushToUser(
       uid,
       "Resident verification rejected.",
@@ -173,12 +180,15 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
         to: email,
         message: {
           subject: "EcoScrap Verification Rejected",
+          
           html: `
               <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
 
                 <p>Dear ${name},</p>
 
-                <p>We regret to inform you that your <strong>collector application has been declined</strong>.</p>
+                <p>We regret to inform you that your <strong>resident verification has been rejected</strong>.</p>
+
+                ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ""}
 
                 <p>You may review your submission and reapply at any time.</p>
 
@@ -216,12 +226,15 @@ exports.rejectResidentAndDeleteAccount = onCall({ region: "asia-southeast1" }, a
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     }).catch(() => null);
 
+    await db.collection("residentRequests").doc(uid).delete().catch(() => null);
     await db.collection("residentKYC").doc(uid).delete().catch(() => null);
 
     const userRef = db.collection("Users").doc(uid);
     await db.recursiveDelete(userRef).catch(() => null);
 
-    await admin.auth().deleteUser(uid);
+    await admin.auth().deleteUser(uid).catch((e) => {
+      if (e.code !== "auth/user-not-found") throw e;
+    });
 
     logger.info("rejectResidentAndDeleteAccount success", { uid });
     return { ok: true, uid };

@@ -430,11 +430,22 @@ class _OrderCard extends StatelessWidget {
       final reportRef =
           FirebaseFirestore.instance.collection('reports').doc();
 
+      final householdName = (data['householdName'] ??
+              user.displayName ??
+              'Resident')
+          .toString();
+
+      final collectorName = (data['collectorName'] ?? 'Collector').toString();
+
       await reportRef.set({
         "reporterId": user.uid,
+        "reporterName": householdName,
         "reporterRole": "resident",
+
         "reportedUserId": collectorId,
+        "reportedUserName": collectorName,
         "reportedRole": "collector",
+
         "requestId": requestId,
         "reasonCode": reasonCode,
         "reasonText": reasonText,
@@ -554,6 +565,7 @@ class _OrderCard extends StatelessWidget {
 
     final canReject = !arrived && !isClosed;
     final canChat = collectorId.isNotEmpty && !isClosed;
+    final canReport = collectorId.isNotEmpty && !isClosed;
     final canTrack = [
       'accepted',
       'confirmed',
@@ -783,29 +795,49 @@ class _OrderCard extends StatelessWidget {
                   },
                 ),
               ),
-              if (collectorId.isNotEmpty)
+              if (canReport)
                 Positioned(
                   top: 0,
                   right: canChat ? 56 : 0,
-                  child: InkWell(
-                    onTap: () => _reportCollector(context),
-                    borderRadius: BorderRadius.circular(999),
-                    child: Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: Colors.redAccent.withOpacity(0.18),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.redAccent.withOpacity(0.25),
+                  child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('reports')
+                        .where('requestId', isEqualTo: requestId)
+                        .where('reporterId', isEqualTo: FirebaseAuth.instance.currentUser?.uid ?? '')
+                        .limit(1)
+                        .snapshots(),
+                    builder: (context, reportSnap) {
+                      final alreadyReported =
+                          (reportSnap.data?.docs ?? []).isNotEmpty;
+
+                      return Opacity(
+                        opacity: alreadyReported ? 0.35 : 1.0,
+                        child: InkWell(
+                          onTap: alreadyReported ? null : () => _reportCollector(context),
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent.withOpacity(
+                                alreadyReported ? 0.08 : 0.18,
+                              ),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.redAccent.withOpacity(
+                                  alreadyReported ? 0.10 : 0.25,
+                                ),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.flag_outlined,
+                              color: Colors.redAccent,
+                              size: 20,
+                            ),
+                          ),
                         ),
-                      ),
-                      child: const Icon(
-                        Icons.flag_outlined,
-                        color: Colors.redAccent,
-                        size: 20,
-                      ),
-                    ),
+                      );
+                    },
                   ),
                 ),
           ],
