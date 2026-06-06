@@ -106,13 +106,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
         .snapshots()
         .map((s) => s.size);
   }
-  Stream<int> _pendingReportsCount() {
-    return FirebaseFirestore.instance
-        .collection("reports")
-        .where("status", isEqualTo: "pending")
-        .snapshots()
-        .map((s) => s.size);
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -249,18 +242,6 @@ class _AdminHomePageState extends State<AdminHomePage> {
                         );
                       },
                     ),
-                    StreamBuilder<int>(
-                    stream: _pendingReportsCount(),
-                    builder: (context, snap) {
-                      final pending = (snap.data ?? 0) > 0;
-                      return _navItem(
-                        4,
-                        Icons.flag_outlined,
-                        "Reports",
-                        badge: pending,
-                      );
-                    },
-                  ),
                     _navItem(3, Icons.people_alt_outlined, "Users"),
                   ],
                 ),
