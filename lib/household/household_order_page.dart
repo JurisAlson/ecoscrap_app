@@ -475,6 +475,29 @@ class _OrderCard extends StatelessWidget {
           "updatedAt": FieldValue.serverTimestamp(),
         });
       }
+      // NOTIFY ADMINS
+      final admins = await FirebaseFirestore.instance
+          .collection('Users')
+          .where('Roles', isEqualTo: 'admin')
+          .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+
+      for (final admin in admins.docs) {
+        final notifRef = admin.reference
+            .collection('notifications')
+            .doc();
+
+        batch.set(notifRef, {
+          'title': 'New Report Submitted',
+          'body': '$householdName reported $collectorName',
+          'type': 'admin_new_report',
+          'read': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
 
       if (!context.mounted) return;
 

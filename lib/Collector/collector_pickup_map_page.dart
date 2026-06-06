@@ -637,6 +637,30 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         });
       }
 
+            // Notify admins about new report
+      final admins = await _db
+          .collection('Users')
+          .where('Roles', isEqualTo: 'admin')
+          .get();
+
+      final batch = _db.batch();
+
+      for (final admin in admins.docs) {
+        final notifRef = admin.reference
+            .collection('notifications')
+            .doc();
+
+        batch.set(notifRef, {
+          'title': 'New Report Submitted',
+          'body': '$collectorName reported $residentName',
+          'type': 'admin_new_report',
+          'read': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Report submitted.")),

@@ -10,6 +10,7 @@ import 'admin_overview_tab.dart';
 import 'collectors/admin_collector_requests.dart';
 import 'residence/admin_residence_request.dart';
 import 'users/admin_users_management_tab.dart';
+import 'admin_reports_tab.dart';
 
 class AdminHomePage extends StatefulWidget {
   const AdminHomePage({super.key});
@@ -33,6 +34,7 @@ class _AdminHomePageState extends State<AdminHomePage> {
     AdminCollectorRequestsTab(),
     AdminResidentRequestsTab(),
     AdminUsersManagementTab(),
+    AdminReportsTab(),
   ];
 
   Future<void> _logout() async {
@@ -100,6 +102,13 @@ class _AdminHomePageState extends State<AdminHomePage> {
   Stream<int> _pendingResidentsCount() {
     return FirebaseFirestore.instance
         .collection("residentRequests")
+        .where("status", isEqualTo: "pending")
+        .snapshots()
+        .map((s) => s.size);
+  }
+  Stream<int> _pendingReportsCount() {
+    return FirebaseFirestore.instance
+        .collection("reports")
         .where("status", isEqualTo: "pending")
         .snapshots()
         .map((s) => s.size);
@@ -240,6 +249,18 @@ class _AdminHomePageState extends State<AdminHomePage> {
                         );
                       },
                     ),
+                    StreamBuilder<int>(
+                    stream: _pendingReportsCount(),
+                    builder: (context, snap) {
+                      final pending = (snap.data ?? 0) > 0;
+                      return _navItem(
+                        4,
+                        Icons.flag_outlined,
+                        "Reports",
+                        badge: pending,
+                      );
+                    },
+                  ),
                     _navItem(3, Icons.people_alt_outlined, "Users"),
                   ],
                 ),
@@ -398,6 +419,8 @@ class _AdminHomePageState extends State<AdminHomePage> {
                       setState(() => _index = 2);
                     } else if (type == 'admin_new_collector_request') {
                       setState(() => _index = 1);
+                    } else if (type == 'admin_new_report') {
+                      setState(() => _index = 4);
                     }
                   },
                   child: Container(
