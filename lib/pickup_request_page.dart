@@ -112,7 +112,6 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
   @override
   void initState() {
     super.initState();
-    _loadSavedPhoneNumber();
   }
 
   @override
@@ -231,40 +230,6 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
     });
   }
 
-  Future<void> _loadSavedPhoneNumber() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    try {
-      final doc =
-          await FirebaseFirestore.instance.collection('Users').doc(user.uid).get();
-
-      final data = doc.data();
-      if (data == null) return;
-
-      final savedPhone = (data['phoneNumber'] ?? '').toString().trim();
-      if (savedPhone.isNotEmpty) {
-        _phoneController.text = savedPhone;
-      }
-    } catch (e) {
-      debugPrint("Failed to load saved phone number: $e");
-    }
-  }
-
-  Future<void> _savePhoneNumber(String phone) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    try {
-      await FirebaseFirestore.instance.collection('Users').doc(user.uid).set({
-        'phoneNumber': phone,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      debugPrint("Failed to save phone number: $e");
-    }
-  }
-
   Future<String> _getUserName(String uid, {String fallback = "Unknown"}) async {
     try {
       final doc =
@@ -277,7 +242,6 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
       final email = (data['email'] ?? '').toString().trim();
       if (email.isNotEmpty) return email;
-
       return fallback;
     } catch (_) {
       return fallback;
@@ -472,8 +436,6 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
-
-      await _savePhoneNumber(phoneNumber);
 
       if (!mounted) return;
 

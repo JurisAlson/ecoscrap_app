@@ -1338,7 +1338,11 @@ Future<void> _clearCollectorUserLiveLocation() async {
     );
 
     if (saved == true) {
-      await _removeCompletedStopAndMoveNext(stop.requestId);
+      await _requestRef(stop.requestId).update({
+  'phoneNumber': FieldValue.delete(),
+  'pickupLocation': FieldValue.delete(),
+  'collectorLiveLocation': FieldValue.delete(),
+});
     }
   }
 
