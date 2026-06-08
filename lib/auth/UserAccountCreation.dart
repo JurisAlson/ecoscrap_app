@@ -654,6 +654,78 @@ print("residentRequests after transaction: ${check.data()}");
 
                 const SizedBox(height: 12),
 
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: Colors.redAccent.withOpacity(0.45),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            color: Colors.redAccent,
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              "Location Tracking Notice",
+                              style: TextStyle(
+                                color: Colors.redAccent,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 10),
+                      Text(
+                        "This application may track and store your real-time location while using app services.",
+                        style: TextStyle(
+                          color: Colors.white,
+                          height: 1.4,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        "Location data may be used to verify service areas, support collection requests, and improve resident safety.",
+                        style: TextStyle(
+                          color: Colors.white70,
+                          height: 1.4,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        "By creating an account, you acknowledge and consent to location tracking when required for app functionality.",
+                        style: TextStyle(
+                          color: Colors.white70,
+                          height: 1.4,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        "Do not continue if you do not agree to location tracking.",
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
                 _InfoCard(
                   title: "ID Verification Required",
                   icon: Icons.badge_outlined,
@@ -662,6 +734,25 @@ print("residentRequests after transaction: ${check.data()}");
                     _Bullet(text: "Make sure the ID is clear and readable"),
                     _Bullet(text: "Use your own ID when registering"),
                     _Bullet(text: "Admin will still review before approval"),
+                  ],
+                ),
+
+                _InfoCard(
+                  title: "Location Tracking Notice",
+                  icon: Icons.location_searching_outlined,
+                  children: const [
+                    _Bullet(
+                      text: "Your real-time location may be accessed while using the app.",
+                    ),
+                    _Bullet(
+                      text: "Location data is used to verify service areas, support collection requests, and improve resident safety.",
+                    ),
+                    _Bullet(
+                      text: "By creating an account and using the app, you consent to location tracking when required for app services.",
+                    ),
+                    _Bullet(
+                      text: "Do not continue if you do not agree to location tracking.",
+                    ),
                   ],
                 ),
 
