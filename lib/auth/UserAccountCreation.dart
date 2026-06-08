@@ -16,6 +16,7 @@ import 'package:ecoscrap_app/security/kyc_cyrpto.dart';
 import 'package:ecoscrap_app/security/kyc_shared_key.dart';
 import 'package:ecoscrap_app/security/admin_public_key.dart';
 import 'package:ecoscrap_app/security/resident_address_crypto.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class UserAccountCreationPage extends StatefulWidget {
   const UserAccountCreationPage({super.key});
@@ -220,6 +221,21 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
   }
 
   Future<void> _scanGovernmentId() async {
+    final cameraStatus = await Permission.camera.request();
+
+    if (!cameraStatus.isGranted) {
+      _toast(
+        "Camera permission is required to scan your ID.",
+        error: true,
+      );
+
+      if (cameraStatus.isPermanentlyDenied) {
+        await openAppSettings();
+      }
+
+      return;
+    }
+
     await _showInfoDialog(
       title: "Scan ID",
       icon: Icons.document_scanner_outlined,
@@ -232,11 +248,15 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       final declaredName = _nameController.text.trim();
 
       if (declaredName.isEmpty) {
-        _toast("Please enter your name before scanning your ID.", error: true);
+        _toast(
+          "Please enter your name before scanning your ID.",
+          error: true,
+        );
         return;
       }
 
       final dir = await getTemporaryDirectory();
+
       final outputPath =
           "${dir.path}/resident_id_${DateTime.now().millisecondsSinceEpoch}.jpg";
 
@@ -248,14 +268,22 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
       if (!isScanned) return;
 
       final file = File(outputPath);
+
       if (!await file.exists()) {
-        _toast("Failed to get scanned ID. Please try again.", error: true);
+        _toast(
+          "Failed to get scanned ID. Please try again.",
+          error: true,
+        );
         return;
       }
 
       final size = await file.length();
+
       if (size > 10 * 1024 * 1024) {
-        _toast("Scanned file is too large (Max 10MB). Please rescan.", error: true);
+        _toast(
+          "Scanned file is too large (Max 10MB). Please rescan.",
+          error: true,
+        );
         return;
       }
 
@@ -278,12 +306,19 @@ class _UserAccountCreationPageState extends State<UserAccountCreationPage> {
         title: "ID Accepted",
         icon: Icons.check_circle_outline,
         message:
-            "Your ID has been captured successfully.\n\nIt will be reviewed by the admin.",
+            "Your ID has been captured successfully.\n\n"
+            "It will be reviewed by the admin.",
       );
     } on PlatformException catch (e) {
-      _toast("Scanner failed: ${e.message ?? e.code}", error: true);
+      _toast(
+        "Scanner failed: ${e.message ?? e.code}",
+        error: true,
+      );
     } catch (e) {
-      _toast("Failed to scan ID: $e", error: true);
+      _toast(
+        "Failed to scan ID: $e",
+        error: true,
+      );
     }
   }
 
