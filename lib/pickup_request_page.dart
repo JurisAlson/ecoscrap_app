@@ -242,7 +242,6 @@ class _PickupRequestPageState extends State<PickupRequestPage> {
 
       final email = (data['email'] ?? '').toString().trim();
       if (email.isNotEmpty) return email;
-
       return fallback;
     } catch (_) {
       return fallback;
