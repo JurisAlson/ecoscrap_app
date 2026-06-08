@@ -408,28 +408,21 @@ class _BuyFormState extends State<_BuyForm> {
         SetOptions(merge: true),
       );
 
-      // Main request termination for BOTH collector and residence
-trx.set(
-  reqRef,
-  {
-    "hasCollectorReceipt": true,
-    "collectorReceiptAt": FieldValue.serverTimestamp(),
-    "updatedAt": FieldValue.serverTimestamp(),
-  },
-  SetOptions(merge: true),
-);
+      // Main request termination + delete private/location fields
+      trx.update(reqRef, {
+        "hasCollectorReceipt": true,
+        "collectorReceiptAt": FieldValue.serverTimestamp(),
+        "status": "completed",
+        "active": false,
+        "completedAt": FieldValue.serverTimestamp(),
+        "sharingLiveLocation": false,
+        "updatedAt": FieldValue.serverTimestamp(),
 
-trx.set(
-  reqRef,
-  {
-    "status": "completed",
-    "active": false,
-    "completedAt": FieldValue.serverTimestamp(),
-    "sharingLiveLocation": false,
-    "updatedAt": FieldValue.serverTimestamp(),
-  },
-  SetOptions(merge: true),
-);
+        "phoneNumber": FieldValue.delete(),
+        "destinationLocation": FieldValue.delete(),
+        "pickupAddress": FieldValue.delete(),
+        "pickupLocation": FieldValue.delete(),
+      });
 
       // Collector availability reset
 trx.set(

@@ -438,20 +438,20 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     await _updateCollectorUserLiveLocation(position);
 
     final batch = _db.batch();
-    for (final stop in activeStops) {
-      batch.set(
-        _requestRef(stop.requestId),
-        {
-          'collectorLiveLocation': GeoPoint(
-            position.latitude,
-            position.longitude,
-          ),
-          'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          'sharingLiveLocation': true,
-        },
-        SetOptions(merge: true),
-      );
-    }
+for (final stop in activeStops) {
+  batch.set(
+    _requestRef(stop.requestId),
+    {
+      'collectorLiveLocation': GeoPoint(
+        position.latitude,
+        position.longitude,
+      ),
+      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+      'sharingLiveLocation': true,
+    },
+    SetOptions(merge: true),
+  );
+}
     await batch.commit();
 
     await _liveLocationSub?.cancel();
@@ -526,14 +526,14 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
 
       final batch = _db.batch();
       for (final stop in activeStops) {
-        batch.set(
-          _requestRef(stop.requestId),
-          {
-            'sharingLiveLocation': false,
-            'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
+batch.update(
+  _requestRef(stop.requestId),
+  {
+    'collectorLiveLocation': FieldValue.delete(),
+    'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+    'sharingLiveLocation': false,
+  },
+);
       }
       await batch.commit();
     } catch (e) {
@@ -815,14 +815,16 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }, SetOptions(merge: true));
   }
 
-  Future<void> _clearCollectorUserLiveLocation() async {
-    final user = _currentUser;
-    if (user == null) return;
+Future<void> _clearCollectorUserLiveLocation() async {
+  final user = _currentUser;
+  if (user == null) return;
 
-    await _userRef(user.uid).set({
-      'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
+  await _userRef(user.uid).update({
+    'collectorLiveLocation': FieldValue.delete(),
+    'collectorLiveUpdatedAt': FieldValue.serverTimestamp(),
+    'isOnline': false,
+  });
+}
 
   Future<void> _initLocation() async {
     final ok = await _ensureLocationPermission();
@@ -961,7 +963,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
         }
 
         if (_stops.isEmpty) {
-          await _stopLiveLocationSharing(clearFirestore: true);
           if (!mounted) return;
           setState(() {
             _route = [];
@@ -1337,7 +1338,6 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     );
 
     if (saved == true) {
-      await _stopLiveLocationSharing(clearFirestore: true);
       await _removeCompletedStopAndMoveNext(stop.requestId);
     }
   }
@@ -1438,21 +1438,19 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
-  Future<void> _goToStop(int index) async {
-    if (index < 0 || index >= _stops.length) return;
+Future<void> _goToStop(int index) async {
+  if (index < 0 || index >= _stops.length) return;
 
-    await _stopLiveLocationSharing(clearFirestore: true);
-    _junkshopChatEnsured = false;
+  _junkshopChatEnsured = false;
 
-    setState(() {
-      _currentStopIndex = index;
-    });
+  setState(() {
+    _currentStopIndex = index;
+  });
 
-    await _ensureJunkshopChatIfNeeded();
-    await _buildMultiStopRoute();
-    await _focusCameraOnCurrentStop();
-    await _startLiveLocationSharing();
-  }
+  await _ensureJunkshopChatIfNeeded();
+  await _buildMultiStopRoute();
+  await _focusCameraOnCurrentStop();
+}
 
   Set<Marker> _buildMarkers() {
     return <Marker>{
@@ -1650,13 +1648,15 @@ class _CollectorPickupMapPageState extends State<CollectorPickupMapPage> {
     }
   }
 
-  @override
-  void dispose() {
-    _requestsSub?.cancel();
-    _liveLocationSub?.cancel();
-    _map?.dispose();
-    super.dispose();
-  }
+@override
+void dispose() {
+  _stopLiveLocationSharing(clearFirestore: true);
+
+  _requestsSub?.cancel();
+  _map?.dispose();
+
+  super.dispose();
+}
 
   @override
   Widget build(BuildContext context) {
