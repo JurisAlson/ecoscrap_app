@@ -104,11 +104,17 @@ class _WaitingCollectorPageState extends State<WaitingCollectorPage>
         final data = doc.data() ?? {};
         final status = (data['status'] ?? '').toString().trim().toLowerCase();
 
+        final collectorId = (data['collectorId'] ?? '').toString().trim();
+        final acceptedForLater = data['acceptedForLater'] == true;
+
         if (status == 'accepted' ||
             status == 'confirmed' ||
             status == 'ongoing' ||
-            status == 'arrived') {
-          _goToOrderTab();
+            status == 'arrived' ||
+            (status == 'scheduled' &&
+            acceptedForLater &&
+            collectorId.isNotEmpty)) {
+      _goToOrderTab();
           return;
         }
 

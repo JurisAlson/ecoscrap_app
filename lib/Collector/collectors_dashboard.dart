@@ -155,7 +155,6 @@ class _CollectorsDashboardPageState extends State<CollectorsDashboardPage>
       _activateReadyScheduledPickups();
       _startDashboardLiveTracking();
     } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _setOnline(false);
       _stopDashboardLiveTracking(clearFirestore: false);
@@ -640,6 +639,7 @@ final collectorName =
               ),
               content: DropdownButtonFormField<String>(
                 initialValue: selectedReason,
+                isExpanded: true,
                 dropdownColor: bgColor,
                 decoration: InputDecoration(
                   filled: true,

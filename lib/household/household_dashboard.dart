@@ -204,64 +204,32 @@ class _DashboardPageState extends State<DashboardPage> {
           .collection('requests')
           .where('type', isEqualTo: 'pickup')
           .where('householdId', isEqualTo: user.uid)
-          .where('active', isEqualTo: true)
+          .where('status', whereIn: [
+            'pending',
+            'scheduled',
+            'accepted',
+            'confirmed',
+            'ongoing',
+            'arrived',
+          ])
           .limit(1)
           .get();
 
       if (query.docs.isNotEmpty) {
-        final doc = query.docs.first;
-        final data = doc.data();
-
-        final status = (data['status'] ?? '').toString().trim().toLowerCase();
-
-        final isStillWaiting = status == 'pending' || status == 'scheduled';
-
-        if (isStillWaiting) {
-          final pickupGeo = data['pickupLocation'] as GeoPoint?;
-          final destGeo = data['destinationLocation'] as GeoPoint?;
-
-          if (pickupGeo != null && destGeo != null) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => WaitingCollectorPage(
-                  requestId: doc.id,
-                  pickupLatLng: LatLng(
-                    pickupGeo.latitude,
-                    pickupGeo.longitude,
-                  ),
-                  destinationLatLng: LatLng(
-                    destGeo.latitude,
-                    destGeo.longitude,
-                  ),
-                ),
-              ),
-            );
-            return;
-          }
-        }
-
-        final hasActiveRequest = [
-          'pending',
-          'scheduled',
-          'accepted',
-          'confirmed',
-          'ongoing',
-          'arrived',
-        ].contains(status);
-
-        if (hasActiveRequest) {
-          setState(() {
-            _activeTabIndex = 2;
-          });
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('You already have an active pickup request.'),
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'You already have an active or scheduled pickup request.',
             ),
-          );
-          return;
-        }
+            duration: Duration(seconds: 2),
+          ),
+        );
+
+        setState(() {
+          _activeTabIndex = 2;
+        });
+
+        return;
       }
 
       Navigator.push(

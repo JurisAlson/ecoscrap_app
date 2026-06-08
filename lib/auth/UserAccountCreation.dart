@@ -771,6 +771,7 @@ print("residentRequests after transaction: ${check.data()}");
                     _Bullet(text: "Admin will still review before approval"),
                   ],
                 ),
+                const SizedBox(height: 12),
 
                 _InfoCard(
                   title: "Location Tracking Notice",
