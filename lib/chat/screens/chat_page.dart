@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/chat_services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class ChatPage extends StatefulWidget {
   final String chatId;
@@ -221,17 +222,50 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _pickImages() async {
     try {
-      final picked = await _picker.pickMultiImage(imageQuality: 80);
+      PermissionStatus status;
+
+      if (Platform.isAndroid) {
+        status = await Permission.photos.request();
+
+        if (!status.isGranted) {
+          if (status.isPermanentlyDenied) {
+            await openAppSettings();
+          }
+
+          if (!mounted) return;
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                "Gallery permission is required to send photos.",
+              ),
+            ),
+          );
+
+          return;
+        }
+      }
+
+      final picked = await _picker.pickMultiImage(
+        imageQuality: 80,
+      );
+
       if (picked.isEmpty) return;
 
       if (!mounted) return;
+
       setState(() {
-        _pendingImages.addAll(picked.map((x) => File(x.path)));
+        _pendingImages.addAll(
+          picked.map((x) => File(x.path)),
+        );
       });
     } catch (e) {
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Pick images failed: $e")),
+        SnackBar(
+          content: Text("Pick images failed: $e"),
+        ),
       );
     }
   }
