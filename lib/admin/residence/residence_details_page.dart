@@ -123,7 +123,19 @@ Future<void> _adminApproveResident(String uid) async {
     final reqSnap = await tx.get(reqRef);
     if (!reqSnap.exists) throw Exception("Resident request not found");
 
-    tx.delete(reqRef);
+    tx.set(
+      reqRef,
+      {
+        "uid": uid,
+        "status": "approved",
+        "adminStatus": "approved",
+        "adminVerified": true,
+        "approvedAt": FieldValue.serverTimestamp(),
+        "adminReviewedAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
 
     tx.set(
       userRef,
