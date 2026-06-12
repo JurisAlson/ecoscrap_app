@@ -907,11 +907,27 @@ if (fromHouseholdDropoff &&
             .collection('transactions')
             .doc(collectorTransactionIdFromSellRequest);
 
+final firstItem = itemsPayload.isNotEmpty ? itemsPayload.first : null;
+
+final bagLabel = firstItem == null
+    ? 'Plastic'
+    : (firstItem['itemName'] ??
+            '${firstItem['category'] ?? ''} • ${firstItem['subCategory'] ?? ''}')
+        .toString();
+
+final pricePerKg = firstItem == null
+    ? 0.0
+    : ((firstItem['costPerKg'] as num?) ?? 0).toDouble();
+
         trx.set(
           collectorTxnRef,
           {
             'status': 'completed',
             'receiptTransactionId': txRef.id,
+            'bagLabel': bagLabel,
+            'kg': totalWeightKg,
+            'pricePerKg': pricePerKg,
+            'totalAmount': grossAmount,
             'updatedAt': FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),

@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
 import '../receipt_screen.dart' as receipt;
 import '../analytics_home_tab.dart';
 import '../inventory_screen.dart';
@@ -32,6 +33,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
   final Color bgColor = const Color(0xFF0F172A);
 
   late final PageController _pageController = PageController(initialPage: 0);
+
   static const double _bottomNavHeight = 96;
 
   String get _shopIdSafe =>
@@ -42,11 +44,19 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
   void _goToTab(int index) {
     setState(() => _activeTabIndex = index);
+
     _pageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 280),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  Future<void> _closeEndDrawerSafely() async {
+    if (_scaffoldKey.currentState?.isEndDrawerOpen ?? false) {
+      Navigator.of(context).pop();
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
   }
 
   Future<void> _openChatsFromNotification({
@@ -77,7 +87,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     }
 
     if (!mounted) return;
-    Navigator.pop(context);
+
+    await _closeEndDrawerSafely();
+
+    if (!mounted) return;
     _goToTab(2);
   }
 
@@ -118,11 +131,15 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             extendBody: true,
             drawer: Drawer(
               backgroundColor: bgColor,
-              child: SafeArea(child: _profileDrawer(user, shopId, shopName)),
+              child: SafeArea(
+                child: _profileDrawer(user, shopId, shopName),
+              ),
             ),
             endDrawer: Drawer(
               backgroundColor: bgColor,
-              child: SafeArea(child: _notificationsDrawer()),
+              child: SafeArea(
+                child: _notificationsDrawer(),
+              ),
             ),
             bottomNavigationBar: _fixedBottomNav(),
             body: Stack(
@@ -204,7 +221,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             color: Colors.white.withOpacity(0.05),
             shape: BoxShape.circle,
           ),
-          child: Icon(Icons.notifications_outlined, color: Colors.grey.shade300),
+          child: Icon(
+            Icons.notifications_outlined,
+            color: Colors.grey.shade300,
+          ),
         ),
       );
     }
@@ -379,9 +399,13 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
   Widget _notificationsDrawer() {
     final user = FirebaseAuth.instance.currentUser;
+
     if (user == null) {
       return const Center(
-        child: Text("Not logged in.", style: TextStyle(color: Colors.white)),
+        child: Text(
+          "Not logged in.",
+          style: TextStyle(color: Colors.white),
+        ),
       );
     }
 
@@ -452,7 +476,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             children: [
               IconButton(
                 icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
+                onPressed: () {
+                  if (Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
+                  }
+                },
               ),
               const SizedBox(width: 8),
               const Expanded(
@@ -544,9 +572,7 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                       final receiptSaved = data['receiptSaved'] == true;
                       final cleared = data['clearedByJunkshop'] == true;
 
-                      if (receiptSaved ||
-                          status == 'completed' ||
-                          cleared) {
+                      if (receiptSaved || status == 'completed' || cleared) {
                         continue;
                       }
 
@@ -564,9 +590,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                     items.sort((a, b) {
                       final aTs = a['createdAt'] as Timestamp?;
                       final bTs = b['createdAt'] as Timestamp?;
+
                       if (aTs == null && bTs == null) return 0;
                       if (aTs == null) return 1;
                       if (bTs == null) return -1;
+
                       return bTs.compareTo(aTs);
                     });
 
@@ -632,36 +660,55 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                               ),
                             ),
                             child: ListTile(
-                              onTap: (status == 'arrived' || status == 'confirmed')
+                              onTap: (status == 'arrived' ||
+                                      status == 'confirmed')
                                   ? () async {
                                       if (status == 'arrived') {
-                                        final action = await showDialog<String>(
+                                        final action =
+                                            await showDialog<String>(
                                           context: context,
                                           builder: (_) => AlertDialog(
-                                            backgroundColor: const Color(0xFF0F172A),
+                                            backgroundColor:
+                                                const Color(0xFF0F172A),
                                             title: const Text(
                                               "Confirm arrival",
-                                              style: TextStyle(color: Colors.white),
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                              ),
                                             ),
                                             content: Text(
                                               collectorName.isEmpty
                                                   ? "Did the collector really arrive at Mores Scrap?"
                                                   : "Did $collectorName really arrive at Mores Scrap?",
-                                              style: const TextStyle(color: Colors.white70),
+                                              style: const TextStyle(
+                                                color: Colors.white70,
+                                              ),
                                             ),
                                             actions: [
                                               TextButton(
-                                                onPressed: () => Navigator.pop(context, 'dismiss'),
+                                                onPressed: () =>
+                                                    Navigator.pop(
+                                                  context,
+                                                  'dismiss',
+                                                ),
                                                 child: const Text(
                                                   "NOT HERE",
-                                                  style: TextStyle(color: Colors.redAccent),
+                                                  style: TextStyle(
+                                                    color: Colors.redAccent,
+                                                  ),
                                                 ),
                                               ),
                                               TextButton(
-                                                onPressed: () => Navigator.pop(context, 'proceed'),
+                                                onPressed: () =>
+                                                    Navigator.pop(
+                                                  context,
+                                                  'proceed',
+                                                ),
                                                 child: const Text(
                                                   "PROCEED",
-                                                  style: TextStyle(color: Colors.greenAccent),
+                                                  style: TextStyle(
+                                                    color: Colors.greenAccent,
+                                                  ),
                                                 ),
                                               ),
                                             ],
@@ -670,9 +717,12 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
                                         if (action == 'dismiss') {
                                           final collectorIdForUpdate =
-                                              (data['collectorId'] ?? '').toString();
+                                              (data['collectorId'] ?? '')
+                                                  .toString();
                                           final collectorTxnId =
-                                              (data['collectorTransactionId'] ?? '').toString();
+                                              (data['collectorTransactionId'] ??
+                                                      '')
+                                                  .toString();
 
                                           final db = FirebaseFirestore.instance;
                                           final batch = db.batch();
@@ -689,8 +739,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                               'seen': true,
                                               'status': 'rejected',
                                               'junkshopRejected': true,
-                                              'junkshopRejectedAt': FieldValue.serverTimestamp(),
-                                              'updatedAt': FieldValue.serverTimestamp(),
+                                              'junkshopRejectedAt':
+                                                  FieldValue.serverTimestamp(),
+                                              'updatedAt':
+                                                  FieldValue.serverTimestamp(),
                                             },
                                             SetOptions(merge: true),
                                           );
@@ -704,10 +756,13 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                               collectorRef,
                                               {
                                                 'isOnline': true,
-                                                'availabilityStatus': 'available',
+                                                'availabilityStatus':
+                                                    'available',
                                                 'isAvailableForHousehold': true,
-                                                'activeMoresSellRequestId': FieldValue.delete(),
-                                                'updatedAt': FieldValue.serverTimestamp(),
+                                                'activeMoresSellRequestId':
+                                                    FieldValue.delete(),
+                                                'updatedAt':
+                                                    FieldValue.serverTimestamp(),
                                               },
                                               SetOptions(merge: true),
                                             );
@@ -726,8 +781,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                               {
                                                 'status': 'rejected',
                                                 'junkshopRejected': true,
-                                                'junkshopRejectedAt': FieldValue.serverTimestamp(),
-                                                'updatedAt': FieldValue.serverTimestamp(),
+                                                'junkshopRejectedAt':
+                                                    FieldValue.serverTimestamp(),
+                                                'updatedAt':
+                                                    FieldValue.serverTimestamp(),
                                               },
                                               SetOptions(merge: true),
                                             );
@@ -735,19 +792,29 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
 
                                           await batch.commit();
 
-                                          if (!context.mounted) return;
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text("Sell request rejected.")),
+                                          if (!mounted) return;
+
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                "Sell request rejected.",
+                                              ),
+                                            ),
                                           );
+
                                           return;
                                         }
 
                                         if (action != 'proceed') return;
 
                                         final collectorIdForUpdate =
-                                            (data['collectorId'] ?? '').toString();
+                                            (data['collectorId'] ?? '')
+                                                .toString();
                                         final collectorTxnId =
-                                            (data['collectorTransactionId'] ?? '').toString();
+                                            (data['collectorTransactionId'] ??
+                                                    '')
+                                                .toString();
 
                                         final db = FirebaseFirestore.instance;
                                         final batch = db.batch();
@@ -764,7 +831,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                             'seen': true,
                                             'status': 'confirmed',
                                             'junkshopConfirmedArrival': true,
-                                            'updatedAt': FieldValue.serverTimestamp(),
+                                            'updatedAt':
+                                                FieldValue.serverTimestamp(),
                                           },
                                           SetOptions(merge: true),
                                         );
@@ -782,7 +850,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                             {
                                               'status': 'confirmed',
                                               'junkshopConfirmedArrival': true,
-                                              'updatedAt': FieldValue.serverTimestamp(),
+                                              'updatedAt':
+                                                  FieldValue.serverTimestamp(),
                                             },
                                             SetOptions(merge: true),
                                           );
@@ -791,18 +860,24 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                         await batch.commit();
                                       }
 
-                                      if (!context.mounted) return;
-                                      Navigator.pop(context);
+                                      if (!mounted) return;
 
-                                      Navigator.push(
-                                        context,
+                                      await _closeEndDrawerSafely();
+
+                                      if (!mounted) return;
+
+                                      Navigator.of(this.context).push(
                                         MaterialPageRoute(
                                           builder: (_) => receipt.ReceiptScreen(
                                             shopID: user.uid,
                                             prefillCollectorName:
-                                                collectorName.isEmpty ? null : collectorName,
+                                                collectorName.isEmpty
+                                                    ? null
+                                                    : collectorName,
                                             prefillCollectorId:
-                                                collectorId.isEmpty ? null : collectorId,
+                                                collectorId.isEmpty
+                                                    ? null
+                                                    : collectorId,
                                             sellRequestId: docId,
                                             prefillSourceType: "collector",
                                             initialTransactionType: "buy",
@@ -810,7 +885,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                         ),
                                       );
                                     }
-                                  : status == 'cancelled' || status == 'rejected'
+                                  : status == 'cancelled' ||
+                                          status == 'rejected'
                                       ? () async {
                                           await FirebaseFirestore.instance
                                               .collection('Users')
@@ -819,7 +895,8 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                               .doc(docId)
                                               .set({
                                             'seen': true,
-                                            'updatedAt': FieldValue.serverTimestamp(),
+                                            'updatedAt':
+                                                FieldValue.serverTimestamp(),
                                           }, SetOptions(merge: true));
                                         }
                                       : () async {
@@ -839,8 +916,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                           : status == 'arrived'
                                               ? Colors.green.withOpacity(0.15)
                                               : seen
-                                                  ? Colors.white.withOpacity(0.08)
-                                                  : Colors.orange.withOpacity(0.15),
+                                                  ? Colors.white
+                                                      .withOpacity(0.08)
+                                                  : Colors.orange
+                                                      .withOpacity(0.15),
                                   borderRadius: BorderRadius.circular(14),
                                 ),
                                 child: Icon(
@@ -887,14 +966,16 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                           );
                         }
 
-                        final status = (data['status'] ?? 'en_route').toString();
+                        final status =
+                            (data['status'] ?? 'en_route').toString();
                         final title = dropoffTitleFromStatus(status);
                         final message = dropoffMessageFromData(data);
                         final householdName =
                             (data['householdName'] ?? '').toString().trim();
                         final householdId =
                             (data['householdId'] ?? '').toString().trim();
-                        final readByJunkshop = data['readByJunkshop'] == true;
+                        final readByJunkshop =
+                            data['readByJunkshop'] == true;
 
                         return Container(
                           margin: const EdgeInsets.only(bottom: 12),
@@ -906,36 +987,53 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                             ),
                           ),
                           child: ListTile(
-                            onTap: (status == 'awaiting_confirmation' || status == 'confirmed')
+                            onTap: (status == 'awaiting_confirmation' ||
+                                    status == 'confirmed')
                                 ? () async {
                                     if (status == 'awaiting_confirmation') {
-                                      final action = await showDialog<String>(
+                                      final action =
+                                          await showDialog<String>(
                                         context: context,
                                         builder: (_) => AlertDialog(
-                                          backgroundColor: const Color(0xFF0F172A),
+                                          backgroundColor:
+                                              const Color(0xFF0F172A),
                                           title: const Text(
                                             "Confirm arrival",
-                                            style: TextStyle(color: Colors.white),
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                            ),
                                           ),
                                           content: Text(
                                             householdName.isEmpty
                                                 ? "Has the resident really arrived?"
                                                 : "Has $householdName really arrived at the junkshop?",
-                                            style: const TextStyle(color: Colors.white70),
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                            ),
                                           ),
                                           actions: [
                                             TextButton(
-                                              onPressed: () => Navigator.pop(context, 'dismiss'),
+                                              onPressed: () => Navigator.pop(
+                                                context,
+                                                'dismiss',
+                                              ),
                                               child: const Text(
                                                 "NOT HERE",
-                                                style: TextStyle(color: Colors.redAccent),
+                                                style: TextStyle(
+                                                  color: Colors.redAccent,
+                                                ),
                                               ),
                                             ),
                                             TextButton(
-                                              onPressed: () => Navigator.pop(context, 'proceed'),
+                                              onPressed: () => Navigator.pop(
+                                                context,
+                                                'proceed',
+                                              ),
                                               child: const Text(
                                                 "CONFIRM",
-                                                style: TextStyle(color: Colors.greenAccent),
+                                                style: TextStyle(
+                                                  color: Colors.greenAccent,
+                                                ),
                                               ),
                                             ),
                                           ],
@@ -948,13 +1046,21 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                             .doc(docId)
                                             .set({
                                           'readByJunkshop': true,
-                                          'updatedAt': FieldValue.serverTimestamp(),
+                                          'updatedAt':
+                                              FieldValue.serverTimestamp(),
                                         }, SetOptions(merge: true));
 
-                                        if (!context.mounted) return;
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(content: Text("Arrival not confirmed.")),
+                                        if (!mounted) return;
+
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              "Arrival not confirmed.",
+                                            ),
+                                          ),
                                         );
+
                                         return;
                                       }
 
@@ -963,18 +1069,24 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                       await confirmDropoff(docId);
                                     }
 
-                                    if (!context.mounted) return;
-                                    Navigator.pop(context);
+                                    if (!mounted) return;
 
-                                    Navigator.push(
-                                      context,
+                                    await _closeEndDrawerSafely();
+
+                                    if (!mounted) return;
+
+                                    Navigator.of(this.context).push(
                                       MaterialPageRoute(
                                         builder: (_) => receipt.ReceiptScreen(
                                           shopID: user.uid,
                                           prefillCollectorName:
-                                              householdName.isEmpty ? null : householdName,
+                                              householdName.isEmpty
+                                                  ? null
+                                                  : householdName,
                                           prefillCollectorId:
-                                              householdId.isEmpty ? null : householdId,
+                                              householdId.isEmpty
+                                                  ? null
+                                                  : householdId,
                                           prefillSourceType: "household",
                                           sellRequestId: docId,
                                           initialTransactionType: "buy",
@@ -1001,8 +1113,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
                                         : status == 'awaiting_confirmation'
                                             ? Colors.amber.withOpacity(0.15)
                                             : status == 'confirmed'
-                                                ? Colors.green.withOpacity(0.15)
-                                                : Colors.blue.withOpacity(0.15),
+                                                ? Colors.green
+                                                    .withOpacity(0.15)
+                                                : Colors.blue
+                                                    .withOpacity(0.15),
                                 borderRadius: BorderRadius.circular(14),
                               ),
                               child: Icon(
@@ -1069,7 +1183,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             children: [
               IconButton(
                 icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
+                onPressed: () {
+                  if (Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
+                  }
+                },
               ),
               const SizedBox(width: 8),
               const Text(
@@ -1083,7 +1201,11 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             ],
           ),
           const SizedBox(height: 20),
-          const Icon(Icons.storefront, size: 80, color: Colors.white54),
+          const Icon(
+            Icons.storefront,
+            size: 80,
+            color: Colors.white54,
+          ),
           const SizedBox(height: 14),
           Text(
             shopName,
@@ -1097,7 +1219,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
           const SizedBox(height: 6),
           Text(
             user?.email ?? "",
-            style: const TextStyle(color: Colors.white70, fontSize: 13),
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+            ),
           ),
           const SizedBox(height: 18),
           Container(
@@ -1106,7 +1231,9 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.06)),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.06),
+              ),
             ),
             child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1131,15 +1258,16 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
               ],
             ),
           ),
-          const SizedBox(height: 18),
-          const SizedBox(height: 22),
+          const SizedBox(height: 40),
           SizedBox(
             width: double.infinity,
             height: 50,
             child: ElevatedButton.icon(
               onPressed: () async {
                 await FirebaseAuth.instance.signOut();
+
                 if (!mounted) return;
+
                 Navigator.pushReplacementNamed(context, '/login');
               },
               icon: const Icon(Icons.logout),
@@ -1164,11 +1292,17 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
     return GestureDetector(
       onTap: () => _goToTab(index),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 10,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: isActive ? primaryColor : Colors.grey.shade500),
+            Icon(
+              icon,
+              color: isActive ? primaryColor : Colors.grey.shade500,
+            ),
             const SizedBox(height: 4),
             Text(
               label.toUpperCase(),
@@ -1200,7 +1334,10 @@ class _JunkshopDashboardPageState extends State<JunkshopDashboardPage> {
       child: Container(
         width: size,
         height: size,
-        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color,
+        ),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
           child: Container(color: Colors.transparent),
