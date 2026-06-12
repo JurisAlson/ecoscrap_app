@@ -244,166 +244,205 @@ class _BuyFormState extends State<_BuyForm> {
   int _historyPage = 0;
   bool _saving = false;
 
-  Future<void> _saveBuyReceipt(Map<String, dynamic> requestData) async {
-    if (_saving) return;
+Future<void> _saveBuyReceipt(Map<String, dynamic> requestData) async {
+  if (_saving) return;
 
-    final requestId = widget.requestId;
-    if (requestId == null || requestId.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Open BUY from an ARRIVED pickup.")),
-      );
-      return;
-    }
-
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final alreadyReceipted = requestData['hasCollectorReceipt'] == true;
-    if (alreadyReceipted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Receipt already saved for this pickup.")),
-      );
-      Navigator.pop(context, true);
-      return;
-    }
-
-    final bagKg = ((requestData['bagKg'] as num?) ?? 0).toDouble();
-    final bagKey = (requestData['bagKey'] ?? "").toString();
-    final bagLabel = (requestData['bagLabel'] ?? "Bag").toString();
-
-    if (bagKg <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Missing or invalid bagKg in request.")),
-      );
-      return;
-    }
-
-    final householdId = (requestData['householdId'] ?? "").toString();
-    final householdName =
-        (requestData['householdName'] ?? "Household").toString();
-
-    if (householdId.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Missing householdId in request document.")),
-      );
-      return;
-    }
-
-    final collectorId = user.uid;
-    final collectorName = _TransactionUi.collectorName(
-      user: user,
-      requestData: requestData,
+  final requestId = widget.requestId;
+  if (requestId == null || requestId.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Open BUY from an ARRIVED pickup.")),
     );
+    return;
+  }
 
-    final totalAmount = bagKg * buyPricePerKg;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    setState(() => _saving = true);
+  final alreadyReceipted = requestData['hasCollectorReceipt'] == true;
+  if (alreadyReceipted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Receipt already saved for this pickup.")),
+    );
+    Navigator.pop(context, true);
+    return;
+  }
 
-    try {
-      final db = FirebaseFirestore.instance;
+  final bagKg = ((requestData['bagKg'] as num?) ?? 0).toDouble();
+  final bagKey = (requestData['bagKey'] ?? "").toString();
+  final bagLabel = (requestData['bagLabel'] ?? "Bag").toString();
 
-      final reqRef = db.collection('requests').doc(requestId);
-      final receiptRef = reqRef.collection('collector_receipts').doc();
-      final inventoryRef = db
-          .collection('Users')
-          .doc(collectorId)
-          .collection('inventory')
-          .doc('summary');
-      final txnRef = db
-          .collection('Users')
-          .doc(collectorId)
-          .collection('transactions')
-          .doc();
+  if (bagKg <= 0) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Missing or invalid bagKg in request.")),
+    );
+    return;
+  }
 
-      await db.runTransaction((trx) async {
-        final reqSnap = await trx.get(reqRef);
-        if (!reqSnap.exists) throw Exception("Request not found.");
+  final householdId = (requestData['householdId'] ?? "").toString();
+  final householdName =
+      (requestData['householdName'] ?? "Household").toString();
 
-        final latestReq = reqSnap.data() ?? {};
-        if (latestReq['hasCollectorReceipt'] == true) return;
+  if (householdId.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Missing householdId in request document.")),
+    );
+    return;
+  }
 
-        trx.set(receiptRef, {
-          "kind": "collector_buy",
-          "requestId": requestId,
-          "collectorId": collectorId,
-          "collectorName": collectorName,
-          "householdId": householdId,
-          "householdName": householdName,
-          "bagKey": bagKey,
-          "bagLabel": bagLabel,
-          "kg": bagKg,
-          "pricePerKg": buyPricePerKg,
-          "totalAmount": totalAmount,
-          "status": "completed",
-          "createdAt": FieldValue.serverTimestamp(),
-        });
+  final collectorId = user.uid;
+  final collectorName = _TransactionUi.collectorName(
+    user: user,
+    requestData: requestData,
+  );
 
-        trx.set(txnRef, {
-          "kind": "buy",
-          "requestId": requestId,
-          "householdId": householdId,
-          "householdName": householdName,
-          "bagKey": bagKey,
-          "bagLabel": bagLabel,
-          "kg": bagKg,
-          "pricePerKg": buyPricePerKg,
-          "totalAmount": totalAmount,
-          "status": "completed",
-          "createdAt": FieldValue.serverTimestamp(),
-          "updatedAt": FieldValue.serverTimestamp(),
-        });
+  final totalAmount = bagKg * buyPricePerKg;
 
-        trx.set(
-          inventoryRef,
-          {
-            "totalKg": FieldValue.increment(bagKg),
-            "totalValueSpent": FieldValue.increment(totalAmount),
-            "updatedAt": FieldValue.serverTimestamp(),
-            "createdAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
+  setState(() => _saving = true);
 
-        trx.update(reqRef, {
-          "hasCollectorReceipt": true,
-          "collectorReceiptAt": FieldValue.serverTimestamp(),
-          "status": "completed",
-          "active": false,
-          "completedAt": FieldValue.serverTimestamp(),
-          "sharingLiveLocation": false,
-          "updatedAt": FieldValue.serverTimestamp(),
-          "phoneNumber": FieldValue.delete(),
-          "destinationLocation": FieldValue.delete(),
-          "pickupAddress": FieldValue.delete(),
-          "pickupLocation": FieldValue.delete(),
-        });
+  try {
+    final db = FirebaseFirestore.instance;
 
-        trx.set(
-          db.collection('Users').doc(collectorId),
-          {
-            "isAvailableForHousehold": true,
-            "availabilityStatus": "available",
-            "activeRequestId": FieldValue.delete(),
-            "updatedAt": FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
+    final reqRef = db.collection('requests').doc(requestId);
+    final receiptRef = reqRef.collection('collector_receipts').doc();
+    final inventoryRef = db
+        .collection('Users')
+        .doc(collectorId)
+        .collection('inventory')
+        .doc('summary');
+    final txnRef = db
+        .collection('Users')
+        .doc(collectorId)
+        .collection('transactions')
+        .doc();
+
+    final now = DateTime.now();
+    final monthId =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}';
+
+    final leaderboardRef = db
+        .collection('leaderboards')
+        .doc(monthId)
+        .collection('users')
+        .doc(householdId);
+
+    await db.runTransaction((trx) async {
+      final reqSnap = await trx.get(reqRef);
+      if (!reqSnap.exists) throw Exception("Request not found.");
+
+      final leaderboardSnap = await trx.get(leaderboardRef);
+
+      final latestReq = reqSnap.data() ?? {};
+      if (latestReq['hasCollectorReceipt'] == true) return;
+
+      final leaderboardKg = bagKg.toInt();
+      final points = 10 + (leaderboardKg * 10);
+
+      trx.set(receiptRef, {
+        "kind": "collector_buy",
+        "requestId": requestId,
+        "collectorId": collectorId,
+        "collectorName": collectorName,
+        "householdId": householdId,
+        "householdName": householdName,
+        "bagKey": bagKey,
+        "bagLabel": bagLabel,
+        "kg": bagKg,
+        "pricePerKg": buyPricePerKg,
+        "totalAmount": totalAmount,
+        "status": "completed",
+        "createdAt": FieldValue.serverTimestamp(),
       });
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Transaction saved and completed.")),
+      trx.set(txnRef, {
+        "kind": "buy",
+        "requestId": requestId,
+        "householdId": householdId,
+        "householdName": householdName,
+        "bagKey": bagKey,
+        "bagLabel": bagLabel,
+        "kg": bagKg,
+        "pricePerKg": buyPricePerKg,
+        "totalAmount": totalAmount,
+        "status": "completed",
+        "createdAt": FieldValue.serverTimestamp(),
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
+
+      trx.set(
+        inventoryRef,
+        {
+          "totalKg": FieldValue.increment(bagKg),
+          "totalValueSpent": FieldValue.increment(totalAmount),
+          "updatedAt": FieldValue.serverTimestamp(),
+          "createdAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
       );
-      Navigator.pop(context, true);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Save failed: $e")),
+
+      trx.update(reqRef, {
+        "hasCollectorReceipt": true,
+        "collectorReceiptAt": FieldValue.serverTimestamp(),
+        "status": "completed",
+        "active": false,
+        "completedAt": FieldValue.serverTimestamp(),
+        "sharingLiveLocation": false,
+        "updatedAt": FieldValue.serverTimestamp(),
+        "phoneNumber": FieldValue.delete(),
+        "destinationLocation": FieldValue.delete(),
+        "pickupAddress": FieldValue.delete(),
+        "pickupLocation": FieldValue.delete(),
+      });
+
+      if (!leaderboardSnap.exists) {
+        trx.set(leaderboardRef, {
+          'name': householdName,
+          'points': points,
+          'transactions': 1,
+          'pickups': 1,
+          'dropoffs': 0,
+          'totalKg': leaderboardKg,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        trx.update(leaderboardRef, {
+          'name': householdName,
+          'points': FieldValue.increment(points),
+          'transactions': FieldValue.increment(1),
+          'pickups': FieldValue.increment(1),
+          'totalKg': FieldValue.increment(leaderboardKg),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      trx.set(
+        db.collection('Users').doc(collectorId),
+        {
+          "isAvailableForHousehold": true,
+          "availabilityStatus": "available",
+          "activeRequestId": FieldValue.delete(),
+          "updatedAt": FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
       );
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
+    });
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Transaction saved and completed.")),
+    );
+    Navigator.pop(context, true);
+  } catch (e, st) {
+    debugPrint("SAVE BUY RECEIPT ERROR: $e");
+    debugPrint("$st");
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Save failed: $e")),
+    );
+  } finally {
+    if (mounted) setState(() => _saving = false);
   }
+}
 
   @override
   Widget build(BuildContext context) {

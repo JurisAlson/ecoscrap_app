@@ -594,6 +594,11 @@ String partyName = isSell
         }
       }
     }
+    
+    final now = DateTime.now();
+    final monthId = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+
+    DocumentReference<Map<String, dynamic>>? leaderboardRef;
 
     await db.runTransaction((trx) async {
       final txRef = txCol.doc();
@@ -628,6 +633,27 @@ String partyName = isSell
             .doc(widget.sellRequestId);
 
         dropoffReqSnap = await trx.get(dropoffReqRef);
+      }
+
+      DocumentSnapshot<Map<String, dynamic>>? leaderboardSnap;
+      String dropoffHouseholdId = "";
+
+      if (fromHouseholdDropoff && dropoffReqSnap != null && dropoffReqSnap.exists) {
+        final dropoffData = dropoffReqSnap.data() ?? {};
+
+        dropoffHouseholdId = (dropoffData['householdId'] ?? '').toString().trim();
+
+        if (dropoffHouseholdId.isEmpty) {
+          throw Exception("Missing householdId in drop-off request.");
+        }
+
+        leaderboardRef = db
+            .collection('leaderboards')
+            .doc(monthId)
+            .collection('users')
+            .doc(dropoffHouseholdId);
+
+        leaderboardSnap = await trx.get(leaderboardRef!);
       }
 
       final Map<String, DocumentSnapshot<Map<String, dynamic>>> sellInventorySnaps =
@@ -949,6 +975,32 @@ if (fromHouseholdDropoff &&
     },
     SetOptions(merge: true),
   );
+
+  if (leaderboardRef != null && leaderboardSnap != null) {
+    final leaderboardKg = totalWeightKg.round();
+    final points = 10 + (leaderboardKg * 10);
+
+    if (!leaderboardSnap.exists) {
+      trx.set(leaderboardRef!, {
+        'name': dropoffHouseholdName,
+        'points': points,
+        'transactions': 1,
+        'pickups': 0,
+        'dropoffs': 1,
+        'totalKg': leaderboardKg,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      trx.update(leaderboardRef!, {
+        'name': dropoffHouseholdName,
+        'points': FieldValue.increment(points),
+        'transactions': FieldValue.increment(1),
+        'dropoffs': FieldValue.increment(1),
+        'totalKg': FieldValue.increment(leaderboardKg),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+  }
 }
     });
 

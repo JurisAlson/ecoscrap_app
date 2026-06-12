@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:ui';
 
+
+import '../household/Leaderboard.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:ecoscrap_app/chat/screens/chat_list_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -53,12 +55,12 @@ class _DashboardPageState extends State<DashboardPage> {
 
   bool _cameraBarOpen = false;
 
-  List<Widget> get _tabScreens => [
-        _householdHome(),
-        _historyScreen(),
-        const HouseholdOrderPage(),
-        const ChatListPage(type: "pickup", title: "Chats"),
-      ];
+List<Widget> get _tabScreens => [
+  _householdHome(),
+  _historyScreen(),
+  const HouseholdOrderPage(),
+  const LeaderboardPage(),
+];
 
   @override
   void initState() {
@@ -354,9 +356,10 @@ class _DashboardPageState extends State<DashboardPage> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      _navItem(0, Icons.home_outlined, "Home"),
-                      _navItem(1, Icons.history, "History"),
-                      _navItem(2, Icons.receipt_long, "Order"),
+_navItem(0, Icons.home_outlined, "Home"),
+_navItem(1, Icons.history, "History"),
+_navItem(2, Icons.receipt_long, "Order"),
+_navItem(3, Icons.leaderboard_outlined, "Rank"),
                     ],
                   ),
                 ),
