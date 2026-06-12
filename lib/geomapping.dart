@@ -70,13 +70,18 @@ class _GeoMappingPageState extends State<GeoMappingPage> {
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _dropoffReqSub;
 
 
-  bool _isWithinDropoffHours() {
+bool _isWithinDropoffHours() {
+  // TODO: Revert this after testing
+  return true; 
+
+  /* Original logic commented out
   final now = DateTime.now();
   final startMinutes = 7 * 60;   // 7:00 AM
   final endMinutes = 17 * 60;    // 5:00 PM
   final currentMinutes = now.hour * 60 + now.minute;
 
   return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+  */
 }
 
   bool _pinMode = false;
